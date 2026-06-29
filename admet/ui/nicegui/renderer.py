@@ -15,7 +15,7 @@ def render_workflow(
     state: WorkflowState,
     settings: ParamSchema | None = None,
     *,
-    engine: Any | None = None,
+    api: Any | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -64,7 +64,7 @@ def render_workflow(
         </style>
         """
     )
-    CoreWorkflowView(workflow, state, settings, engine).render()
+    CoreWorkflowView(workflow, state, settings, api).render()
 
 
 class CoreWorkflowView:
@@ -137,8 +137,6 @@ class CoreWorkflowView:
         with ui.row().classes("admet-topbar w-full items-center justify-between px-3 py-2"):
             with ui.column().classes("gap-0"):
                 ui.label(self.workflow.label).classes("text-base font-semibold")
-                engine_name = getattr(self.engine, "name", "No engine")
-                ui.label(f"Engine: {engine_name}").classes("admet-muted text-xs")
             with ui.row().classes("items-center gap-2"):
                 ui.badge(self.status_kind.upper()).props(_badge_color(self.status_kind))
                 ui.label(self.status).classes("text-sm")
