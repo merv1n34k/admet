@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 import importlib
+import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
 class FluigentSDKUnavailableError(ImportError):
     """Raised when the Fluigent SDK is required but unavailable."""
+
+
+@dataclass(frozen=True)
+class SDKAvailability:
+    available: bool
+    source: str
+    version: str = ""
+    path: str = ""
+    message: str = ""
+    error_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -40,6 +53,35 @@ class FluigentSDK:
     @property
     def initialized(self) -> bool:
         return self._initialized
+
+    def preflight(self) -> SDKAvailability:
+        if self._sdk is not None:
+            return SDKAvailability(
+                available=True,
+                source="injected",
+                version=str(getattr(self._sdk, "__version__", "")),
+                path=str(getattr(self._sdk, "__file__", "")),
+                message="Fluigent SDK module is injected.",
+            )
+
+        try:
+            module = self._module()
+        except FluigentSDKUnavailableError as exc:
+            cause = exc.__cause__ or exc
+            return SDKAvailability(
+                available=False,
+                source="Fluigent.SDK",
+                message=str(cause),
+                error_type=type(cause).__name__,
+            )
+
+        return SDKAvailability(
+            available=True,
+            source="Fluigent.SDK",
+            version=str(getattr(module, "__version__", "")),
+            path=str(getattr(module, "__file__", "")),
+            message="Fluigent SDK import succeeded.",
+        )
 
     def create_simulated_instrument(
         self,
@@ -164,10 +206,34 @@ class FluigentSDK:
     def _module(self):
         if self._sdk is not None:
             return self._sdk
+        _ensure_fluigent_sdk_path()
         try:
             self._sdk = importlib.import_module("Fluigent.SDK")
-        except ImportError as exc:
+        except Exception as exc:
             raise FluigentSDKUnavailableError(
                 "Fluigent SDK is required for hardware fluidics control."
             ) from exc
         return self._sdk
+
+
+def vendored_sdk_python_path() -> Path:
+    return Path(__file__).resolve().parents[3] / "vendor" / "fgt_sdk" / "Python"
+
+
+def _candidate_sdk_paths() -> list[Path]:
+    candidates = []
+    env_path = os.environ.get("ADMET_FLUIGENT_SDK_PATH", "").strip()
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+    candidates.append(vendored_sdk_python_path())
+    return candidates
+
+
+def _ensure_fluigent_sdk_path() -> None:
+    for path in _candidate_sdk_paths():
+        if not (path / "Fluigent" / "SDK").exists():
+            continue
+        path_text = str(path)
+        if path_text not in sys.path:
+            sys.path.insert(0, path_text)
+        return

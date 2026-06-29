@@ -2,7 +2,7 @@ import unittest
 
 from admet.core.engine import EngineRegistry, LazyEngineSpec
 from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema
-from admet.core.workflow import Stage, StageStatus, Workflow, WorkflowRunner
+from admet.core.workflow import Stage, StageControl, StageStatus, Workflow, WorkflowRunner
 from admet.engines.dummy import create_engine
 
 
@@ -63,6 +63,18 @@ class WorkflowTests(unittest.TestCase):
     def test_requires_unique_stage_ids(self):
         with self.assertRaises(ValueError):
             Workflow("bad", "Bad", (Stage("x", "X"), Stage("x", "X again")))
+
+    def test_stage_metadata_supports_settings_and_controls(self):
+        stage = Stage(
+            "scene",
+            "Scene",
+            description="Camera setup",
+            settings=ParamSchema((Param("camera_index", "Camera", ParamKind.INTEGER, default=0),)),
+            controls=(StageControl("Refresh Cameras", "refresh_cameras"),),
+        )
+
+        self.assertEqual(stage.settings.defaults()["camera_index"], 0)
+        self.assertEqual(stage.controls[0].action, "refresh_cameras")
 
     def test_confirmation_gate_blocks_unconfirmed_completion(self):
         workflow = Workflow("gated", "Gated", (Stage("run", "Run", confirmation_required=True),))

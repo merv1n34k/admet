@@ -4,6 +4,7 @@ from pathlib import Path
 
 from admet.core.engine import EngineContext
 from admet.engines.control.engine import FluidicsControlEngine
+from admet.engines.control.camera import Camera
 from admet.engines.control.fluidics import PressureChannelInfo, SensorChannelInfo
 from admet.engines.control.fluidics.config import ProtocolStep
 
@@ -58,6 +59,27 @@ class FakeControlSDK:
 
     def calibrate_pressure(self, pressure_index):
         self.calls.append(("calibrate", pressure_index))
+
+
+class EmptyCameraFactory:
+    def EnumerateDevices(self):
+        return []
+
+    def CreateDevice(self, device):
+        return device
+
+
+class EmptyPylon:
+    GrabStrategy_LatestImageOnly = "latest"
+    GrabStrategy_OneByOne = "one_by_one"
+    TimeoutHandling_Return = "return"
+
+    class TlFactory:
+        factory = EmptyCameraFactory()
+
+        @classmethod
+        def GetInstance(cls):
+            return cls.factory
 
 
 class FluidicsControlEngineTests(unittest.TestCase):
@@ -142,6 +164,18 @@ class FluidicsControlEngineTests(unittest.TestCase):
         self.assertEqual(result.result_set.records[0].values["action"], "calibrate")
         self.assertIn(("calibrate", 0), sdk.calls)
         self.assertIn(("calibrate", 1), sdk.calls)
+
+    def test_camera_refresh_and_connect_are_nonfatal_without_device(self):
+        engine = FluidicsControlEngine(FakeControlSDK())
+        engine.camera = Camera(EmptyPylon)
+
+        refresh = engine.run_action("refresh_cameras", {})
+        connect = engine.run_action("connect_camera", {})
+
+        self.assertTrue(refresh.result_set.metadata["pypylon_available"])
+        self.assertEqual(refresh.result_set.metadata["camera_count"], 0)
+        self.assertFalse(connect.result_set.metadata["camera_connect_ok"])
+        self.assertIn("not currently available", connect.result_set.metadata["camera_connect_message"])
 
 
 if __name__ == "__main__":

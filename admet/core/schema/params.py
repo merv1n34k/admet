@@ -42,8 +42,11 @@ class Param:
 
         if self.kind is ParamKind.BOOLEAN and not isinstance(value, bool):
             raise TypeError(f"{self.name} must be a boolean")
-        if self.kind is ParamKind.INTEGER and not isinstance(value, int):
-            raise TypeError(f"{self.name} must be an integer")
+        if self.kind is ParamKind.INTEGER:
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            if not isinstance(value, int):
+                raise TypeError(f"{self.name} must be an integer")
         if self.kind is ParamKind.FLOAT and not isinstance(value, int | float):
             raise TypeError(f"{self.name} must be a number")
         if self.kind in {ParamKind.TEXT, ParamKind.PATH} and not isinstance(value, str):
@@ -77,4 +80,3 @@ class ParamSchema:
         if unknown:
             raise KeyError(f"unknown settings: {sorted(unknown)!r}")
         return {name: by_name[name].validate(value) for name, value in normalized.items()}
-

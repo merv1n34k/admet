@@ -13,6 +13,7 @@ from admet.engines.control.fluidics import (
     HardwareManager,
     PressureChannelInfo,
     SensorChannelInfo,
+    vendored_sdk_python_path,
 )
 from admet.engines.control.fluidics.config import SIM_INSTRUMENTS
 
@@ -82,6 +83,12 @@ class FluidicsSdkTests(unittest.TestCase):
         with patch("importlib.import_module", side_effect=ImportError("missing")):
             with self.assertRaises(FluigentSDKUnavailableError):
                 sdk.get_pressure(0)
+
+    def test_vendored_sdk_path_is_packaged(self):
+        path = vendored_sdk_python_path()
+
+        self.assertTrue((path / "Fluigent" / "SDK" / "__init__.py").exists())
+        self.assertTrue((path / "Fluigent" / "SDK" / "shared").exists())
 
 
 class HardwareManagerTests(unittest.TestCase):

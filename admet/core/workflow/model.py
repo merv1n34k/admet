@@ -4,6 +4,8 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
+from admet.core.schema import ParamSchema
+
 
 class StageStatus(StrEnum):
     PENDING = "pending"
@@ -13,12 +15,26 @@ class StageStatus(StrEnum):
 
 
 @dataclass(frozen=True)
+class StageControl:
+    label: str
+    action: str | None = None
+    advances: bool = False
+    completes: bool = False
+    skippable: bool = False
+    variant: str = "primary"
+
+
+@dataclass(frozen=True)
 class Stage:
     id: str
     label: str
     action: str | None = None
     skippable: bool = False
     confirmation_required: bool = False
+    description: str = ""
+    instructions: tuple[str, ...] = ()
+    settings: ParamSchema = field(default_factory=ParamSchema)
+    controls: tuple[StageControl, ...] = ()
 
 
 @dataclass(frozen=True)

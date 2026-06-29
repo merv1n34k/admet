@@ -120,6 +120,22 @@ class FakePylon:
     InstantCamera = FakeInstantCamera
 
 
+class EmptyFakePylon:
+    GrabStrategy_LatestImageOnly = "latest"
+    GrabStrategy_OneByOne = "one_by_one"
+    TimeoutHandling_Return = "return"
+
+    class TlFactory:
+        factory = FakeTlFactory()
+        factory.devices = []
+
+        @classmethod
+        def GetInstance(cls):
+            return cls.factory
+
+    InstantCamera = FakeInstantCamera
+
+
 class CameraTests(unittest.TestCase):
     def test_missing_pypylon_is_reported_lazily(self):
         camera = Camera()
@@ -144,6 +160,16 @@ class CameraTests(unittest.TestCase):
 
         camera.close()
         self.assertIsNone(camera.device)
+
+    def test_preflight_treats_no_devices_as_refreshable_state(self):
+        camera = Camera(EmptyFakePylon)
+
+        status = camera.preflight()
+
+        self.assertTrue(status.pypylon_available)
+        self.assertTrue(status.refresh_ok)
+        self.assertEqual(status.camera_count, 0)
+        self.assertIn("refresh", status.message)
 
 
 class VideoWorkerTests(unittest.TestCase):

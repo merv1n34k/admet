@@ -1,6 +1,6 @@
 """Engine-agnostic workflow state machine."""
 
-from .model import Stage, StageStatus, Workflow, WorkflowState
+from .model import Stage, StageControl, StageStatus, Workflow, WorkflowState
 from .runner import WorkflowRunner
 
-__all__ = ["Stage", "StageStatus", "Workflow", "WorkflowRunner", "WorkflowState"]
+__all__ = ["Stage", "StageControl", "StageStatus", "Workflow", "WorkflowRunner", "WorkflowState"]

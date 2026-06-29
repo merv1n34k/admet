@@ -8,7 +8,9 @@ from .sdk import (
     FluigentSDK,
     FluigentSDKUnavailableError,
     PressureChannelInfo,
+    SDKAvailability,
     SensorChannelInfo,
+    vendored_sdk_python_path,
 )
 
 __all__ = [
@@ -23,5 +25,7 @@ __all__ = [
     "HardwareManager",
     "HardwareState",
     "PressureChannelInfo",
+    "SDKAvailability",
     "SensorChannelInfo",
+    "vendored_sdk_python_path",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from queue import Queue
 from typing import Any
@@ -20,7 +21,9 @@ from admet.engines.control.fluidics import (
     CsvLogger,
     FluigentSDK,
     HardwareManager,
+    SDKAvailability,
 )
+from admet.engines.control.camera import Camera
 from admet.engines.control.fluidics.config import PIPELINES, ProtocolStep
 from admet.engines.control.pipeline import (
     PipelineEngine,
@@ -51,6 +54,7 @@ class FluidicsControlEngine:
             ),
             Param("log_dir", "Log Directory", ParamKind.PATH, default="logs"),
             Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
+            Param("camera_index", "Camera Index", ParamKind.INTEGER, default=0, minimum=0),
         )
     )
 
@@ -61,6 +65,7 @@ class FluidicsControlEngine:
         self.data_queue: Queue = Queue(maxsize=50)
         self.pipeline_queue: Queue[PipelineEvent] = Queue(maxsize=50)
         self.csv_logger = CsvLogger()
+        self.camera = Camera()
         self._acquisition: AcquisitionThread | None = None
         self._pipeline: PipelineEngine | None = None
         self._recording = False
@@ -75,6 +80,17 @@ class FluidicsControlEngine:
         normalized = self.settings.validate(settings)
         if action == "connect_fluidics":
             return self._connect(normalized)
+        if action == "verify_backend":
+            return self._status_result(action, extra_metadata=self._backend_preflight())
+        if action == "verify_fluigent":
+            return self._verify_fluigent(normalized)
+        if action == "refresh_cameras":
+            return self._status_result(action, extra_metadata=self._camera_preflight())
+        if action == "connect_camera":
+            return self._connect_camera(normalized)
+        if action == "disconnect_camera":
+            self.camera.close()
+            return self._status_result(action, extra_metadata=self._camera_preflight())
         if action == "disconnect_fluidics":
             return self._disconnect(action)
         if action == "start_polling":
@@ -261,12 +277,120 @@ class FluidicsControlEngine:
         self.stop_polling()
         self.stop_pipeline()
         self.hardware.disconnect()
+        self.channel_manager.configure_channels([])
         return self._status_result(action)
+
+    def _connect_camera(self, settings: dict[str, Any]) -> EngineResult:
+        metadata = self._camera_preflight()
+        if not metadata["pypylon_available"]:
+            metadata.update(
+                {
+                    "camera_connect_ok": False,
+                    "camera_connect_message": metadata["camera_message"],
+                }
+            )
+            return self._status_result("connect_camera", extra_metadata=metadata)
+        if metadata["camera_count"] <= settings["camera_index"]:
+            metadata.update(
+                {
+                    "camera_connect_ok": False,
+                    "camera_connect_message": "Camera is not currently available; refresh after attaching it.",
+                }
+            )
+            return self._status_result("connect_camera", extra_metadata=metadata)
+
+        ok = self.camera.open(settings["camera_index"])
+        metadata = self._camera_preflight()
+        metadata.update(
+            {
+                "camera_connect_ok": ok,
+                "camera_connect_message": "Camera connected." if ok else "Camera open failed.",
+                "camera_connected": self.camera.connected,
+            }
+        )
+        return self._status_result("connect_camera", extra_metadata=metadata)
+
+    def _verify_fluigent(self, settings: dict[str, Any]) -> EngineResult:
+        metadata: dict[str, Any] = {
+            "fluigent_connect_ok": False,
+            "fluigent_connect_error": "",
+            "fluigent_connect_error_type": "",
+        }
+        if self.hardware.connected:
+            metadata["fluigent_connect_ok"] = True
+            metadata["fluigent_connect_message"] = "Fluigent is already connected."
+            return self._status_result("verify_fluigent", extra_metadata=metadata)
+
+        try:
+            state = self.hardware.connect(simulated=settings["simulated"])
+            pairs = [
+                (sensor.index, pressure.index)
+                for sensor, pressure in zip(
+                    state.sensor_channels,
+                    state.pressure_channels,
+                    strict=False,
+                )
+            ]
+            self.channel_manager.configure_channels(pairs)
+            metadata.update(
+                {
+                    "fluigent_connect_ok": True,
+                    "fluigent_connect_message": "Fluigent connection check succeeded.",
+                    "fluigent_verified_simulated": state.simulated,
+                    "fluigent_verified_pressure_channels": len(state.pressure_channels),
+                    "fluigent_verified_sensor_channels": len(state.sensor_channels),
+                }
+            )
+        except Exception as exc:
+            metadata.update(
+                {
+                    "fluigent_connect_error": str(exc),
+                    "fluigent_connect_error_type": type(exc).__name__,
+                    "fluigent_connect_message": "Fluigent connection check failed.",
+                }
+            )
+        finally:
+            if self.hardware.connected:
+                self.hardware.disconnect()
+            self.channel_manager.configure_channels([])
+        return self._status_result("verify_fluigent", extra_metadata=metadata)
+
+    def _backend_preflight(self) -> dict[str, Any]:
+        sdk_status = self._sdk_preflight()
+        return {
+            "fluigent_sdk": asdict(sdk_status),
+            "fluigent_sdk_available": sdk_status.available,
+            "fluigent_sdk_message": sdk_status.message,
+            **self._camera_preflight(),
+        }
+
+    def _camera_preflight(self) -> dict[str, Any]:
+        camera_status = self.camera.preflight()
+        return {
+            "camera": asdict(camera_status),
+            "pypylon_available": camera_status.pypylon_available,
+            "camera_refresh_ok": camera_status.refresh_ok,
+            "camera_count": camera_status.camera_count,
+            "cameras": list(camera_status.cameras),
+            "camera_connected": self.camera.connected,
+            "pylon_camemu": camera_status.pylon_camemu,
+            "camera_message": camera_status.message,
+        }
+
+    def _sdk_preflight(self) -> SDKAvailability:
+        if hasattr(self.sdk, "preflight"):
+            return self.sdk.preflight()
+        return SDKAvailability(
+            available=True,
+            source="injected",
+            message="Fluigent SDK object is injected.",
+        )
 
     def _status_result(
         self,
         action: str,
         artifacts: dict[str, Any] | None = None,
+        extra_metadata: dict[str, Any] | None = None,
     ) -> EngineResult:
         state = self.hardware.state
         metadata = {
@@ -280,6 +404,8 @@ class FluidicsControlEngine:
             "queued_snapshots": self.data_queue.qsize(),
             "queued_pipeline_events": self.pipeline_queue.qsize(),
         }
+        if extra_metadata:
+            metadata.update(extra_metadata)
         record = ResultRecord(
             sample_id="control",
             engine=self.id,

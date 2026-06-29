@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -12,11 +14,29 @@ class PypylonUnavailableError(ImportError):
     """Raised when pypylon is required but unavailable."""
 
 
+@dataclass(frozen=True)
+class CameraAvailability:
+    pypylon_available: bool
+    refresh_ok: bool
+    camera_count: int = 0
+    cameras: tuple[str, ...] = ()
+    pylon_camemu: str = ""
+    message: str = ""
+    error_type: str = ""
+
+
 class Camera:
     def __init__(self, pylon_module: Any | None = None):
         self._pylon = pylon_module
         self.device = None
         self._is_grabbing = False
+
+    @property
+    def connected(self) -> bool:
+        try:
+            return bool(self.device and self.device.IsOpen())
+        except Exception:
+            return False
 
     def enumerate_cameras(self) -> list[str]:
         try:
@@ -33,6 +53,35 @@ class Camera:
         except Exception as exc:
             log.debug("Camera enumeration failed: %s", exc)
             return []
+
+    def preflight(self) -> CameraAvailability:
+        pylon_camemu = os.environ.get("PYLON_CAMEMU", "")
+        try:
+            cameras = tuple(self.enumerate_cameras())
+        except PypylonUnavailableError as exc:
+            return CameraAvailability(
+                pypylon_available=False,
+                refresh_ok=False,
+                pylon_camemu=pylon_camemu,
+                message=str(exc.__cause__ or exc),
+                error_type=type(exc.__cause__ or exc).__name__,
+            )
+
+        camera_count = len(cameras)
+        if camera_count:
+            message = f"{camera_count} Basler camera(s) detected."
+        elif pylon_camemu:
+            message = "No camera emulator/device is currently enumerated; refresh after it appears."
+        else:
+            message = "No Basler cameras are currently enumerated; refresh after attaching one."
+        return CameraAvailability(
+            pypylon_available=True,
+            refresh_ok=True,
+            camera_count=camera_count,
+            cameras=cameras,
+            pylon_camemu=pylon_camemu,
+            message=message,
+        )
 
     def open(self, camera_index: int = 0, *, apply_defaults: bool = True) -> bool:
         try:
