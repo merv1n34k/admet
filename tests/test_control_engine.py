@@ -5,8 +5,10 @@ from pathlib import Path
 from admet.core.engine import EngineContext
 from admet.engines.control.engine import FluidicsControlEngine
 from admet.engines.control.camera import Camera
+from admet.engines.control.camera.camera import CameraAvailability
 from admet.engines.control.fluidics import PressureChannelInfo, SensorChannelInfo
 from admet.engines.control.fluidics.config import ProtocolStep
+from admet.engines.control.settings import CONTROL_ENGINE_SETTINGS
 
 
 class FakeControlSDK:
@@ -82,7 +84,43 @@ class EmptyPylon:
             return cls.factory
 
 
+class FakeEngineCamera:
+    connected = True
+
+    def __init__(self):
+        self.set_calls = []
+        self.applied = {}
+
+    def preflight(self, pylon_camemu=None):
+        return CameraAvailability(
+            pypylon_available=True,
+            refresh_ok=True,
+            camera_count=1,
+            cameras=("Basler Test (123)",),
+            pylon_camemu=pylon_camemu or "",
+            pylon_module_loaded=True,
+            message="1 Basler camera(s) detected.",
+        )
+
+    def set_parameter(self, name, value):
+        self.set_calls.append((name, value))
+        return True
+
+    def apply_settings(self, settings):
+        self.applied.update(settings)
+        return True
+
+    def get_resulting_framerate(self):
+        return 120.0
+
+    def get_settings(self, names):
+        return {name: {"value": self.applied.get(name)} for name in names if name in self.applied}
+
+
 class FluidicsControlEngineTests(unittest.TestCase):
+    def test_engine_defaults_keep_priming_protocol(self):
+        self.assertEqual(CONTROL_ENGINE_SETTINGS.defaults()["pipeline_name"], "Priming")
+
     def test_connect_configures_channels_and_returns_status(self):
         sdk = FakeControlSDK()
         engine = FluidicsControlEngine(sdk)
@@ -176,6 +214,50 @@ class FluidicsControlEngineTests(unittest.TestCase):
         self.assertEqual(refresh.result_set.metadata["camera_count"], 0)
         self.assertFalse(connect.result_set.metadata["camera_connect_ok"])
         self.assertIn("not currently available", connect.result_set.metadata["camera_connect_message"])
+
+    def test_apply_camera_settings_uses_pylonguy_parameter_mapping(self):
+        engine = FluidicsControlEngine(FakeControlSDK())
+        camera = FakeEngineCamera()
+        engine.camera = camera
+
+        result = engine.run_action(
+            "apply_camera_settings",
+            {
+                "camera_width": 512,
+                "camera_height": 256,
+                "camera_offset_x": 17,
+                "camera_offset_y": 31,
+                "camera_binning_h": 2,
+                "camera_binning_v": 3,
+                "camera_exposure_us": 200,
+                "camera_gain": 2,
+                "camera_pixel_format": "Mono10p",
+                "camera_readout": "Fast",
+                "camera_waterfall": True,
+                "camera_framerate_enabled": True,
+                "camera_framerate_hz": 500,
+                "camera_throughput_enabled": True,
+                "camera_throughput_mbps": 125,
+            },
+        )
+
+        self.assertTrue(result.result_set.metadata["camera_settings_ok"])
+        self.assertIn(("OffsetX", 0), camera.set_calls)
+        self.assertIn(("OffsetY", 0), camera.set_calls)
+        self.assertEqual(camera.applied["Width"], 512)
+        self.assertEqual(camera.applied["Height"], 1)
+        self.assertEqual(camera.applied["OffsetX"], 16)
+        self.assertEqual(camera.applied["OffsetY"], 32)
+        self.assertEqual(camera.applied["BinningHorizontal"], 2)
+        self.assertEqual(camera.applied["BinningVertical"], 3)
+        self.assertEqual(camera.applied["ExposureTime"], 200)
+        self.assertEqual(camera.applied["Gain"], 2)
+        self.assertEqual(camera.applied["PixelFormat"], "Mono10p")
+        self.assertEqual(camera.applied["SensorReadoutMode"], "Fast")
+        self.assertTrue(camera.applied["AcquisitionFrameRateEnable"])
+        self.assertEqual(camera.applied["AcquisitionFrameRate"], 500)
+        self.assertEqual(camera.applied["DeviceLinkThroughputLimitMode"], "On")
+        self.assertEqual(camera.applied["DeviceLinkThroughputLimit"], 125_000_000)
 
 
 if __name__ == "__main__":

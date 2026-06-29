@@ -25,6 +25,15 @@ class StageControl:
 
 
 @dataclass(frozen=True)
+class StageSurface:
+    kind: str
+    title: str = ""
+    settings: ParamSchema = field(default_factory=ParamSchema)
+    controls: tuple[StageControl, ...] = ()
+    options: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Stage:
     id: str
     label: str
@@ -35,6 +44,8 @@ class Stage:
     instructions: tuple[str, ...] = ()
     settings: ParamSchema = field(default_factory=ParamSchema)
     controls: tuple[StageControl, ...] = ()
+    surfaces: tuple[StageSurface, ...] = ()
+    show_settings: bool = True
 
 
 @dataclass(frozen=True)

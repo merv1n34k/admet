@@ -17,7 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 control = [
   "opencv-python>=4.10",
-  "pypylon>=4.0; platform_machine == 'x86_64'",
+  "pypylon>=4.0",
   "pywebview>=5.0",
 ]
 analyze = [

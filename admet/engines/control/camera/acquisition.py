@@ -37,6 +37,7 @@ class FrameWriter(Protocol):
 
 FrameCallback = Callable[[np.ndarray], None]
 StatsCallback = Callable[[dict], None]
+RecordingCompleteCallback = Callable[[], None]
 
 
 class CameraAcquisitionThread(Thread):
@@ -46,6 +47,7 @@ class CameraAcquisitionThread(Thread):
         *,
         preview_callback: FrameCallback | None = None,
         stats_callback: StatsCallback | None = None,
+        recording_complete_callback: RecordingCompleteCallback | None = None,
         sleep_s: float = 0.001,
         stats_interval_s: float = 0.2,
     ):
@@ -53,10 +55,13 @@ class CameraAcquisitionThread(Thread):
         self.camera = camera
         self.preview_callback = preview_callback
         self.stats_callback = stats_callback
+        self.recording_complete_callback = recording_complete_callback
         self.sleep_s = sleep_s
         self.stats_interval_s = stats_interval_s
 
         self.writer: FrameWriter | None = None
+        self.last_recording_frames: int | None = None
+        self.last_writer_frame_count: int | None = None
         self.frame_count = 0
         self.start_time = 0.0
         self.last_stats_time = 0.0
@@ -89,7 +94,7 @@ class CameraAcquisitionThread(Thread):
             if self.writer.write(frame):
                 self.frame_count += 1
                 if self._check_limits():
-                    self.stop_recording()
+                    self.stop_recording(notify_complete=True)
 
         if self.preview_enabled and not self._frame_pending.is_set() and self.preview_callback:
             self._frame_pending.set()
@@ -127,15 +132,22 @@ class CameraAcquisitionThread(Thread):
         self._recording_event.set()
         return True
 
-    def stop_recording(self) -> int:
+    def stop_recording(self, *, notify_complete: bool = False) -> int:
         frames = self.frame_count
         self._recording_event.clear()
         if self.writer:
+            self.last_writer_frame_count = getattr(self.writer, "frame_count", None)
             self.writer.stop()
             self.writer = None
+        self.last_recording_frames = frames
         if not self._stop_event.is_set():
             self.camera.stop_grabbing()
             self.camera.start_grabbing(latest_only=True)
+        if notify_complete and self.recording_complete_callback:
+            try:
+                self.recording_complete_callback()
+            except Exception:
+                log.exception("recording completion callback failed")
         return frames
 
     def stop(self) -> None:
@@ -147,6 +159,9 @@ class CameraAcquisitionThread(Thread):
 
     def set_preview_enabled(self, enabled: bool) -> None:
         self.preview_enabled = enabled
+
+    def set_recording_complete_callback(self, callback: RecordingCompleteCallback | None) -> None:
+        self.recording_complete_callback = callback
 
     def frame_processed(self) -> None:
         self._frame_pending.clear()

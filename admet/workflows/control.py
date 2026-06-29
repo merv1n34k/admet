@@ -1,14 +1,80 @@
-from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema
-from admet.core.workflow import Stage, StageControl, Workflow
-from admet.engines.control.fluidics.config import PIPELINES, SENSOR_CALIBRATIONS
+from admet.core.workflow import Stage, StageControl, StageSurface, Workflow
+from admet.engines.control.settings import (
+    CAMERA_SETTINGS,
+    CORRECTION_SETTINGS,
+    FLUIGENT_SETTINGS,
+    PROTOCOL_SETTINGS,
+    RUN_SETTINGS,
+    WASH_SETTINGS,
+)
 
 
-def _pipeline_options() -> tuple[ParamOption, ...]:
-    return tuple(ParamOption(name, name) for name in sorted(PIPELINES))
-
-
-def _calibration_options() -> tuple[ParamOption, ...]:
-    return tuple(ParamOption(name, name) for name in SENSOR_CALIBRATIONS)
+CAMERA_SURFACE_OPTIONS = {
+    "camera_index_param": "camera_index",
+    "pylon_camemu_param": "pylon_camemu",
+    "groups": (
+        {
+            "title": "ROI",
+            "icon": "crop",
+            "params": (
+                "camera_width",
+                "camera_height",
+                "camera_offset_x",
+                "camera_offset_y",
+                "camera_binning_h",
+                "camera_binning_v",
+                "camera_waterfall",
+            ),
+        },
+        {
+            "title": "Acquisition",
+            "icon": "speed",
+            "params": (
+                "camera_exposure_us",
+                "camera_gain",
+                "camera_pixel_format",
+                "camera_readout",
+            ),
+        },
+        {
+            "title": "Frame Rate",
+            "icon": "timer",
+            "params": (
+                "camera_framerate_enabled",
+                "camera_framerate_hz",
+                "camera_throughput_enabled",
+                "camera_throughput_mbps",
+            ),
+        },
+        {
+            "title": "Display & Selection",
+            "icon": "select_all",
+            "params": (
+                "camera_flip_x",
+                "camera_flip_y",
+                "camera_rotation",
+                "camera_ruler_v",
+                "camera_ruler_h",
+                "camera_ruler_radial",
+                "camera_selection_x",
+                "camera_selection_y",
+                "camera_selection_w",
+                "camera_selection_h",
+            ),
+        },
+        {
+            "title": "Capture",
+            "icon": "fiber_manual_record",
+            "params": (
+                "camera_output_dir",
+                "camera_image_prefix",
+                "camera_video_prefix",
+                "camera_video_fps",
+                "camera_preview_off_recording",
+            ),
+        },
+    ),
+}
 
 
 def create_control_workflow() -> Workflow:
@@ -20,40 +86,40 @@ def create_control_workflow() -> Workflow:
                 "scene",
                 "1. Scene setup",
                 description="Camera discovery, connection, preview, and acquisition geometry.",
-                settings=ParamSchema(
-                    (
-                        Param("camera_index", "Camera Index", ParamKind.INTEGER, default=0, minimum=0),
-                        Param("camera_width", "Width", ParamKind.INTEGER, default=640, minimum=64),
-                        Param("camera_height", "Height", ParamKind.INTEGER, default=240, minimum=1),
-                        Param(
-                            "camera_exposure_us",
-                            "Exposure",
-                            ParamKind.FLOAT,
-                            default=100.0,
-                            minimum=1.0,
-                            step=10.0,
-                        ),
-                        Param("preview_enabled", "Preview", ParamKind.BOOLEAN, default=True),
-                    )
-                ),
+                settings=CAMERA_SETTINGS,
                 controls=(
                     StageControl("Refresh Cameras", "refresh_cameras", variant="secondary"),
                     StageControl("Connect Camera", "connect_camera"),
                     StageControl("Disconnect Camera", "disconnect_camera", variant="warning"),
+                    StageControl("Apply Settings", "apply_camera_settings", variant="secondary"),
+                    StageControl("Start Live", "start_camera_live"),
+                    StageControl("Stop Live", "stop_camera_live", variant="warning"),
                     StageControl("Scene Done", completes=True, variant="success"),
                 ),
+                surfaces=(
+                    StageSurface(
+                        "camera",
+                        "Camera",
+                        settings=CAMERA_SETTINGS,
+                        controls=(
+                            StageControl("Refresh", "refresh_cameras", variant="secondary"),
+                            StageControl("Connect", "connect_camera"),
+                            StageControl("Disconnect", "disconnect_camera", variant="warning"),
+                            StageControl("Apply", "apply_camera_settings", variant="secondary"),
+                            StageControl("Live", "start_camera_live"),
+                            StageControl("Stop", "stop_camera_live", variant="danger"),
+                        ),
+                        options=CAMERA_SURFACE_OPTIONS,
+                    ),
+                ),
+                show_settings=False,
             ),
             Stage(
                 "fluigent",
                 "2. Fluigent connect",
                 action="connect_fluidics",
                 description="SDK import, device enumeration, optional simulated hardware, and polling.",
-                settings=ParamSchema(
-                    (
-                        Param("simulated", "Simulated Hardware", ParamKind.BOOLEAN, default=False),
-                        Param("start_polling", "Start Polling", ParamKind.BOOLEAN, default=True),
-                    )
-                ),
+                settings=FLUIGENT_SETTINGS,
                 controls=(
                     StageControl("Verify Backend", "verify_backend", variant="secondary"),
                     StageControl("Check Fluigent", "verify_fluigent", variant="secondary"),
@@ -66,40 +132,7 @@ def create_control_workflow() -> Workflow:
                 "corrections",
                 "3. Correction factors",
                 description="Flow sensor calibration table and polynomial correction factors.",
-                settings=ParamSchema(
-                    (
-                        Param(
-                            "oil_calibration",
-                            "Oil Calibration",
-                            ParamKind.CHOICE,
-                            default="IPA",
-                            options=_calibration_options(),
-                        ),
-                        Param("oil_scale_a", "Oil a", ParamKind.FLOAT, default=2.25),
-                        Param("oil_scale_b", "Oil b", ParamKind.FLOAT, default=0.0),
-                        Param("oil_scale_c", "Oil c", ParamKind.FLOAT, default=0.0),
-                        Param(
-                            "cells_calibration",
-                            "Cells Calibration",
-                            ParamKind.CHOICE,
-                            default="H2O",
-                            options=_calibration_options(),
-                        ),
-                        Param("cells_scale_a", "Cells a", ParamKind.FLOAT, default=1.0),
-                        Param("cells_scale_b", "Cells b", ParamKind.FLOAT, default=0.0),
-                        Param("cells_scale_c", "Cells c", ParamKind.FLOAT, default=0.0),
-                        Param(
-                            "beads_calibration",
-                            "Beads Calibration",
-                            ParamKind.CHOICE,
-                            default="H2O",
-                            options=_calibration_options(),
-                        ),
-                        Param("beads_scale_a", "Beads a", ParamKind.FLOAT, default=1.0),
-                        Param("beads_scale_b", "Beads b", ParamKind.FLOAT, default=0.0),
-                        Param("beads_scale_c", "Beads c", ParamKind.FLOAT, default=0.0),
-                    )
-                ),
+                settings=CORRECTION_SETTINGS,
                 controls=(StageControl("Mark Applied", completes=True, variant="success"),),
             ),
             Stage(
@@ -107,18 +140,7 @@ def create_control_workflow() -> Workflow:
                 "4. Priming protocol",
                 action="run_protocol",
                 description="Run the priming pipeline and confirm gated steps as prompted.",
-                settings=ParamSchema(
-                    (
-                        Param(
-                            "pipeline_name",
-                            "Pipeline",
-                            ParamKind.CHOICE,
-                            default="Priming",
-                            options=_pipeline_options(),
-                        ),
-                        Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
-                    )
-                ),
+                settings=PROTOCOL_SETTINGS,
                 controls=(
                     StageControl("Run Priming", "run_protocol"),
                     StageControl("Confirm Step", "confirm_protocol", variant="secondary"),
@@ -146,22 +168,7 @@ def create_control_workflow() -> Workflow:
                 "6. Test runs",
                 action="run_protocol",
                 description="Recorded Drop-Seq or custom run protocol with CSV/video session output.",
-                settings=ParamSchema(
-                    (
-                        Param(
-                            "pipeline_name",
-                            "Pipeline",
-                            ParamKind.CHOICE,
-                            default="Drop-Seq",
-                            options=_pipeline_options(),
-                        ),
-                        Param("set_count", "Sets", ParamKind.INTEGER, default=1, minimum=1),
-                        Param("replicate_count", "Replicates", ParamKind.INTEGER, default=1, minimum=1),
-                        Param("run_volume_ul", "Oil Volume", ParamKind.FLOAT, default=150.0, minimum=0.1),
-                        Param("log_dir", "Log Directory", ParamKind.PATH, default="logs"),
-                        Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
-                    )
-                ),
+                settings=RUN_SETTINGS,
                 controls=(
                     StageControl("Start Recording", "start_recording", variant="secondary"),
                     StageControl("Run Protocol", "run_protocol"),
@@ -179,11 +186,7 @@ def create_control_workflow() -> Workflow:
                 skippable=True,
                 confirmation_required=True,
                 description="Post-run wash and shutdown path.",
-                settings=ParamSchema(
-                    (
-                        Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
-                    )
-                ),
+                settings=WASH_SETTINGS,
                 controls=(
                     StageControl("Run Wash", "wash", variant="warning"),
                     StageControl("Confirm Step", "confirm_protocol", variant="secondary"),

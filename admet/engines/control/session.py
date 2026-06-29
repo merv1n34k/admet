@@ -24,6 +24,9 @@ class RecordingCamera(Protocol):
     def stop_recording(self) -> int:
         ...
 
+    def set_recording_complete_callback(self, callback) -> None:
+        ...
+
 
 class ControlBackend(Protocol):
     def run_action(self, action: str, settings: dict[str, Any], context=None) -> EngineResult:
@@ -72,6 +75,9 @@ class RecordingSession:
         self.report_dir: Path | None = None
         self.recordings: list[dict[str, Any]] = []
         self.current: RecordingMetadata | None = None
+        callback_setter = getattr(self.camera, "set_recording_complete_callback", None)
+        if callable(callback_setter):
+            callback_setter(self.stop_recording)
 
     def create_report_dir(self) -> Path:
         if self.report_dir is None:
@@ -118,7 +124,11 @@ class RecordingSession:
             return None
 
         writer_frame_count = _writer_frame_count(self.camera)
-        frames_recorded = self.camera.stop_recording() if self.camera.recording else None
+        if self.camera.recording:
+            frames_recorded = self.camera.stop_recording()
+        else:
+            frames_recorded = _last_recording_frames(self.camera)
+        writer_frame_count = _writer_frame_count(self.camera) or writer_frame_count
         self.control.run_action("stop_recording", {})
 
         now = time.monotonic()
@@ -162,5 +172,9 @@ def _default_writer_factory(video_dir: Path, prefix: str, width: int, height: in
 def _writer_frame_count(camera: RecordingCamera) -> int | None:
     writer = getattr(camera, "writer", None)
     if writer is None:
-        return None
+        return getattr(camera, "last_writer_frame_count", None)
     return getattr(writer, "frame_count", None)
+
+
+def _last_recording_frames(camera: RecordingCamera) -> int | None:
+    return getattr(camera, "last_recording_frames", None)

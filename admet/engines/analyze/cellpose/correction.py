@@ -32,6 +32,6 @@ def update_results_with_inclusions(
                     count += 1
 
         item["inclusions"] = count
-        item["detected"] = False
+        item["detected"] = True
         corrected.append(item)
     return corrected

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from admet.engines.analyze import create_analyze_registry
-from admet.engines.control import create_engine as create_control_engine
+from admet.engines.control.registry import create_control_registry
 from admet.workflows import create_analyze_workflow, create_control_workflow
 
 
@@ -12,6 +12,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("mode", choices=("analyze", "control"))
     parser.add_argument("--engine", default="dummy", help="engine id for analyze mode")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--native", action="store_true", help="launch in a native webview window")
     args = parser.parse_args(argv)
 
     from nicegui import ui
@@ -23,11 +24,13 @@ def main(argv: list[str] | None = None) -> None:
             engine = registry.create(args.engine)
         except LookupError as exc:
             parser.error(str(exc))
-        native = False
     else:
         workflow = create_control_workflow()
-        engine = create_control_engine()
-        native = True
+        registry = create_control_registry()
+        try:
+            engine = registry.create("fluidics")
+        except LookupError as exc:
+            parser.error(str(exc))
 
     from admet.ui import render_workflow
 
@@ -36,7 +39,7 @@ def main(argv: list[str] | None = None) -> None:
 
     ui.run(
         root=root,
-        native=native,
+        native=args.native,
         reload=False,
         show=False,
         port=args.port,

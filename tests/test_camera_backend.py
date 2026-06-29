@@ -37,6 +37,14 @@ class FakeTransportDevice:
         return "123"
 
 
+class FakeTransportLayer:
+    def GetFriendlyName(self):
+        return "Basler Camera Emulator"
+
+    def GetDeviceClass(self):
+        return "BaslerCamEmu"
+
+
 class FakeGrabResult:
     def __init__(self, frame):
         self.frame = frame
@@ -104,6 +112,9 @@ class FakeTlFactory:
     def CreateDevice(self, device):
         return device
 
+    def EnumerateTls(self):
+        return [FakeTransportLayer()]
+
 
 class FakePylon:
     GrabStrategy_LatestImageOnly = "latest"
@@ -170,6 +181,16 @@ class CameraTests(unittest.TestCase):
         self.assertTrue(status.refresh_ok)
         self.assertEqual(status.camera_count, 0)
         self.assertIn("refresh", status.message)
+
+    def test_preflight_reports_camemu_and_transport_layers(self):
+        camera = Camera(EmptyFakePylon)
+
+        with patch.dict("os.environ", {}, clear=True):
+            status = camera.preflight("1")
+
+        self.assertEqual(status.pylon_camemu, "1")
+        self.assertIn("PYLON_CAMEMU=1", status.message)
+        self.assertIn("Basler Camera Emulator / BaslerCamEmu", status.transport_layers)
 
 
 class VideoWorkerTests(unittest.TestCase):
@@ -239,7 +260,9 @@ class CameraAcquisitionThreadTests(unittest.TestCase):
         camera = FakeRecordingCamera()
         writer = FakeWriter()
         previews = []
+        complete_calls = []
         acquisition = CameraAcquisitionThread(camera, preview_callback=previews.append)
+        acquisition.set_recording_complete_callback(lambda: complete_calls.append(True))
 
         self.assertTrue(acquisition.start_recording(writer, max_frames=2))
         acquisition.process_frame(np.ones((2, 2), dtype=np.uint8))
@@ -252,6 +275,9 @@ class CameraAcquisitionThreadTests(unittest.TestCase):
         self.assertEqual(len(writer.frames), 2)
         self.assertEqual(previews[0].shape, (2, 2))
         self.assertEqual(camera.strategies, [False, True])
+        self.assertEqual(complete_calls, [True])
+        self.assertEqual(acquisition.last_recording_frames, 2)
+        self.assertEqual(acquisition.last_writer_frame_count, 2)
 
     def test_preview_can_be_disabled(self):
         previews = []

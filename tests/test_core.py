@@ -1,9 +1,10 @@
 import unittest
 
 from admet.core.engine import EngineRegistry, LazyEngineSpec
-from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema
+from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema, ResultRecord
 from admet.core.workflow import Stage, StageControl, StageStatus, Workflow, WorkflowRunner
 from admet.engines.dummy import create_engine
+from admet.ui.renderer import _record_to_row
 
 
 class ParamSchemaTests(unittest.TestCase):
@@ -119,6 +120,21 @@ class EngineRegistryTests(unittest.TestCase):
         self.assertIn("missing", registry.unavailable())
         with self.assertRaises(LookupError):
             registry.create("missing")
+
+
+class RendererHelperTests(unittest.TestCase):
+    def test_record_rows_flatten_lists_and_dicts_for_nicegui_tables(self):
+        row = _record_to_row(
+            0,
+            ResultRecord(
+                sample_id="control",
+                engine="fluidics",
+                values={"cameras": [], "camera": {"pypylon_available": False}},
+            ),
+        )
+
+        self.assertEqual(row["cameras"], "")
+        self.assertEqual(row["camera"], '{"pypylon_available": false}')
 
 
 if __name__ == "__main__":

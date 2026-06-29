@@ -53,7 +53,7 @@ def compute_grid(n_fields: int, aspect: float) -> tuple[int, int]:
         cols = math.ceil(n_fields / rows)
         empty = cols * rows - n_fields
         ratio_err = abs((cols / rows) - aspect)
-        score = (empty, ratio_err)
+        score = (ratio_err, empty)
         if best is None or score < best[0]:
             best = (score, cols, rows)
     return (best[1], best[2])

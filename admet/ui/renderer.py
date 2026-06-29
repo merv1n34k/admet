@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from functools import partial
 from typing import Any
 
 from admet.core.engine import EngineContext, EngineResult
 from admet.core.schema import ParamKind, ParamSchema, ResultRecord, ResultSet
-from admet.core.workflow import Stage, StageControl, StageStatus, Workflow, WorkflowState
+from admet.core.workflow import Stage, StageControl, StageStatus, StageSurface, Workflow, WorkflowState
 
 
 def render_workflow(
@@ -22,13 +23,28 @@ def render_workflow(
         """
         <style>
         body { background: #f7f8fa; }
-        .admet-shell { min-height: 100vh; color: #17202a; }
+        .admet-shell { min-height: 100vh; color: #17202a; font-size: 13px; }
         .admet-topbar { border-bottom: 1px solid #d9dee7; background: #ffffff; }
         .admet-sidebar { border-right: 1px solid #d9dee7; background: #ffffff; }
-        .admet-panel { border: 1px solid #d9dee7; background: #ffffff; border-radius: 8px; }
+        .admet-panel { border: 1px solid #d9dee7; background: #ffffff; border-radius: 10px; }
         .admet-muted { color: #677383; }
-        .admet-camera { background: #151a21; color: #dfe7f1; aspect-ratio: 16 / 9; }
-        .admet-toc-button { min-height: 56px; }
+        .admet-camera {
+          background: #151a21;
+          color: #dfe7f1;
+          height: clamp(160px, 22vw, 260px);
+          max-width: 520px;
+        }
+        .admet-toc-button { min-height: 30px; border-radius: 999px; }
+        .admet-shell .q-btn {
+          min-height: 28px;
+          padding: 2px 8px;
+          border-radius: 999px;
+          text-transform: none;
+          font-size: 12px;
+        }
+        .admet-shell .q-badge { border-radius: 999px; font-size: 10px; padding: 2px 6px; }
+        .admet-shell .q-field__control { min-height: 34px; border-radius: 8px; }
+        .admet-shell .q-table th, .admet-shell .q-table td { padding: 4px 8px; }
         </style>
         """
     )
@@ -52,13 +68,22 @@ class CoreWorkflowView:
             self.values.update(settings.defaults())
         for stage in workflow.stages:
             self.values.update(stage.settings.defaults())
+            for surface in stage.surfaces:
+                self.values.update(surface.settings.defaults())
         self.engine_setting_names = {
             param.name for param in settings.params
         } if settings is not None else set()
+        self.workflow_setting_names = {
+            param.name
+            for stage in workflow.stages
+            for schema in (stage.settings, *(surface.settings for surface in stage.surfaces))
+            for param in schema.params
+        }
         self.status = "Ready"
         self.status_kind = "info"
         self.last_result: EngineResult | None = None
         self.batch_files: list[dict[str, Any]] = []
+        self._selection_drag_start: tuple[int, int] | None = None
         self._screen: Any | None = None
 
     def render(self) -> None:
@@ -78,11 +103,12 @@ class CoreWorkflowView:
         with ui.column().classes("admet-shell w-full gap-0"):
             self._render_topbar()
             with ui.row().classes("w-full flex-nowrap gap-0 grow"):
-                with ui.column().classes("admet-sidebar w-96 shrink-0 gap-3 p-4"):
+                with ui.column().classes("admet-sidebar w-80 shrink-0 gap-2 p-3"):
                     self._render_workflow_sidebar()
-                with ui.column().classes("grow gap-4 p-4"):
-                    if self.workflow.id == "control":
-                        self._render_camera_panel()
+                with ui.column().classes("grow gap-3 p-3"):
+                    stage = self.workflow.current_stage(self.state)
+                    for surface in stage.surfaces:
+                        self._render_surface(surface)
                     self._render_stage_panel()
                     self._render_batch_panel()
                     self._render_results_panel()
@@ -90,11 +116,11 @@ class CoreWorkflowView:
     def _render_topbar(self) -> None:
         from nicegui import ui
 
-        with ui.row().classes("admet-topbar w-full items-center justify-between px-4 py-3"):
+        with ui.row().classes("admet-topbar w-full items-center justify-between px-3 py-2"):
             with ui.column().classes("gap-0"):
-                ui.label(self.workflow.label).classes("text-xl font-semibold")
+                ui.label(self.workflow.label).classes("text-base font-semibold")
                 engine_name = getattr(self.engine, "name", "No engine")
-                ui.label(f"Engine: {engine_name}").classes("admet-muted text-sm")
+                ui.label(f"Engine: {engine_name}").classes("admet-muted text-xs")
             with ui.row().classes("items-center gap-2"):
                 ui.badge(self.status_kind.upper()).props(_badge_color(self.status_kind))
                 ui.label(self.status).classes("text-sm")
@@ -102,7 +128,7 @@ class CoreWorkflowView:
     def _render_workflow_sidebar(self) -> None:
         from nicegui import ui
 
-        ui.label("Workflow").classes("text-lg font-semibold")
+        ui.label("Workflow").classes("text-sm font-semibold")
         for index, stage in enumerate(self.workflow.stages):
             status = self.state.statuses[stage.id]
             selected = index == self.state.index
@@ -111,26 +137,28 @@ class CoreWorkflowView:
                     stage.label,
                     icon=_status_icon(status),
                     on_click=partial(self._activate_index, index),
-                ).props("align=left")
+                ).props("dense no-caps flat align=left")
                 button.classes(
-                    "admet-toc-button w-full justify-start"
+                    "admet-toc-button w-full justify-start text-xs"
                     + (" bg-blue-50 text-blue-800" if selected else "")
                 )
                 with ui.row().classes("items-center gap-1 pl-2 flex-wrap"):
                     ui.badge(status.value).props(_status_badge(status))
-                    if stage.skippable:
-                        ui.badge("skippable").props("color=orange")
             if selected:
                 self._render_stage_controls(stage)
-        with ui.row().classes("gap-2 pt-2"):
-            ui.button("Previous", icon="chevron_left", on_click=self._previous_stage).props("outline")
-            ui.button("Next", icon="chevron_right", on_click=self._next_stage).props("outline")
+        with ui.row().classes("gap-1 pt-1"):
+            ui.button("Previous", icon="chevron_left", on_click=self._previous_stage).props(
+                "dense no-caps outline"
+            )
+            ui.button("Next", icon="chevron_right", on_click=self._next_stage).props(
+                "dense no-caps outline"
+            )
 
     def _render_stage_controls(self, stage: Stage) -> None:
         from nicegui import ui
 
         controls = stage.controls or self._default_controls(stage)
-        with ui.column().classes("gap-2 pl-2"):
+        with ui.column().classes("gap-1 pl-2"):
             for control in controls:
                 props = _button_props(control.variant)
                 ui.button(
@@ -139,53 +167,257 @@ class CoreWorkflowView:
                     on_click=partial(self._handle_control, stage, control),
                 ).props(props).classes("w-full justify-start")
 
-    def _render_camera_panel(self) -> None:
+    def _render_surface(self, surface: StageSurface) -> None:
+        if surface.kind == "camera":
+            self._render_camera_surface(surface)
+
+    def _render_camera_surface(self, surface: StageSurface) -> None:
         from nicegui import ui
 
         metadata = self._latest_metadata()
         cameras = metadata.get("cameras") or metadata.get("camera", {}).get("cameras") or []
+        transport_layers = metadata.get("camera_transport_layers") or []
         camera_message = metadata.get("camera_message", "Refresh cameras when a device is attached.")
         connected = bool(metadata.get("camera_connected"))
+        live = bool(metadata.get("camera_live"))
+        pypylon_available = metadata.get("pypylon_available")
+        pylon_camemu = metadata.get("pylon_camemu", "")
+        preview_src = metadata.get("camera_preview_src") or ""
+        preview_width = int(metadata.get("camera_preview_width") or self.values.get("camera_width") or 640)
+        preview_height = int(metadata.get("camera_preview_height") or self.values.get("camera_height") or 480)
 
-        with ui.column().classes("admet-panel w-full gap-3 p-4"):
+        with ui.column().classes("admet-panel w-full gap-2 p-3"):
             with ui.row().classes("w-full items-center justify-between"):
-                ui.label("Camera").classes("text-lg font-semibold")
-                with ui.row().classes("gap-2"):
-                    ui.button(
-                        "Refresh",
-                        icon="refresh",
-                        on_click=partial(self._run_action, "refresh_cameras", False),
-                    ).props("outline")
-                    ui.button(
-                        "Connect",
-                        icon="videocam",
-                        on_click=partial(self._run_action, "connect_camera", False),
-                    )
-            with ui.row().classes("w-full gap-4"):
-                with ui.column().classes("admet-camera grow items-center justify-center rounded-md p-4"):
-                    ui.icon("videocam").classes("text-5xl")
-                    ui.label("Live camera feed").classes("text-lg")
-                    ui.label("Preview frames will render here once acquisition is attached.").classes(
-                        "text-sm text-center"
-                    )
+                ui.label(surface.title or "Camera").classes("text-sm font-semibold")
+                self._render_surface_control_row(surface.controls)
+            with ui.row().classes("w-full gap-3 items-start"):
+                with ui.column().classes("grow gap-2"):
+                    if preview_src:
+                        ui.interactive_image(
+                            preview_src,
+                            content=self._camera_overlay(preview_width, preview_height),
+                            on_mouse=self._handle_camera_mouse,
+                            events=["mousedown", "mousemove", "mouseup"],
+                            cross="#80eaff",
+                        ).classes("admet-camera w-full rounded-md overflow-hidden")
+                    else:
+                        with ui.column().classes("admet-camera w-full items-center justify-center rounded-md p-3"):
+                            ui.icon("videocam").classes("text-3xl")
+                            ui.label("No live frame").classes("text-sm")
+                            ui.label("Connect camera and start live.").classes("text-xs admet-muted")
+                    self._render_camera_status_strip(metadata, preview_width, preview_height)
                 with ui.column().classes("w-80 gap-2"):
+                    self._render_camera_connection_controls(cameras, surface)
                     ui.badge("connected" if connected else "not connected").props(
                         "color=green" if connected else "color=grey"
                     )
+                    ui.badge("live" if live else "idle").props("color=green" if live else "color=grey")
+                    if pypylon_available is not None:
+                        ui.badge("pypylon ok" if pypylon_available else "pypylon missing").props(
+                            "color=green" if pypylon_available else "color=red"
+                        )
+                    if pylon_camemu:
+                        ui.badge(f"PYLON_CAMEMU={pylon_camemu}").props("color=blue")
                     ui.label(camera_message).classes("admet-muted text-sm")
                     if cameras:
                         ui.label("Detected cameras").classes("font-medium")
                         for camera in cameras:
                             ui.label(str(camera)).classes("text-sm")
+                    if transport_layers:
+                        ui.label("Transport layers").classes("font-medium")
+                        for layer in transport_layers:
+                            ui.label(str(layer)).classes("text-xs admet-muted")
+            self._render_camera_settings(surface)
+            if live:
+                ui.timer(0.25, self._poll_camera_status, active=True)
+
+    def _render_surface_control_row(self, controls: tuple[StageControl, ...]) -> None:
+        from nicegui import ui
+
+        stage = self.workflow.current_stage(self.state)
+        with ui.row().classes("gap-1"):
+            for control in controls:
+                ui.button(
+                    control.label,
+                    icon=_control_icon(control),
+                    on_click=partial(self._handle_control, stage, control),
+                ).props(_button_props(control.variant))
+
+    def _render_camera_connection_controls(self, cameras: list[Any], surface: StageSurface) -> None:
+        from nicegui import ui
+
+        camera_index_param = surface.options.get("camera_index_param", "camera_index")
+        pylon_camemu_param = surface.options.get("pylon_camemu_param", "pylon_camemu")
+        options = {index: str(camera) for index, camera in enumerate(cameras)}
+        if not options:
+            options = {0: "No cameras detected"}
+        ui.select(
+            options,
+            label=_param_by_name(surface.settings, camera_index_param).label,
+            value=int(self.values.get(camera_index_param) or 0),
+        ).bind_value(self.values, camera_index_param).classes("w-full")
+        camemu = _param_by_name(surface.settings, pylon_camemu_param)
+        ui.input(camemu.label, value=self.values.get(pylon_camemu_param) or "").bind_value(
+            self.values,
+            pylon_camemu_param,
+        ).classes("w-full")
+
+    def _render_camera_settings(self, surface: StageSurface) -> None:
+        from nicegui import ui
+
+        for group in surface.options.get("groups", ()):
+            schema = _schema_subset(surface.settings, group.get("params", ()))
+            if not schema.params:
+                continue
+            with ui.expansion(group.get("title", "Settings"), icon=group.get("icon", "tune")).classes(
+                "w-full"
+            ).props("dense"):
+                render_settings(schema, self.values, columns=4)
+                if "camera_selection_w" in {param.name for param in schema.params}:
+                    ui.button("Clear Selection", icon="backspace", on_click=self._clear_camera_selection).props(
+                        "dense no-caps outline"
+                    )
+
+    def _render_camera_status_strip(
+        self,
+        metadata: dict[str, Any],
+        preview_width: int,
+        preview_height: int,
+    ) -> None:
+        from nicegui import ui
+
+        fps = float(metadata.get("camera_fps") or 0.0)
+        frames = int(metadata.get("camera_recorded_frames") or 0)
+        elapsed = float(metadata.get("camera_record_elapsed") or 0.0)
+        selection = self._selection_rect()
+        roi = f"{preview_width}x{preview_height}" if preview_width and preview_height else "---"
+        sel = f"{selection[2]}x{selection[3]}+{selection[0]}+{selection[1]}" if selection else "None"
+        with ui.row().classes("gap-1 flex-wrap"):
+            for label, value in (
+                ("FPS", f"{fps:.1f}"),
+                ("REC", "ON" if metadata.get("camera_recording") else "OFF"),
+                ("FRAMES", str(frames)),
+                ("TIME", f"{elapsed:.1f}s"),
+                ("ROI", roi),
+                ("SEL", sel),
+            ):
+                with ui.row().classes("items-center gap-1 border border-gray-200 rounded-full px-2 py-1"):
+                    ui.label(label).classes("admet-muted text-[10px]")
+                    ui.label(value).classes("text-xs font-medium")
+
+    def _number(
+        self,
+        name: str,
+        label: str,
+        minimum: float | None = None,
+        *,
+        step: float | None = None,
+    ) -> None:
+        from nicegui import ui
+
+        ui.number(
+            label=label,
+            value=self.values.get(name),
+            min=minimum,
+            step=step,
+        ).bind_value(self.values, name).classes("w-full")
+
+    def _camera_overlay(self, width: int, height: int) -> str:
+        width = max(1, int(width or self.values.get("camera_width") or 640))
+        height = max(1, int(height or self.values.get("camera_height") or 480))
+        parts = []
+        if self.values.get("camera_ruler_v"):
+            step = max(1, width // 10)
+            parts.extend(
+                f'<line x1="{x}" y1="0" x2="{x}" y2="{height}" stroke="yellow" stroke-width="1" opacity="0.55" />'
+                for x in range(0, width + 1, step)
+            )
+        if self.values.get("camera_ruler_h"):
+            step = max(1, height // 10)
+            parts.extend(
+                f'<line x1="0" y1="{y}" x2="{width}" y2="{y}" stroke="yellow" stroke-width="1" opacity="0.55" />'
+                for y in range(0, height + 1, step)
+            )
+        if self.values.get("camera_ruler_radial"):
+            cx = width / 2
+            cy = height / 2
+            radius = (width ** 2 + height ** 2) ** 0.5 / 2
+            for angle in range(0, 360, 30):
+                import math
+
+                rad = math.radians(angle)
+                x = cx + radius * math.cos(rad)
+                y = cy - radius * math.sin(rad)
+                parts.append(
+                    f'<line x1="{cx:.1f}" y1="{cy:.1f}" x2="{x:.1f}" y2="{y:.1f}" stroke="yellow" stroke-width="1" opacity="0.45" />'
+                )
+        selection = self._selection_rect()
+        if selection:
+            x, y, w, h = selection
+            parts.append(
+                f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="rgba(0,120,255,0.16)" stroke="#00b4ff" stroke-width="2" stroke-dasharray="5 3" />'
+            )
+        return "".join(parts)
+
+    def _handle_camera_mouse(self, event: Any) -> None:
+        x = max(0, int(round(event.image_x)))
+        y = max(0, int(round(event.image_y)))
+        if event.type == "mousedown":
+            self._selection_drag_start = (x, y)
+            return
+        if event.type == "mousemove" and self._selection_drag_start and event.buttons:
+            self._set_camera_selection(self._selection_drag_start, (x, y))
+            self._refresh()
+            return
+        if event.type == "mouseup" and self._selection_drag_start:
+            self._set_camera_selection(self._selection_drag_start, (x, y))
+            self._selection_drag_start = None
+            self._refresh()
+
+    def _set_camera_selection(self, start: tuple[int, int], end: tuple[int, int]) -> None:
+        x0, y0 = start
+        x1, y1 = end
+        x = min(x0, x1)
+        y = min(y0, y1)
+        w = abs(x1 - x0)
+        h = abs(y1 - y0)
+        if w <= 5 or h <= 5:
+            self._clear_camera_selection(refresh=False)
+            return
+        self.values["camera_selection_x"] = x
+        self.values["camera_selection_y"] = y
+        self.values["camera_selection_w"] = w
+        self.values["camera_selection_h"] = h
+
+    def _selection_rect(self) -> tuple[int, int, int, int] | None:
+        w = int(self.values.get("camera_selection_w") or 0)
+        h = int(self.values.get("camera_selection_h") or 0)
+        if w <= 0 or h <= 0:
+            return None
+        return (
+            int(self.values.get("camera_selection_x") or 0),
+            int(self.values.get("camera_selection_y") or 0),
+            w,
+            h,
+        )
+
+    def _clear_camera_selection(self, *, refresh: bool = True) -> None:
+        self.values["camera_selection_x"] = 0
+        self.values["camera_selection_y"] = 0
+        self.values["camera_selection_w"] = 0
+        self.values["camera_selection_h"] = 0
+        self._selection_drag_start = None
+        if refresh:
+            self._refresh()
 
     def _render_stage_panel(self) -> None:
         from nicegui import ui
 
         stage = self.workflow.current_stage(self.state)
-        with ui.column().classes("admet-panel w-full gap-4 p-4"):
+        with ui.column().classes("admet-panel w-full gap-3 p-3"):
             with ui.row().classes("w-full items-start justify-between"):
                 with ui.column().classes("gap-1"):
-                    ui.label(stage.label).classes("text-xl font-semibold")
+                    ui.label(stage.label).classes("text-base font-semibold")
                     if stage.description:
                         ui.label(stage.description).classes("admet-muted")
                 ui.badge(self.state.statuses[stage.id].value).props(
@@ -197,21 +429,22 @@ class CoreWorkflowView:
                     for instruction in stage.instructions:
                         ui.label(instruction).classes("text-sm")
 
-            if stage.settings.params:
-                ui.label("Section Settings").classes("font-semibold")
+            if stage.show_settings and stage.settings.params:
+                ui.label("Section Settings").classes("text-sm font-semibold")
                 render_settings(stage.settings, self.values)
 
-            if self.settings is not None and self.settings.params:
+            engine_settings = self._unclaimed_engine_settings()
+            if engine_settings.params:
                 with ui.expansion("Engine Settings", icon="tune").classes("w-full"):
-                    render_settings(self.settings, self.values)
+                    render_settings(engine_settings, self.values)
 
     def _render_batch_panel(self) -> None:
         from nicegui import ui
 
         if self.workflow.id != "analyze":
             return
-        with ui.column().classes("admet-panel w-full gap-3 p-4"):
-            ui.label("Batch").classes("text-lg font-semibold")
+        with ui.column().classes("admet-panel w-full gap-2 p-3"):
+            ui.label("Batch").classes("text-sm font-semibold")
             ui.upload(
                 label="Browse Files",
                 multiple=True,
@@ -232,8 +465,8 @@ class CoreWorkflowView:
         from nicegui import ui
 
         result_set = self._latest_result_set()
-        with ui.column().classes("admet-panel w-full gap-3 p-4"):
-            ui.label("Results").classes("text-lg font-semibold")
+        with ui.column().classes("admet-panel w-full gap-2 p-3"):
+            ui.label("Results").classes("text-sm font-semibold")
             if result_set is None:
                 ui.label("No results yet. Run a workflow action to populate this area.").classes(
                     "admet-muted"
@@ -251,9 +484,9 @@ class CoreWorkflowView:
         with ui.row().classes("w-full gap-2 flex-wrap"):
             for stat in result_set.stats:
                 label = f"{stat.value} {stat.unit}".strip()
-                with ui.column().classes("border border-gray-200 rounded-md px-3 py-2 gap-0"):
+                with ui.column().classes("border border-gray-200 rounded-md px-2 py-1 gap-0"):
                     ui.label(stat.name.replace("_", " ").title()).classes("admet-muted text-xs")
-                    ui.label(label).classes("text-lg font-semibold")
+                    ui.label(label).classes("text-sm font-semibold")
 
     def _render_plot(self, result_set: ResultSet) -> None:
         from nicegui import ui
@@ -323,6 +556,17 @@ class CoreWorkflowView:
         self._set_status(f"{action} complete.", "success")
         if complete_after:
             self._complete_current(refresh=False)
+        self._refresh()
+
+    def _poll_camera_status(self) -> None:
+        if self.engine is None:
+            return
+        try:
+            result = self.engine.run_action("camera_status", self._engine_payload())
+        except Exception:
+            return
+        self.last_result = result
+        self._store_stage_result(result)
         self._refresh()
 
     def _complete_current(self, refresh: bool = True) -> None:
@@ -425,15 +669,27 @@ class CoreWorkflowView:
             controls.append(StageControl("Complete", completes=True, variant="success"))
         return tuple(controls)
 
+    def _unclaimed_engine_settings(self) -> ParamSchema:
+        if self.settings is None:
+            return ParamSchema()
+        return ParamSchema(
+            tuple(param for param in self.settings.params if param.name not in self.workflow_setting_names)
+        )
 
-def render_settings(settings: ParamSchema, values: dict[str, Any] | None = None) -> dict[str, Any]:
+
+def render_settings(
+    settings: ParamSchema,
+    values: dict[str, Any] | None = None,
+    *,
+    columns: int = 2,
+) -> dict[str, Any]:
     from nicegui import ui
 
     target = values if values is not None else settings.defaults()
     for name, value in settings.defaults().items():
         target.setdefault(name, value)
 
-    with ui.grid(columns=2).classes("w-full gap-3"):
+    with ui.grid(columns=columns).classes("w-full gap-3"):
         for param in settings.params:
             if param.kind is ParamKind.BOOLEAN:
                 ui.checkbox(param.label, value=bool(target.get(param.name))).bind_value(
@@ -463,10 +719,34 @@ def render_settings(settings: ParamSchema, values: dict[str, Any] | None = None)
     return target
 
 
+def _schema_subset(settings: ParamSchema, names: tuple[str, ...]) -> ParamSchema:
+    wanted = set(names)
+    return ParamSchema(tuple(param for param in settings.params if param.name in wanted))
+
+
+def _param_by_name(settings: ParamSchema, name: str):
+    for param in settings.params:
+        if param.name == name:
+            return param
+    raise KeyError(name)
+
+
 def _record_to_row(index: int, record: ResultRecord) -> dict[str, Any]:
     row = {"id": index, "sample_id": record.sample_id, "engine": record.engine}
-    row.update(record.values)
+    row.update({key: _table_value(value, key) for key, value in record.values.items()})
     return row
+
+
+def _table_value(value: Any, key: str = "") -> Any:
+    if key.endswith("_src") and isinstance(value, str) and value.startswith("data:"):
+        return "[image]"
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True, default=str)
+    if isinstance(value, list | tuple | set):
+        if not value:
+            return ""
+        return ", ".join(str(item) for item in value)
+    return value
 
 
 def _badge_color(kind: str) -> str:
@@ -496,15 +776,16 @@ def _status_icon(status: StageStatus) -> str:
 
 
 def _button_props(variant: str) -> str:
+    base = "dense no-caps"
     if variant == "secondary":
-        return "outline"
+        return f"{base} outline"
     if variant == "warning":
-        return "color=orange"
+        return f"{base} outline color=orange"
     if variant == "danger":
-        return "color=red"
+        return f"{base} outline color=red"
     if variant == "success":
-        return "color=green"
-    return "color=blue"
+        return f"{base} outline color=green"
+    return f"{base} outline color=blue"
 
 
 def _control_icon(control: StageControl) -> str:

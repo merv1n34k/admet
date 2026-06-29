@@ -101,8 +101,8 @@ class CellposeHelperTests(unittest.TestCase):
         self.assertIsNotNone(layout)
         self.assertEqual(layout["pattern"], "SerpentineVertical")
         self.assertEqual(layout["cols"], 2)
-        self.assertEqual(layout["rows"], 3)
-        self.assertEqual(layout["cells"][3], [2, 1])
+        self.assertEqual(layout["rows"], 4)
+        self.assertEqual(layout["cells"][3], [3, 0])
 
     def test_update_results_with_inclusions_counts_points_and_skips_disabled(self):
         results = [
@@ -123,7 +123,7 @@ class CellposeHelperTests(unittest.TestCase):
 
         self.assertEqual([row["droplet_id"] for row in corrected], [1, 3])
         self.assertEqual([row["inclusions"] for row in corrected], [2, 1])
-        self.assertEqual([row["detected"] for row in corrected], [False, False])
+        self.assertEqual([row["detected"] for row in corrected], [True, True])
 
     def test_detection_parses_and_groups_evos_filenames(self):
         detector = CellposeDetection(use_cache=False)

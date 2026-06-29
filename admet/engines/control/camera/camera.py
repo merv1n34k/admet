@@ -20,7 +20,9 @@ class CameraAvailability:
     refresh_ok: bool
     camera_count: int = 0
     cameras: tuple[str, ...] = ()
+    transport_layers: tuple[str, ...] = ()
     pylon_camemu: str = ""
+    pylon_module_loaded: bool = False
     message: str = ""
     error_type: str = ""
 
@@ -41,28 +43,32 @@ class Camera:
     def enumerate_cameras(self) -> list[str]:
         try:
             factory = self._pylon_module().TlFactory.GetInstance()
-            cameras = []
-            for device in factory.EnumerateDevices():
-                try:
-                    cameras.append(f"{device.GetModelName()} ({device.GetSerialNumber()})")
-                except Exception:
-                    cameras.append("Unknown Camera")
-            return cameras
+            return [self._format_device(device) for device in factory.EnumerateDevices()]
         except PypylonUnavailableError:
             raise
         except Exception as exc:
             log.debug("Camera enumeration failed: %s", exc)
             return []
 
-    def preflight(self) -> CameraAvailability:
-        pylon_camemu = os.environ.get("PYLON_CAMEMU", "")
+    def preflight(self, pylon_camemu: str | None = None) -> CameraAvailability:
+        module_was_loaded = self._pylon is not None
+        previous_camemu = os.environ.get("PYLON_CAMEMU", "")
+        changed_after_load = False
+        if pylon_camemu is not None and pylon_camemu.strip():
+            changed_after_load = module_was_loaded and pylon_camemu.strip() != previous_camemu
+            os.environ["PYLON_CAMEMU"] = pylon_camemu.strip()
+        active_camemu = os.environ.get("PYLON_CAMEMU", "")
         try:
-            cameras = tuple(self.enumerate_cameras())
+            pylon = self._pylon_module()
+            factory = pylon.TlFactory.GetInstance()
+            cameras = tuple(self._format_device(device) for device in factory.EnumerateDevices())
+            transport_layers = self._enumerate_transport_layers(factory)
         except PypylonUnavailableError as exc:
             return CameraAvailability(
                 pypylon_available=False,
                 refresh_ok=False,
-                pylon_camemu=pylon_camemu,
+                pylon_camemu=active_camemu,
+                pylon_module_loaded=module_was_loaded,
                 message=str(exc.__cause__ or exc),
                 error_type=type(exc.__cause__ or exc).__name__,
             )
@@ -70,16 +76,22 @@ class Camera:
         camera_count = len(cameras)
         if camera_count:
             message = f"{camera_count} Basler camera(s) detected."
-        elif pylon_camemu:
-            message = "No camera emulator/device is currently enumerated; refresh after it appears."
+        elif active_camemu:
+            message = (
+                f"PYLON_CAMEMU={active_camemu} is set, but pylon returned zero devices."
+            )
         else:
             message = "No Basler cameras are currently enumerated; refresh after attaching one."
+        if changed_after_load:
+            message = f"{message} pypylon was already loaded before the emulator value changed."
         return CameraAvailability(
             pypylon_available=True,
             refresh_ok=True,
             camera_count=camera_count,
             cameras=cameras,
-            pylon_camemu=pylon_camemu,
+            transport_layers=transport_layers,
+            pylon_camemu=active_camemu,
+            pylon_module_loaded=self._pylon is not None,
             message=message,
         )
 
@@ -241,3 +253,34 @@ class Camera:
             ) from exc
         self._pylon = pylon
         return self._pylon
+
+    def _format_device(self, device: Any) -> str:
+        try:
+            return f"{device.GetModelName()} ({device.GetSerialNumber()})"
+        except Exception:
+            return "Unknown Camera"
+
+    def _enumerate_transport_layers(self, factory: Any) -> tuple[str, ...]:
+        if not hasattr(factory, "EnumerateTls"):
+            return ()
+        try:
+            return tuple(self._format_transport_layer(tl) for tl in factory.EnumerateTls())
+        except Exception as exc:
+            log.debug("Transport layer enumeration failed: %s", exc)
+            return ()
+
+    def _format_transport_layer(self, transport_layer: Any) -> str:
+        values = []
+        for attr in ("GetFriendlyName", "GetDeviceClass", "GetFullName", "GetInternalName"):
+            if not hasattr(transport_layer, attr):
+                continue
+            try:
+                value = getattr(transport_layer, attr)()
+            except Exception:
+                continue
+            if value:
+                values.append(str(value))
+        if not values:
+            return "Unknown Transport"
+        deduped = list(dict.fromkeys(values))
+        return " / ".join(deduped)
