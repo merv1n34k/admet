@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from admet.core.engine import EngineContext, EngineResult
+from admet.core.engine import ActionSpec, EngineContext, EngineResult, validate_action_settings
 from admet.core.schema import Param, ParamKind, ParamSchema, ResultRecord, ResultSet, SummaryStat
 
 from .pipeline import DropletPipeline
@@ -21,6 +21,14 @@ class OpenCVAnalysisEngine:
             Param("max_frames", "Max Frames", ParamKind.INTEGER, default=None),
         )
     )
+    actions = (
+        ActionSpec(
+            "analyze",
+            "Analyze",
+            "analysis",
+            params=tuple(param.name for param in settings.params),
+        ),
+    )
 
     def run_action(
         self,
@@ -28,10 +36,7 @@ class OpenCVAnalysisEngine:
         settings: dict[str, Any],
         context: EngineContext | None = None,
     ) -> EngineResult:
-        if action != "analyze":
-            raise ValueError(f"unsupported OpenCV action: {action}")
-
-        normalized = self.settings.validate(settings)
+        normalized = validate_action_settings(self.settings, self.actions, action, settings)
         video_path = normalized["video_path"]
         config = self._config_from_settings(normalized, context)
 
@@ -108,4 +113,3 @@ class OpenCVAnalysisEngine:
 
 def create_engine() -> OpenCVAnalysisEngine:
     return OpenCVAnalysisEngine()
-

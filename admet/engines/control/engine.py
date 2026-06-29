@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from admet.core.engine import EngineContext, EngineResult
+from admet.core.engine import ActionSpec, EngineContext, EngineResult, validate_action_settings
 from admet.core.schema import ResultRecord, ResultSet, SummaryStat
 from admet.engines.control.fluidics import (
     AcquisitionThread,
@@ -32,10 +32,56 @@ from admet.engines.control.pipeline import (
 from admet.engines.control.settings import CONTROL_ENGINE_SETTINGS
 
 
+CAMERA_CONFIGURATION_PARAMS = (
+    "camera_width",
+    "camera_height",
+    "camera_offset_x",
+    "camera_offset_y",
+    "camera_binning_h",
+    "camera_binning_v",
+    "camera_exposure_us",
+    "camera_gain",
+    "camera_pixel_format",
+    "camera_readout",
+    "camera_framerate_enabled",
+    "camera_framerate_hz",
+    "camera_throughput_enabled",
+    "camera_throughput_mbps",
+    "camera_waterfall",
+)
+
+CONTROL_ACTIONS = (
+    ActionSpec("connect_fluidics", "Connect Fluidics", "connection", params=("simulated", "start_polling")),
+    ActionSpec("disconnect_fluidics", "Disconnect Fluidics", "connection"),
+    ActionSpec("verify_backend", "Verify Backend", "diagnostics", params=("pylon_camemu",)),
+    ActionSpec("verify_fluigent", "Verify Fluigent", "diagnostics", params=("simulated",)),
+    ActionSpec("refresh_cameras", "Refresh Cameras", "diagnostics", params=("pylon_camemu",)),
+    ActionSpec("connect_camera", "Connect Camera", "connection", params=("pylon_camemu", "camera_index")),
+    ActionSpec("disconnect_camera", "Disconnect Camera", "connection", params=("pylon_camemu",)),
+    ActionSpec("apply_camera_settings", "Apply Camera Settings", "diagnostics", params=CAMERA_CONFIGURATION_PARAMS),
+    ActionSpec("start_camera_live", "Start Camera Live", "diagnostics"),
+    ActionSpec("stop_camera_live", "Stop Camera Live", "diagnostics"),
+    ActionSpec("camera_status", "Camera Status", "diagnostics"),
+    ActionSpec("start_polling", "Start Polling", "diagnostics"),
+    ActionSpec("stop_polling", "Stop Polling", "diagnostics"),
+    ActionSpec("start_recording", "Start Recording", "recording", params=("log_dir",)),
+    ActionSpec("stop_recording", "Stop Recording", "recording"),
+    ActionSpec("run_protocol", "Run Protocol", "protocol", params=("pipeline_name", "tick_s")),
+    ActionSpec("pause_protocol", "Pause Protocol", "protocol"),
+    ActionSpec("resume_protocol", "Resume Protocol", "protocol"),
+    ActionSpec("stop_protocol", "Stop Protocol", "protocol"),
+    ActionSpec("confirm_protocol", "Confirm Protocol Step", "protocol"),
+    ActionSpec("skip_protocol", "Skip Protocol Step", "protocol"),
+    ActionSpec("calibrate", "Calibrate", "calibration"),
+    ActionSpec("wash", "Wash", "protocol", params=("tick_s",)),
+)
+
+
 class FluidicsControlEngine:
     id = "fluidics"
     name = "Fluigent Fluidics Control"
     settings = CONTROL_ENGINE_SETTINGS
+    actions = CONTROL_ACTIONS
 
     def __init__(self, sdk: FluigentSDK | None = None):
         self.sdk = sdk or FluigentSDK()
@@ -64,7 +110,7 @@ class FluidicsControlEngine:
         settings: dict[str, Any],
         context: EngineContext | None = None,
     ) -> EngineResult:
-        normalized = self.settings.validate(settings)
+        normalized = validate_action_settings(self.settings, self.actions, action, settings)
         if action == "connect_fluidics":
             return self._connect(normalized)
         if action == "verify_backend":

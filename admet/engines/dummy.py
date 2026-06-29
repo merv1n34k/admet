@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from admet.core.engine import EngineContext, EngineResult
+from admet.core.engine import ActionSpec, EngineContext, EngineResult, validate_action_settings
 from admet.core.schema import Param, ParamKind, ParamSchema, ResultRecord, ResultSet, SummaryStat
 
 
@@ -15,6 +15,14 @@ class DummyEngine:
             Param("threshold", "Threshold", ParamKind.FLOAT, default=1.0, minimum=0.0, step=0.1),
         )
     )
+    actions = (
+        ActionSpec(
+            "analyze",
+            "Analyze",
+            "analysis",
+            params=("sample_id", "threshold"),
+        ),
+    )
 
     def run_action(
         self,
@@ -22,10 +30,11 @@ class DummyEngine:
         settings: dict[str, Any],
         context: EngineContext | None = None,
     ) -> EngineResult:
+        normalized = validate_action_settings(self.settings, self.actions, action, settings)
         record = ResultRecord(
-            sample_id=settings["sample_id"],
+            sample_id=normalized["sample_id"],
             engine=self.id,
-            values={"action": action, "threshold": settings["threshold"]},
+            values={"action": action, "threshold": normalized["threshold"]},
         )
         return EngineResult(
             result_set=ResultSet(

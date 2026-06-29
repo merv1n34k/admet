@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from .actions import ActionSpec
 from admet.core.schema import ParamSchema, ResultSet
 
 
@@ -22,6 +23,7 @@ class Engine(Protocol):
     id: str
     name: str
     settings: ParamSchema
+    actions: tuple[ActionSpec, ...]
 
     def run_action(
         self,
@@ -30,4 +32,3 @@ class Engine(Protocol):
         context: EngineContext | None = None,
     ) -> EngineResult:
         ...
-

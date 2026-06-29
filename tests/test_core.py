@@ -1,7 +1,14 @@
 import unittest
 
-from admet.core.engine import EngineRegistry, LazyEngineSpec
-from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema, ResultRecord
+from admet.core.engine import (
+    ActionSpec,
+    EngineContext,
+    EngineRegistry,
+    EngineResult,
+    LazyEngineSpec,
+    validate_action_settings,
+)
+from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema, ResultRecord, ResultSet
 from admet.core.workflow import Stage, StageControl, StageStatus, Workflow, WorkflowRunner
 from admet.engines.dummy import create_engine
 from admet.ui.renderer import _record_to_row, _single_record_field_rows
@@ -32,6 +39,28 @@ class ParamSchemaTests(unittest.TestCase):
             schema.validate({"threshold": -1})
         with self.assertRaises(ValueError):
             schema.validate({"mode": "c"})
+
+
+class ActionSpecTests(unittest.TestCase):
+    def test_action_settings_validate_only_declared_params(self):
+        schema = ParamSchema(
+            (
+                Param("required_path", "Required Path", ParamKind.PATH, default=None, required=True),
+                Param("limit", "Limit", ParamKind.INTEGER, default=1, minimum=1),
+            )
+        )
+        actions = (ActionSpec("ping", "Ping", "diagnostics", params=("limit",)),)
+
+        self.assertEqual(validate_action_settings(schema, actions, "ping", {"limit": 2}), {"limit": 2})
+
+    def test_action_settings_reject_unknown_action_and_settings(self):
+        schema = ParamSchema((Param("limit", "Limit", ParamKind.INTEGER, default=1),))
+        actions = (ActionSpec("ping", "Ping", "diagnostics", params=("limit",)),)
+
+        with self.assertRaises(ValueError):
+            validate_action_settings(schema, actions, "missing", {"limit": 1})
+        with self.assertRaises(KeyError):
+            validate_action_settings(schema, actions, "ping", {"limit": 1, "extra": True})
 
 
 class WorkflowTests(unittest.TestCase):
@@ -110,6 +139,26 @@ class WorkflowRunnerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             runner.run_current(state, {"sample_id": "s1", "threshold": 1.0})
 
+    def test_runner_validates_stage_action_against_catalog(self):
+        engine = PartialActionEngine()
+        workflow = Workflow("demo", "Demo", (Stage("ping", "Ping", action="missing"),))
+        runner = WorkflowRunner(workflow, engine)
+
+        with self.assertRaises(ValueError):
+            runner.run_current(workflow.initial_state(), {"limit": 2})
+
+        self.assertEqual(engine.calls, [])
+
+    def test_runner_passes_only_declared_action_settings(self):
+        engine = PartialActionEngine()
+        workflow = Workflow("demo", "Demo", (Stage("ping", "Ping", action="ping"),))
+        runner = WorkflowRunner(workflow, engine)
+
+        _, result = runner.run_current(workflow.initial_state(), {"limit": 2})
+
+        self.assertEqual(engine.calls, [("ping", {"limit": 2})])
+        self.assertEqual(result.result_set.metadata["settings"], {"limit": 2})
+
 
 class EngineRegistryTests(unittest.TestCase):
     def test_lazy_unavailable_engine_is_reported(self):
@@ -120,6 +169,30 @@ class EngineRegistryTests(unittest.TestCase):
         self.assertIn("missing", registry.unavailable())
         with self.assertRaises(LookupError):
             registry.create("missing")
+
+
+class EngineContractTests(unittest.TestCase):
+    def test_builtin_engines_declare_valid_action_catalogs(self):
+        from admet.engines.analyze.cellpose.engine import create_engine as create_cellpose_engine
+        from admet.engines.analyze.opencv.engine import create_engine as create_opencv_engine
+        from admet.engines.control.engine import create_engine as create_control_engine
+
+        engines = (
+            create_engine(),
+            create_opencv_engine(),
+            create_cellpose_engine(),
+            create_control_engine(),
+        )
+        for engine in engines:
+            with self.subTest(engine=engine.id):
+                self.assertTrue(engine.actions)
+                setting_names = {param.name for param in engine.settings.params}
+                action_ids = set()
+                for action in engine.actions:
+                    self.assertIsInstance(action, ActionSpec)
+                    self.assertNotIn(action.id, action_ids)
+                    self.assertLessEqual(set(action.params), setting_names)
+                    action_ids.add(action.id)
 
 
 class RendererHelperTests(unittest.TestCase):
@@ -151,6 +224,30 @@ class RendererHelperTests(unittest.TestCase):
         self.assertEqual(rows[0], {"field": "Sample Id", "value": "control"})
         self.assertEqual(rows[2], {"field": "Action", "value": "connect_camera"})
         self.assertEqual(rows[3]["field"], "Camera Message")
+
+
+class PartialActionEngine:
+    id = "partial"
+    name = "Partial Action Engine"
+    settings = ParamSchema(
+        (
+            Param("required_path", "Required Path", ParamKind.PATH, default=None, required=True),
+            Param("limit", "Limit", ParamKind.INTEGER, default=1, minimum=1),
+        )
+    )
+    actions = (ActionSpec("ping", "Ping", "diagnostics", params=("limit",)),)
+
+    def __init__(self):
+        self.calls = []
+
+    def run_action(
+        self,
+        action: str,
+        settings: dict,
+        context: EngineContext | None = None,
+    ) -> EngineResult:
+        self.calls.append((action, dict(settings)))
+        return EngineResult(ResultSet(metadata={"settings": dict(settings)}))
 
 
 if __name__ == "__main__":

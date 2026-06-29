@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from admet.core.engine import EngineContext, EngineResult
+from admet.core.engine import ActionSpec, EngineContext, EngineResult, validate_action_settings
 from admet.core.schema import Param, ParamKind, ParamSchema, ResultRecord, ResultSet, SummaryStat
 from admet.engines.analyze.stats import compute_sample_stats
 
@@ -26,6 +26,14 @@ class CellposeAnalysisEngine:
             Param("write_artifacts", "Write Artifacts", ParamKind.BOOLEAN, default=True),
         )
     )
+    actions = (
+        ActionSpec(
+            "analyze",
+            "Analyze",
+            "analysis",
+            params=tuple(param.name for param in settings.params),
+        ),
+    )
 
     def run_action(
         self,
@@ -33,10 +41,7 @@ class CellposeAnalysisEngine:
         settings: dict[str, Any],
         context: EngineContext | None = None,
     ) -> EngineResult:
-        if action != "analyze":
-            raise ValueError(f"unsupported Cellpose action: {action}")
-
-        normalized = self.settings.validate(settings)
+        normalized = validate_action_settings(self.settings, self.actions, action, settings)
         input_dir = normalized["input_dir"]
         output_dir = self._resolve_output_dir(normalized["output_dir"], context)
         config = self._config_from_settings(normalized)
