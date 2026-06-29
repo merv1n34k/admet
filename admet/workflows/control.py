@@ -11,7 +11,6 @@ from admet.engines.control.settings import (
 
 CAMERA_SURFACE_OPTIONS = {
     "camera_index_param": "camera_index",
-    "pylon_camemu_param": "pylon_camemu",
     "groups": (
         {
             "title": "ROI",

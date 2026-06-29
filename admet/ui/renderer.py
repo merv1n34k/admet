@@ -180,8 +180,6 @@ class CoreWorkflowView:
         camera_message = metadata.get("camera_message", "Refresh cameras when a device is attached.")
         connected = bool(metadata.get("camera_connected"))
         live = bool(metadata.get("camera_live"))
-        pypylon_available = metadata.get("pypylon_available")
-        pylon_camemu = metadata.get("pylon_camemu", "")
         preview_src = metadata.get("camera_preview_src") or ""
         preview_width = int(metadata.get("camera_preview_width") or self.values.get("camera_width") or 640)
         preview_height = int(metadata.get("camera_preview_height") or self.values.get("camera_height") or 480)
@@ -212,12 +210,6 @@ class CoreWorkflowView:
                         "color=green" if connected else "color=grey"
                     )
                     ui.badge("live" if live else "idle").props("color=green" if live else "color=grey")
-                    if pypylon_available is not None:
-                        ui.badge("pypylon ok" if pypylon_available else "pypylon missing").props(
-                            "color=green" if pypylon_available else "color=red"
-                        )
-                    if pylon_camemu:
-                        ui.badge(f"PYLON_CAMEMU={pylon_camemu}").props("color=blue")
                     ui.label(camera_message).classes("admet-muted text-sm")
                     if cameras:
                         ui.label("Detected cameras").classes("font-medium")
@@ -247,7 +239,6 @@ class CoreWorkflowView:
         from nicegui import ui
 
         camera_index_param = surface.options.get("camera_index_param", "camera_index")
-        pylon_camemu_param = surface.options.get("pylon_camemu_param", "pylon_camemu")
         options = {index: str(camera) for index, camera in enumerate(cameras)}
         if not options:
             options = {0: "No cameras detected"}
@@ -256,11 +247,6 @@ class CoreWorkflowView:
             label=_param_by_name(surface.settings, camera_index_param).label,
             value=int(self.values.get(camera_index_param) or 0),
         ).bind_value(self.values, camera_index_param).classes("w-full")
-        camemu = _param_by_name(surface.settings, pylon_camemu_param)
-        ui.input(camemu.label, value=self.values.get(pylon_camemu_param) or "").bind_value(
-            self.values,
-            pylon_camemu_param,
-        ).classes("w-full")
 
     def _render_camera_settings(self, surface: StageSurface) -> None:
         from nicegui import ui

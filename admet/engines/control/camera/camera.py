@@ -76,14 +76,10 @@ class Camera:
         camera_count = len(cameras)
         if camera_count:
             message = f"{camera_count} Basler camera(s) detected."
-        elif active_camemu:
-            message = (
-                f"PYLON_CAMEMU={active_camemu} is set, but pylon returned zero devices."
-            )
         else:
             message = "No Basler cameras are currently enumerated; refresh after attaching one."
         if changed_after_load:
-            message = f"{message} pypylon was already loaded before the emulator value changed."
+            message = f"{message} Restart the app if camera driver environment changed."
         return CameraAvailability(
             pypylon_available=True,
             refresh_ok=True,

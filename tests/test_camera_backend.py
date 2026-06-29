@@ -189,7 +189,8 @@ class CameraTests(unittest.TestCase):
             status = camera.preflight("1")
 
         self.assertEqual(status.pylon_camemu, "1")
-        self.assertIn("PYLON_CAMEMU=1", status.message)
+        self.assertNotIn("PYLON_CAMEMU", status.message)
+        self.assertNotIn("emulator", status.message.lower())
         self.assertIn("Basler Camera Emulator / BaslerCamEmu", status.transport_layers)
 
 

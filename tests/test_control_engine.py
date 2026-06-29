@@ -212,6 +212,8 @@ class FluidicsControlEngineTests(unittest.TestCase):
 
         self.assertTrue(refresh.result_set.metadata["pypylon_available"])
         self.assertEqual(refresh.result_set.metadata["camera_count"], 0)
+        self.assertNotIn("pylon_camemu", refresh.result_set.metadata)
+        self.assertNotIn("pylon_camemu", refresh.result_set.metadata["camera"])
         self.assertFalse(connect.result_set.metadata["camera_connect_ok"])
         self.assertIn("not currently available", connect.result_set.metadata["camera_connect_message"])
 

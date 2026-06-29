@@ -448,15 +448,16 @@ class FluidicsControlEngine:
 
     def _camera_preflight(self, settings: dict[str, Any]) -> dict[str, Any]:
         camera_status = self.camera.preflight(settings.get("pylon_camemu") or None)
+        camera_status_metadata = asdict(camera_status)
+        camera_status_metadata.pop("pylon_camemu", None)
         metadata = {
-            "camera": asdict(camera_status),
+            "camera": camera_status_metadata,
             "pypylon_available": camera_status.pypylon_available,
             "camera_refresh_ok": camera_status.refresh_ok,
             "camera_count": camera_status.camera_count,
             "cameras": list(camera_status.cameras),
             "camera_transport_layers": list(camera_status.transport_layers),
             "camera_connected": self.camera.connected,
-            "pylon_camemu": camera_status.pylon_camemu,
             "pylon_module_loaded": camera_status.pylon_module_loaded,
             "camera_message": camera_status.message,
         }
