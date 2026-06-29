@@ -7,12 +7,14 @@ class AnalyzeRegistryTests(unittest.TestCase):
     def test_registry_lists_migrated_analysis_engines(self):
         registry = create_analyze_registry()
 
-        self.assertEqual(registry.ids(), ("cellpose", "dummy", "opencv"))
+        self.assertEqual(registry.ids(), ("cellpose", "opencv"))
 
-    def test_registry_creates_dummy_and_cellpose_without_heavy_runtime_imports(self):
+    def test_registry_creates_real_analysis_engines(self):
         registry = create_analyze_registry()
 
-        self.assertEqual(registry.create("dummy").id, "dummy")
+        opencv = registry.create("opencv")
+        self.assertEqual(opencv.id, "opencv")
+        self.assertIn("video_path", opencv.settings.defaults())
         cellpose = registry.create("cellpose")
         self.assertEqual(cellpose.id, "cellpose")
         self.assertIn("input_dir", cellpose.settings.defaults())

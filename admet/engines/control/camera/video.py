@@ -63,7 +63,7 @@ class VideoWorker:
             try:
                 self.queue.get_nowait()
             except Empty:
-                pass
+                return False
         try:
             self.queue.put_nowait((frame, self.frame_count))
             self.frame_count += 1

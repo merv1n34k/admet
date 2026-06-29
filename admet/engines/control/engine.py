@@ -558,9 +558,7 @@ class FluidicsControlEngine:
         now = time.time()
         with self._camera_lock:
             self._camera_last_frame = frame
-            if now - self._camera_preview_at < 0.5:
-                pass
-            else:
+            if now - self._camera_preview_at >= 0.5:
                 self._camera_preview_src = _frame_to_data_uri(frame)
                 self._camera_preview_size = (frame.shape[1], frame.shape[0])
                 self._camera_preview_at = now

@@ -51,7 +51,6 @@ class OpenCVAnalysisEngine:
             artifacts={
                 "background": pipeline.background,
                 "cache_dir": result.get("cache_dir"),
-                "legacy_result": result,
             },
         )
 

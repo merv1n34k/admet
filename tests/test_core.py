@@ -10,7 +10,6 @@ from admet.core.engine import (
 )
 from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema, ResultRecord, ResultSet
 from admet.core.workflow import Stage, StageControl, StageStatus, Workflow, WorkflowRunner
-from admet.engines.dummy import create_engine
 from admet.ui.renderer import _record_to_row, _single_record_field_rows
 
 
@@ -120,7 +119,7 @@ class WorkflowTests(unittest.TestCase):
 class WorkflowRunnerTests(unittest.TestCase):
     def test_runner_executes_stage_action_and_stores_result(self):
         workflow = Workflow("demo", "Demo", (Stage("analyze", "Analyze", action="analyze"),))
-        runner = WorkflowRunner(workflow, create_engine())
+        runner = WorkflowRunner(workflow, LocalAnalysisEngine())
 
         state, result = runner.run_current(
             workflow.initial_state(),
@@ -133,7 +132,7 @@ class WorkflowRunnerTests(unittest.TestCase):
 
     def test_runner_refuses_paused_workflow(self):
         workflow = Workflow("demo", "Demo", (Stage("analyze", "Analyze", action="analyze"),))
-        runner = WorkflowRunner(workflow, create_engine())
+        runner = WorkflowRunner(workflow, LocalAnalysisEngine())
         state = workflow.pause(workflow.initial_state())
 
         with self.assertRaises(RuntimeError):
@@ -178,7 +177,6 @@ class EngineContractTests(unittest.TestCase):
         from admet.engines.control.engine import create_engine as create_control_engine
 
         engines = (
-            create_engine(),
             create_opencv_engine(),
             create_cellpose_engine(),
             create_control_engine(),
@@ -248,6 +246,37 @@ class PartialActionEngine:
     ) -> EngineResult:
         self.calls.append((action, dict(settings)))
         return EngineResult(ResultSet(metadata={"settings": dict(settings)}))
+
+
+class LocalAnalysisEngine:
+    id = "local"
+    name = "Local Analysis Engine"
+    settings = ParamSchema(
+        (
+            Param("sample_id", "Sample ID", ParamKind.TEXT, default="demo"),
+            Param("threshold", "Threshold", ParamKind.FLOAT, default=1.0, minimum=0.0),
+        )
+    )
+    actions = (ActionSpec("analyze", "Analyze", "analysis", params=("sample_id", "threshold")),)
+
+    def run_action(
+        self,
+        action: str,
+        settings: dict,
+        context: EngineContext | None = None,
+    ) -> EngineResult:
+        normalized = validate_action_settings(self.settings, self.actions, action, settings)
+        return EngineResult(
+            ResultSet(
+                records=(
+                    ResultRecord(
+                        sample_id=normalized["sample_id"],
+                        engine=self.id,
+                        values={"threshold": normalized["threshold"]},
+                    ),
+                )
+            )
+        )
 
 
 if __name__ == "__main__":

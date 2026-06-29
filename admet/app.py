@@ -10,7 +10,7 @@ from admet.workflows import create_analyze_workflow, create_control_workflow
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="admet")
     parser.add_argument("mode", choices=("analyze", "control"))
-    parser.add_argument("--engine", default="dummy", help="engine id for analyze mode")
+    parser.add_argument("--engine", default="opencv", help="engine id for analyze mode")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--native", action="store_true", help="launch in a native webview window")
     args = parser.parse_args(argv)
