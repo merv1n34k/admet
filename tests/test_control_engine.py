@@ -131,10 +131,12 @@ class FluidicsControlEngineTests(unittest.TestCase):
         )
 
         metadata = result.result_set.metadata
+        self.assertEqual(metadata["action"], "connect_fluidics")
         self.assertTrue(metadata["connected"])
         self.assertTrue(metadata["simulated"])
         self.assertEqual(metadata["pressure_channels"], 2)
         self.assertEqual(metadata["sensor_channels"], 2)
+        self.assertEqual(result.result_set.records, ())
         self.assertEqual(len(engine.channel_manager.channels), 2)
         self.assertFalse(metadata["polling_active"])
         self.assertIn(("init", None), sdk.calls)
@@ -199,7 +201,8 @@ class FluidicsControlEngineTests(unittest.TestCase):
 
         result = engine.run_action("calibrate", {})
 
-        self.assertEqual(result.result_set.records[0].values["action"], "calibrate")
+        self.assertEqual(result.result_set.metadata["action"], "calibrate")
+        self.assertEqual(result.result_set.records, ())
         self.assertIn(("calibrate", 0), sdk.calls)
         self.assertIn(("calibrate", 1), sdk.calls)
 

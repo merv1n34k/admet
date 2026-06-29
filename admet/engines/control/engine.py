@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 
 from admet.core.engine import ActionSpec, EngineContext, EngineResult, validate_action_settings
-from admet.core.schema import ResultRecord, ResultSet, SummaryStat
+from admet.core.schema import ResultSet, SummaryStat
 from admet.engines.control.fluidics import (
     AcquisitionThread,
     ChannelManager,
@@ -588,6 +588,7 @@ class FluidicsControlEngine:
     ) -> EngineResult:
         state = self.hardware.state
         metadata = {
+            "action": action,
             "connected": state.connected,
             "simulated": state.simulated,
             "pressure_channels": len(state.pressure_channels),
@@ -600,17 +601,12 @@ class FluidicsControlEngine:
         }
         if extra_metadata:
             metadata.update(extra_metadata)
-        record = ResultRecord(
-            sample_id="control",
-            engine=self.id,
-            values={"action": action, **metadata},
-        )
         stats = (
             SummaryStat("pressure_channels", metadata["pressure_channels"]),
             SummaryStat("sensor_channels", metadata["sensor_channels"]),
         )
         return EngineResult(
-            result_set=ResultSet(records=(record,), stats=stats, metadata=metadata),
+            result_set=ResultSet(records=(), stats=stats, metadata=metadata),
             artifacts=artifacts or {},
         )
 
