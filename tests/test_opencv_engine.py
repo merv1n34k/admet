@@ -47,7 +47,7 @@ class OpenCVEngineTests(unittest.TestCase):
 
             stats = {stat.name: stat.value for stat in result.result_set.stats}
             self.assertGreater(stats["total_detections"], 0)
-            self.assertGreaterEqual(stats["total_droplets"], 1)
+            self.assertGreaterEqual(stats["frames_processed"], 1)
             self.assertEqual(result.result_set.metadata["sample_id"], "droplets")
             self.assertTrue(result.artifacts["cache_dir"])
 

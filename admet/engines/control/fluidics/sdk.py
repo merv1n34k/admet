@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -208,7 +209,7 @@ class FluigentSDK:
             return self._sdk
         _ensure_fluigent_sdk_path()
         try:
-            self._sdk = importlib.import_module("Fluigent.SDK")
+            self._sdk = _import_fluigent_sdk()
         except Exception as exc:
             raise FluigentSDKUnavailableError(
                 "Fluigent SDK is required for hardware fluidics control."
@@ -237,3 +238,13 @@ def _ensure_fluigent_sdk_path() -> None:
         if path_text not in sys.path:
             sys.path.insert(0, path_text)
         return
+
+
+def _import_fluigent_sdk():
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"pkg_resources is deprecated as an API.*",
+            category=Warning,
+        )
+        return importlib.import_module("Fluigent.SDK")

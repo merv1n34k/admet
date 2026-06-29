@@ -19,6 +19,7 @@ control = [
   "opencv-python>=4.10",
   "pypylon>=4.0",
   "pywebview>=5.0",
+  "setuptools<81",
 ]
 analyze = [
   "cellpose>=3.0",

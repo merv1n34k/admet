@@ -1,7 +1,9 @@
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from queue import Queue
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from admet.engines.control.fluidics import (
@@ -89,6 +91,26 @@ class FluidicsSdkTests(unittest.TestCase):
 
         self.assertTrue((path / "Fluigent" / "SDK" / "__init__.py").exists())
         self.assertTrue((path / "Fluigent" / "SDK" / "shared").exists())
+
+    def test_sdk_import_suppresses_vendor_pkg_resources_warning(self):
+        sdk = FluigentSDK()
+
+        def import_with_vendor_warning(name):
+            self.assertEqual(name, "Fluigent.SDK")
+            warnings.warn(
+                "pkg_resources is deprecated as an API. See setuptools documentation.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return SimpleNamespace(__version__="1.0", __file__="/tmp/Fluigent/SDK/__init__.py")
+
+        with patch("importlib.import_module", side_effect=import_with_vendor_warning):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                status = sdk.preflight()
+
+        self.assertTrue(status.available)
+        self.assertEqual(caught, [])
 
 
 class HardwareManagerTests(unittest.TestCase):
