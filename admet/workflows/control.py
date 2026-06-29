@@ -87,12 +87,6 @@ def create_control_workflow() -> Workflow:
                 description="Camera discovery, connection, preview, and acquisition geometry.",
                 settings=CAMERA_SETTINGS,
                 controls=(
-                    StageControl("Refresh Cameras", "refresh_cameras", variant="secondary"),
-                    StageControl("Connect Camera", "connect_camera"),
-                    StageControl("Disconnect Camera", "disconnect_camera", variant="warning"),
-                    StageControl("Apply Settings", "apply_camera_settings", variant="secondary"),
-                    StageControl("Start Live", "start_camera_live"),
-                    StageControl("Stop Live", "stop_camera_live", variant="warning"),
                     StageControl("Scene Done", completes=True, variant="success"),
                 ),
                 surfaces=(
@@ -103,8 +97,6 @@ def create_control_workflow() -> Workflow:
                         controls=(
                             StageControl("Refresh", "refresh_cameras", variant="secondary"),
                             StageControl("Connect", "connect_camera"),
-                            StageControl("Disconnect", "disconnect_camera", variant="warning"),
-                            StageControl("Apply", "apply_camera_settings", variant="secondary"),
                             StageControl("Live", "start_camera_live"),
                             StageControl("Stop", "stop_camera_live", variant="danger"),
                         ),

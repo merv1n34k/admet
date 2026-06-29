@@ -512,7 +512,7 @@ class FluidicsControlEngine:
         now = time.time()
         with self._camera_lock:
             self._camera_last_frame = frame
-            if now - self._camera_preview_at < 0.08:
+            if now - self._camera_preview_at < 0.5:
                 pass
             else:
                 self._camera_preview_src = _frame_to_data_uri(frame)
@@ -588,7 +588,7 @@ def _frame_to_data_uri(frame: np.ndarray) -> str:
         display = (display >> 8).astype(np.uint8)
     if not display.flags["C_CONTIGUOUS"]:
         display = np.ascontiguousarray(display)
-    max_width = 960
+    max_width = 640
     if display.ndim >= 2 and display.shape[1] > max_width:
         scale = max_width / display.shape[1]
         display = cv2.resize(

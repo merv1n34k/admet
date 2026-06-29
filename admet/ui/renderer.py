@@ -31,9 +31,14 @@ def render_workflow(
         .admet-camera {
           background: #151a21;
           color: #dfe7f1;
-          height: clamp(160px, 22vw, 260px);
-          max-width: 520px;
+          width: min(100%, 640px);
+          height: clamp(180px, 36vw, 360px);
+          max-width: 640px;
+          max-height: 360px;
+          object-fit: contain;
         }
+        .admet-camera img { object-fit: contain; }
+        .admet-camera-settings { border-top: 1px solid #d9dee7; background: #ffffff; }
         .admet-toc-button { min-height: 30px; border-radius: 999px; }
         .admet-shell .q-btn {
           min-height: 28px;
@@ -84,6 +89,7 @@ class CoreWorkflowView:
         self.last_result: EngineResult | None = None
         self.batch_files: list[dict[str, Any]] = []
         self._selection_drag_start: tuple[int, int] | None = None
+        self._show_camera_settings = False
         self._screen: Any | None = None
 
     def render(self) -> None:
@@ -95,6 +101,7 @@ class CoreWorkflowView:
 
         self._screen = screen
         screen()
+        ui.timer(1.0, self._poll_camera_status, active=True)
 
     def _render_screen(self) -> None:
         from nicegui import ui
@@ -187,7 +194,7 @@ class CoreWorkflowView:
         with ui.column().classes("admet-panel w-full gap-2 p-3"):
             with ui.row().classes("w-full items-center justify-between"):
                 ui.label(surface.title or "Camera").classes("text-sm font-semibold")
-                self._render_surface_control_row(surface.controls)
+                self._render_camera_control_row(surface.controls)
             with ui.row().classes("w-full gap-3 items-start"):
                 with ui.column().classes("grow gap-2"):
                     if preview_src:
@@ -204,8 +211,9 @@ class CoreWorkflowView:
                             ui.label("No live frame").classes("text-sm")
                             ui.label("Connect camera and start live.").classes("text-xs admet-muted")
                     self._render_camera_status_strip(metadata, preview_width, preview_height)
-                with ui.column().classes("w-80 gap-2"):
-                    self._render_camera_connection_controls(cameras, surface)
+                with ui.column().classes("w-64 gap-2"):
+                    if cameras:
+                        self._render_camera_connection_controls(cameras, surface)
                     ui.badge("connected" if connected else "not connected").props(
                         "color=green" if connected else "color=grey"
                     )
@@ -215,15 +223,14 @@ class CoreWorkflowView:
                         ui.label("Detected cameras").classes("font-medium")
                         for camera in cameras:
                             ui.label(str(camera)).classes("text-sm")
-                    if transport_layers:
+                    if transport_layers and self._show_camera_settings:
                         ui.label("Transport layers").classes("font-medium")
                         for layer in transport_layers:
                             ui.label(str(layer)).classes("text-xs admet-muted")
+        if self._show_camera_settings:
             self._render_camera_settings(surface)
-            if live:
-                ui.timer(0.25, self._poll_camera_status, active=True)
 
-    def _render_surface_control_row(self, controls: tuple[StageControl, ...]) -> None:
+    def _render_camera_control_row(self, controls: tuple[StageControl, ...]) -> None:
         from nicegui import ui
 
         stage = self.workflow.current_stage(self.state)
@@ -234,6 +241,11 @@ class CoreWorkflowView:
                     icon=_control_icon(control),
                     on_click=partial(self._handle_control, stage, control),
                 ).props(_button_props(control.variant))
+            ui.button(
+                "Settings",
+                icon="tune",
+                on_click=self._toggle_camera_settings,
+            ).props("dense no-caps outline")
 
     def _render_camera_connection_controls(self, cameras: list[Any], surface: StageSurface) -> None:
         from nicegui import ui
@@ -251,18 +263,35 @@ class CoreWorkflowView:
     def _render_camera_settings(self, surface: StageSurface) -> None:
         from nicegui import ui
 
-        for group in surface.options.get("groups", ()):
-            schema = _schema_subset(surface.settings, group.get("params", ()))
-            if not schema.params:
-                continue
-            with ui.expansion(group.get("title", "Settings"), icon=group.get("icon", "tune")).classes(
-                "w-full"
-            ).props("dense"):
-                render_settings(schema, self.values, columns=4)
-                if "camera_selection_w" in {param.name for param in schema.params}:
-                    ui.button("Clear Selection", icon="backspace", on_click=self._clear_camera_selection).props(
-                        "dense no-caps outline"
-                    )
+        with ui.column().classes("admet-camera-settings w-full gap-2 px-3 py-2"):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Advanced camera settings").classes("text-sm font-semibold")
+                with ui.row().classes("gap-1"):
+                    ui.button(
+                        "Apply",
+                        icon="check",
+                        on_click=partial(self._run_action, "apply_camera_settings", False),
+                    ).props("dense no-caps outline color=green")
+                    ui.button(
+                        "Disconnect",
+                        icon="power_off",
+                        on_click=partial(self._run_action, "disconnect_camera", False),
+                    ).props("dense no-caps outline color=orange")
+            for group in surface.options.get("groups", ()):
+                self._render_camera_setting_group(surface, group)
+
+    def _render_camera_setting_group(self, surface: StageSurface, group: dict[str, Any]) -> None:
+        from nicegui import ui
+
+        schema = _schema_subset(surface.settings, group.get("params", ()))
+        if not schema.params:
+            return
+        ui.label(group.get("title", "Settings")).classes("admet-muted text-xs font-medium")
+        render_settings(schema, self.values, columns=4)
+        if "camera_selection_w" in {param.name for param in schema.params}:
+            ui.button("Clear Selection", icon="backspace", on_click=self._clear_camera_selection).props(
+                "dense no-caps outline"
+            )
 
     def _render_camera_status_strip(
         self,
@@ -547,6 +576,8 @@ class CoreWorkflowView:
     def _poll_camera_status(self) -> None:
         if self.engine is None:
             return
+        if not self._latest_metadata().get("camera_live"):
+            return
         try:
             result = self.engine.run_action("camera_status", self._engine_payload())
         except Exception:
@@ -632,6 +663,10 @@ class CoreWorkflowView:
     def _set_status(self, message: str, kind: str) -> None:
         self.status = message
         self.status_kind = kind
+
+    def _toggle_camera_settings(self) -> None:
+        self._show_camera_settings = not self._show_camera_settings
+        self._refresh()
 
     def _notify(self, message: str, kind: str) -> None:
         try:
