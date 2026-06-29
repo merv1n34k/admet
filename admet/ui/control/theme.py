@@ -1,0 +1,438 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+ButtonVariant = Literal["neutral", "primary", "success", "danger", "warning"]
+ControlSize = Literal["inline", "default", "large", "stage"]
+
+
+@dataclass(frozen=True)
+class _ControlSize:
+    height: int
+    font_size: int
+
+
+class Theme:
+    BG_BLACK = "#000000"
+    BG_DARK = "#1a1a1a"
+    BG_DARKER = "#141414"
+    BG_MEDIUM = "#222222"
+    BG_RAISED = "#242424"
+    BG_CONTROL = "#2b2b2b"
+    BG_CONTROL_HOVER = "#353535"
+    BG_CONTROL_PRESSED = "#404040"
+
+    TEXT_WHITE = "#d4d4d4"
+    TEXT_MUTED = "#888888"
+    TEXT_SUBTLE = "#666666"
+    TEXT_DISABLED = "#555555"
+
+    BORDER_COOL = "#333333"
+    BORDER_HOVER = "#444444"
+
+    ACCENT = "#3498db"
+    ACCENT_HOVER = "#2980b9"
+    SUCCESS = "#27ae60"
+    SUCCESS_HOVER = "#2ecc71"
+    DANGER = "#c0392b"
+    DANGER_HOVER = "#e74c3c"
+    WARNING = "#f39c12"
+    WARNING_DARK = "#e67e22"
+
+    FONT_SIZE_SMALL = 11
+    FONT_SIZE_BODY = 13
+    FONT_SIZE_TITLE = 16
+
+    SPACE_0 = 0
+    SPACE_1 = 4
+    SPACE_2 = 8
+    SPACE_3 = 12
+    SPACE_4 = 16
+    CONTROL_GAP = SPACE_1
+    GROUP_GAP = SPACE_2
+    PANEL_PADDING = SPACE_3
+    WINDOW_PADDING = SPACE_4
+    RADIUS = 4
+    SPLITTER_HANDLE_WIDTH = 12
+
+
+_SIZES = {
+    "inline": _ControlSize(20, Theme.FONT_SIZE_BODY),
+    "default": _ControlSize(22, Theme.FONT_SIZE_BODY),
+    "large": _ControlSize(28, Theme.FONT_SIZE_BODY),
+    "stage": _ControlSize(22, Theme.FONT_SIZE_BODY),
+}
+
+_SPACING = {
+    "none": Theme.SPACE_0,
+    "tight": Theme.SPACE_1,
+    "control": Theme.CONTROL_GAP,
+    "default": Theme.GROUP_GAP,
+    "group": Theme.GROUP_GAP,
+    "panel": Theme.PANEL_PADDING,
+    "window": Theme.WINDOW_PADDING,
+}
+
+_TEXT_COLORS = {
+    "default": Theme.TEXT_WHITE,
+    "muted": Theme.TEXT_MUTED,
+    "subtle": Theme.TEXT_SUBTLE,
+    "primary": Theme.ACCENT,
+    "success": Theme.SUCCESS,
+    "danger": Theme.DANGER_HOVER,
+    "warning": Theme.WARNING,
+}
+
+_BUTTON_COLORS = {
+    "neutral": (Theme.BG_CONTROL, Theme.BG_CONTROL_HOVER),
+    "primary": (Theme.ACCENT, Theme.ACCENT_HOVER),
+    "success": (Theme.SUCCESS, Theme.SUCCESS_HOVER),
+    "danger": (Theme.DANGER, Theme.DANGER_HOVER),
+    "warning": (Theme.WARNING_DARK, Theme.WARNING),
+}
+
+
+def control_size(size: ControlSize = "default") -> _ControlSize:
+    return _SIZES.get(size, _SIZES["default"])
+
+
+def spacing(value: str | int | None = "default") -> int:
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    return _SPACING.get(value, Theme.GROUP_GAP)
+
+
+def box_padding(value: str | int | tuple[int, int, int, int] | None = "none") -> tuple[int, int, int, int]:
+    if isinstance(value, tuple):
+        return value
+    pad = spacing(value)
+    return pad, pad, pad, pad
+
+
+def text_qss(
+    kind: str = "default",
+    *,
+    font_size: int | None = None,
+    bold: bool = False,
+    padding: str | None = None,
+) -> str:
+    parts = [f"color: {_TEXT_COLORS.get(kind, kind)};"]
+    if font_size is not None:
+        parts.append(f"font-size: {font_size}px;")
+    if bold:
+        parts.append("font-weight: 600;")
+    if padding is not None:
+        parts.append(f"padding: {padding};")
+    return " ".join(parts)
+
+
+def button_qss(kind: ButtonVariant = "neutral", *, size: ControlSize = "default") -> str:
+    bg, hover = _BUTTON_COLORS.get(kind, _BUTTON_COLORS["neutral"])
+    token = control_size(size)
+    return (
+        f"QPushButton {{ background-color: {bg}; border: none; color: {Theme.TEXT_WHITE}; "
+        f"border-radius: {Theme.RADIUS}px; padding: 0; font-size: {token.font_size}px; "
+        f"font-weight: 600; min-height: {token.height}px; max-height: {token.height}px; }}"
+        f"QPushButton:hover {{ background-color: {hover}; }}"
+        f"QPushButton:pressed {{ background-color: {Theme.BG_CONTROL_PRESSED}; }}"
+        f"QPushButton:disabled {{ background-color: {Theme.BG_MEDIUM}; "
+        f"color: {Theme.TEXT_DISABLED}; }}"
+    )
+
+
+def apply_button_style(
+    widget,
+    *,
+    variant: ButtonVariant = "neutral",
+    size: ControlSize = "default",
+):
+    widget.setStyleSheet(button_qss(variant, size=size))
+    token = control_size(size)
+    widget.setMinimumHeight(token.height)
+    widget.setMaximumHeight(token.height)
+    return widget
+
+
+def button(
+    text: str,
+    *,
+    variant: ButtonVariant = "neutral",
+    size: ControlSize = "default",
+    checkable: bool = False,
+):
+    from PySide6.QtWidgets import QPushButton
+
+    widget = QPushButton(text)
+    widget.setCheckable(checkable)
+    return apply_button_style(widget, variant=variant, size=size)
+
+
+def stage_button(text: str, *, active: bool = False):
+    from PySide6.QtWidgets import QSizePolicy
+
+    widget = button(text, variant="primary" if active else "neutral", size="stage", checkable=True)
+    widget.setChecked(active)
+    widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    return widget
+
+
+def line_edit(text: str = "", *, width: int | None = None):
+    from PySide6.QtWidgets import QLineEdit
+
+    widget = QLineEdit(text)
+    _apply_control_size(widget)
+    if width is not None:
+        widget.setFixedWidth(width)
+    return widget
+
+
+def int_box(
+    *,
+    minimum: int = 0,
+    maximum: int = 100,
+    value: int = 0,
+    step: int = 1,
+    width: int | None = None,
+):
+    from PySide6.QtWidgets import QSpinBox
+
+    widget = QSpinBox()
+    widget.setRange(minimum, maximum)
+    widget.setValue(value)
+    widget.setSingleStep(step)
+    _apply_control_size(widget)
+    if width is not None:
+        widget.setFixedWidth(width)
+    return widget
+
+
+def double_box(
+    *,
+    minimum: float = 0.0,
+    maximum: float = 100.0,
+    value: float = 0.0,
+    step: float = 1.0,
+    decimals: int = 2,
+    suffix: str = "",
+    width: int | None = None,
+):
+    from PySide6.QtWidgets import QDoubleSpinBox
+
+    widget = QDoubleSpinBox()
+    widget.setRange(minimum, maximum)
+    widget.setValue(value)
+    widget.setSingleStep(step)
+    widget.setDecimals(decimals)
+    widget.setSuffix(suffix)
+    _apply_control_size(widget)
+    if width is not None:
+        widget.setFixedWidth(width)
+    return widget
+
+
+def combo_box(items=(), *, width: int | None = None):
+    from PySide6.QtWidgets import QComboBox
+
+    widget = QComboBox()
+    widget.addItems([str(item) for item in items])
+    _apply_control_size(widget)
+    if width is not None:
+        widget.setFixedWidth(width)
+    return widget
+
+
+def check_box(text: str, *, checked: bool = False):
+    from PySide6.QtWidgets import QCheckBox
+
+    widget = QCheckBox(text)
+    widget.setChecked(checked)
+    return widget
+
+
+def section(title: str):
+    from PySide6.QtWidgets import QGroupBox, QVBoxLayout
+
+    group = QGroupBox(title)
+    layout = QVBoxLayout(group)
+    layout.setContentsMargins(*box_padding("panel"))
+    layout.setSpacing(spacing("group"))
+    return group, layout
+
+
+def button_row(*widgets, align: str = "left"):
+    from PySide6.QtWidgets import QHBoxLayout, QWidget
+
+    container = QWidget()
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(*box_padding("none"))
+    layout.setSpacing(spacing("control"))
+    if align == "right":
+        layout.addStretch()
+    for widget in widgets:
+        layout.addWidget(widget)
+    if align == "left":
+        layout.addStretch()
+    return container
+
+
+def field_row(*widgets):
+    from PySide6.QtWidgets import QHBoxLayout, QWidget
+
+    container = QWidget()
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(*box_padding("none"))
+    layout.setSpacing(spacing("control"))
+    for widget in widgets:
+        layout.addWidget(widget)
+    layout.addStretch()
+    return container
+
+
+def control_row(label: str, control, *actions, label_width: int = 90):
+    from PySide6.QtWidgets import QLabel, QHBoxLayout, QWidget
+
+    container = QWidget()
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(*box_padding("none"))
+    layout.setSpacing(spacing("control"))
+    label_widget = QLabel(label)
+    label_widget.setFixedWidth(label_width)
+    layout.addWidget(label_widget)
+    layout.addWidget(control, 1)
+    for action in actions:
+        layout.addWidget(action)
+    return container
+
+
+def toolbar(title: str):
+    from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
+
+    widget = QWidget()
+    layout = QHBoxLayout(widget)
+    layout.setContentsMargins(*box_padding("none"))
+    layout.setSpacing(spacing("control"))
+    label = QLabel(title)
+    label.setStyleSheet(text_qss("default", font_size=Theme.FONT_SIZE_TITLE, bold=True))
+    layout.addWidget(label)
+    layout.addStretch()
+    return widget
+
+
+def stylesheet() -> str:
+    default = control_size()
+    return f"""
+QWidget {{
+    background-color: {Theme.BG_DARK};
+    color: {Theme.TEXT_WHITE};
+    font-size: {Theme.FONT_SIZE_BODY}px;
+}}
+QMainWindow {{
+    background-color: {Theme.BG_DARK};
+}}
+QLabel {{
+    background: transparent;
+}}
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+    background-color: {Theme.BG_CONTROL};
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: {Theme.RADIUS}px;
+    min-height: {default.height}px;
+    max-height: {default.height}px;
+    padding: 0;
+    color: {Theme.TEXT_WHITE};
+}}
+QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {{
+    border-color: {Theme.BORDER_HOVER};
+}}
+QPushButton {{
+    background-color: {Theme.BG_CONTROL};
+    border: none;
+    border-radius: {Theme.RADIUS}px;
+    min-height: {default.height}px;
+    max-height: {default.height}px;
+    padding: 0;
+    color: {Theme.TEXT_WHITE};
+    font-weight: 600;
+}}
+QPushButton:hover {{
+    background-color: {Theme.BG_CONTROL_HOVER};
+}}
+QPushButton:pressed {{
+    background-color: {Theme.BG_CONTROL_PRESSED};
+}}
+QPushButton:disabled {{
+    color: {Theme.TEXT_DISABLED};
+    background-color: {Theme.BG_MEDIUM};
+}}
+QCheckBox {{
+    spacing: {Theme.CONTROL_GAP}px;
+    background: transparent;
+}}
+QCheckBox::indicator {{
+    width: 16px;
+    height: 16px;
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: 3px;
+    background: {Theme.BG_CONTROL};
+}}
+QCheckBox::indicator:checked {{
+    background: {Theme.ACCENT};
+    border-color: {Theme.ACCENT};
+}}
+QGroupBox {{
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: {Theme.RADIUS}px;
+    margin-top: {Theme.GROUP_GAP}px;
+    padding-top: {Theme.SPACE_3}px;
+    font-weight: 600;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: {Theme.PANEL_PADDING}px;
+    padding: 0 {Theme.CONTROL_GAP}px;
+    color: {Theme.ACCENT};
+}}
+QProgressBar {{
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: 3px;
+    background: {Theme.BG_MEDIUM};
+    text-align: center;
+    max-height: 10px;
+}}
+QProgressBar::chunk {{
+    background: {Theme.ACCENT};
+    border-radius: 2px;
+}}
+QScrollArea {{
+    border: none;
+    background: transparent;
+}}
+QSplitter::handle {{
+    background: {Theme.BG_DARK};
+}}
+QSplitter::handle:horizontal {{
+    width: {Theme.SPLITTER_HANDLE_WIDTH}px;
+}}
+QPlainTextEdit, QTableWidget {{
+    background-color: {Theme.BG_CONTROL};
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: {Theme.RADIUS}px;
+    color: {Theme.TEXT_WHITE};
+}}
+QHeaderView::section {{
+    background-color: {Theme.BG_RAISED};
+    color: {Theme.TEXT_MUTED};
+    border: none;
+    padding: 2px;
+}}
+"""
+
+
+def _apply_control_size(widget, size: ControlSize = "default") -> None:
+    token = control_size(size)
+    widget.setMinimumHeight(token.height)
+    widget.setMaximumHeight(token.height)

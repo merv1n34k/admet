@@ -569,6 +569,10 @@ class FluidicsControlEngine:
         with self._camera_lock:
             self._camera_stats = dict(stats)
 
+    def latest_camera_frame(self) -> np.ndarray | None:
+        with self._camera_lock:
+            return self._camera_last_frame
+
     def _sdk_preflight(self) -> SDKAvailability:
         if hasattr(self.sdk, "preflight"):
             return self.sdk.preflight()

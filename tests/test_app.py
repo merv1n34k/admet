@@ -2,6 +2,7 @@ import io
 import json
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest.mock import patch
 
 from admet.app import build_parser, main
 
@@ -34,13 +35,11 @@ class AppCliTests(unittest.TestCase):
         self.assertIn("analyze", [action["id"] for action in payload["actions"]])
         self.assertIn("video_path", payload["settings"])
 
-    def test_control_target_is_reserved_for_pyside6(self):
-        stderr = io.StringIO()
-
-        with redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+    def test_control_target_launches_pyside_target(self):
+        with patch("admet.app.run_control_ui") as run_control:
             main(["control"])
 
-        self.assertEqual(caught.exception.code, 2)
+        run_control.assert_called_once_with()
 
 
 if __name__ == "__main__":

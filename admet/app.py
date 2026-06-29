@@ -36,7 +36,8 @@ def main(argv: list[str] | None = None) -> None:
         run_analyze_ui(args.port, native=args.native)
         return
     if args.target == "control":
-        parser.error("control uses the PySide6 UI target; the target is not implemented yet")
+        run_control_ui()
+        return
     parser.error("choose 'analyze', 'control', or --engine")
 
 
@@ -46,7 +47,7 @@ def run_analyze_ui(port: int, *, native: bool = False) -> None:
     workflow = create_analyze_workflow()
     api = create_engine_api("opencv")
 
-    from admet.ui.nicegui import render_workflow
+    from admet.ui.analyze import render_workflow
 
     def root() -> None:
         render_workflow(workflow, workflow.initial_state(), api.settings, api=api)
@@ -59,6 +60,13 @@ def run_analyze_ui(port: int, *, native: bool = False) -> None:
         port=port,
         title="admet analyze",
     )
+
+
+def run_control_ui() -> None:
+    from admet.ui.control import run_control_app
+
+    api = create_engine_api("fluidics")
+    raise SystemExit(run_control_app(api))
 
 
 def create_engine_api(engine_id: str) -> AdmetAPI:
