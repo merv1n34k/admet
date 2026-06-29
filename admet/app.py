@@ -3,8 +3,7 @@ from __future__ import annotations
 import argparse
 
 from admet.engines.analyze import create_analyze_registry
-from admet.engines.control.registry import create_control_registry
-from admet.workflows import create_analyze_workflow, create_control_workflow
+from admet.workflows import create_analyze_workflow
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -15,9 +14,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--native", action="store_true", help="launch in a native webview window")
     args = parser.parse_args(argv)
 
-    from nicegui import ui
-
     if args.mode == "analyze":
+        from nicegui import ui
+
         workflow = create_analyze_workflow()
         registry = create_analyze_registry()
         try:
@@ -25,14 +24,9 @@ def main(argv: list[str] | None = None) -> None:
         except LookupError as exc:
             parser.error(str(exc))
     else:
-        workflow = create_control_workflow()
-        registry = create_control_registry()
-        try:
-            engine = registry.create("fluidics")
-        except LookupError as exc:
-            parser.error(str(exc))
+        parser.error("control uses the PySide6 UI target; the NiceGUI launcher is analysis-only")
 
-    from admet.ui import render_workflow
+    from admet.ui.nicegui import render_workflow
 
     def root() -> None:
         render_workflow(workflow, workflow.initial_state(), engine.settings, engine=engine)

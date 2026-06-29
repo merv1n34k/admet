@@ -10,7 +10,7 @@ from admet.core.engine import (
 )
 from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema, ResultRecord, ResultSet
 from admet.core.workflow import Stage, StageControl, StageStatus, Workflow, WorkflowRunner
-from admet.ui.renderer import _record_to_row, _single_record_field_rows
+from admet.ui.nicegui.renderer import _record_to_row, _single_record_field_rows
 
 
 class ParamSchemaTests(unittest.TestCase):

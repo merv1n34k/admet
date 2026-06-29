@@ -5,12 +5,14 @@ from typing import Any, Protocol
 
 from .actions import ActionSpec
 from admet.core.schema import ParamSchema, ResultSet
+from admet.core.session import AdmetSession
 
 
 @dataclass(frozen=True)
 class EngineContext:
     workdir: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    session: AdmetSession | None = None
 
 
 @dataclass(frozen=True)
