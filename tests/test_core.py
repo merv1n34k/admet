@@ -4,7 +4,7 @@ from admet.core.engine import EngineRegistry, LazyEngineSpec
 from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema, ResultRecord
 from admet.core.workflow import Stage, StageControl, StageStatus, Workflow, WorkflowRunner
 from admet.engines.dummy import create_engine
-from admet.ui.renderer import _record_to_row
+from admet.ui.renderer import _record_to_row, _single_record_field_rows
 
 
 class ParamSchemaTests(unittest.TestCase):
@@ -135,6 +135,22 @@ class RendererHelperTests(unittest.TestCase):
 
         self.assertEqual(row["cameras"], "")
         self.assertEqual(row["camera"], '{"pypylon_available": false}')
+
+    def test_single_record_rows_are_transposed_for_status_tables(self):
+        rows = _single_record_field_rows(
+            {
+                "id": 0,
+                "sample_id": "control",
+                "engine": "fluidics",
+                "action": "connect_camera",
+                "camera_message": "No Basler cameras are currently enumerated; refresh after attaching one.",
+            }
+        )
+
+        self.assertNotIn("Id", [row["field"] for row in rows])
+        self.assertEqual(rows[0], {"field": "Sample Id", "value": "control"})
+        self.assertEqual(rows[2], {"field": "Action", "value": "connect_camera"})
+        self.assertEqual(rows[3]["field"], "Camera Message")
 
 
 if __name__ == "__main__":

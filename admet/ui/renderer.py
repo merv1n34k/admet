@@ -39,6 +39,8 @@ def render_workflow(
         }
         .admet-camera img { object-fit: contain; }
         .admet-camera-settings { border-top: 1px solid #d9dee7; background: #ffffff; }
+        .admet-action-grid { grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); }
+        .admet-action-grid .q-btn { width: 100%; }
         .admet-toc-button { min-height: 30px; border-radius: 999px; }
         .admet-shell .q-btn {
           min-height: 28px;
@@ -49,7 +51,16 @@ def render_workflow(
         }
         .admet-shell .q-badge { border-radius: 999px; font-size: 10px; padding: 2px 6px; }
         .admet-shell .q-field__control { min-height: 34px; border-radius: 8px; }
+        .admet-shell .q-field, .admet-shell .q-checkbox { min-width: 0; }
+        .admet-shell .q-checkbox__label { white-space: normal; line-height: 1.2; }
         .admet-shell .q-table th, .admet-shell .q-table td { padding: 4px 8px; }
+        .admet-record-table .q-table th,
+        .admet-record-table .q-table td {
+          white-space: normal;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          vertical-align: top;
+        }
         </style>
         """
     )
@@ -192,11 +203,11 @@ class CoreWorkflowView:
         preview_height = int(metadata.get("camera_preview_height") or self.values.get("camera_height") or 480)
 
         with ui.column().classes("admet-panel w-full gap-2 p-3"):
-            with ui.row().classes("w-full items-center justify-between"):
+            with ui.column().classes("w-full gap-1"):
                 ui.label(surface.title or "Camera").classes("text-sm font-semibold")
                 self._render_camera_control_row(surface.controls)
-            with ui.row().classes("w-full gap-3 items-start"):
-                with ui.column().classes("grow gap-2"):
+            with ui.row().classes("w-full gap-3 items-start flex-wrap"):
+                with ui.column().classes("grow min-w-0 gap-2"):
                     if preview_src:
                         ui.interactive_image(
                             preview_src,
@@ -211,7 +222,7 @@ class CoreWorkflowView:
                             ui.label("No live frame").classes("text-sm")
                             ui.label("Connect camera and start live.").classes("text-xs admet-muted")
                     self._render_camera_status_strip(metadata, preview_width, preview_height)
-                with ui.column().classes("w-64 gap-2"):
+                with ui.column().classes("w-64 max-w-full shrink-0 gap-2"):
                     if cameras:
                         self._render_camera_connection_controls(cameras, surface)
                     ui.badge("connected" if connected else "not connected").props(
@@ -234,18 +245,18 @@ class CoreWorkflowView:
         from nicegui import ui
 
         stage = self.workflow.current_stage(self.state)
-        with ui.row().classes("gap-1"):
+        with ui.grid().classes("admet-action-grid w-full gap-1"):
             for control in controls:
                 ui.button(
                     control.label,
                     icon=_control_icon(control),
                     on_click=partial(self._handle_control, stage, control),
-                ).props(_button_props(control.variant))
+                ).props(_button_props(control.variant)).classes("w-full")
             ui.button(
                 "Settings",
                 icon="tune",
                 on_click=self._toggle_camera_settings,
-            ).props("dense no-caps outline")
+            ).props("dense no-caps outline").classes("w-full")
 
     def _render_camera_connection_controls(self, cameras: list[Any], surface: StageSurface) -> None:
         from nicegui import ui
@@ -264,19 +275,19 @@ class CoreWorkflowView:
         from nicegui import ui
 
         with ui.column().classes("admet-camera-settings w-full gap-2 px-3 py-2"):
-            with ui.row().classes("w-full items-center justify-between"):
+            with ui.column().classes("w-full gap-1"):
                 ui.label("Advanced camera settings").classes("text-sm font-semibold")
-                with ui.row().classes("gap-1"):
+                with ui.grid().classes("admet-action-grid w-full gap-1"):
                     ui.button(
                         "Apply",
                         icon="check",
                         on_click=partial(self._run_action, "apply_camera_settings", False),
-                    ).props("dense no-caps outline color=green")
+                    ).props("dense no-caps outline color=green").classes("w-full")
                     ui.button(
                         "Disconnect",
                         icon="power_off",
                         on_click=partial(self._run_action, "disconnect_camera", False),
-                    ).props("dense no-caps outline color=orange")
+                    ).props("dense no-caps outline color=orange").classes("w-full")
             for group in surface.options.get("groups", ()):
                 self._render_camera_setting_group(surface, group)
 
@@ -287,7 +298,7 @@ class CoreWorkflowView:
         if not schema.params:
             return
         ui.label(group.get("title", "Settings")).classes("admet-muted text-xs font-medium")
-        render_settings(schema, self.values, columns=4)
+        render_settings(schema, self.values, columns="auto")
         if "camera_selection_w" in {param.name for param in schema.params}:
             ui.button("Clear Selection", icon="backspace", on_click=self._clear_camera_selection).props(
                 "dense no-caps outline"
@@ -531,9 +542,34 @@ class CoreWorkflowView:
         rows = [_record_to_row(index, record) for index, record in enumerate(result_set.records)]
         if not rows:
             rows = [{"id": 0, "sample_id": "", "engine": "", "status": "no records"}]
+        if len(rows) == 1:
+            columns = [
+                {
+                    "name": "field",
+                    "label": "Field",
+                    "field": "field",
+                    "align": "left",
+                    "style": "width: 12rem; max-width: 35%; white-space: normal;",
+                },
+                {
+                    "name": "value",
+                    "label": "Value",
+                    "field": "value",
+                    "align": "left",
+                    "style": "white-space: normal; overflow-wrap: anywhere; word-break: break-word;",
+                },
+            ]
+            ui.table(
+                columns=columns,
+                rows=_single_record_field_rows(rows[0]),
+                row_key="field",
+            ).classes("admet-record-table w-full").props("wrap-cells dense flat")
+            return
         keys = sorted({key for row in rows for key in row})
         columns = [{"name": key, "label": key.replace("_", " ").title(), "field": key} for key in keys]
-        ui.table(columns=columns, rows=rows, row_key="id").classes("w-full")
+        ui.table(columns=columns, rows=rows, row_key="id").classes("admet-record-table w-full").props(
+            "wrap-cells dense"
+        )
 
     def _handle_control(self, stage: Stage, control: StageControl) -> None:
         self._activate_index(self.workflow.stages.index(stage), refresh=False)
@@ -702,7 +738,7 @@ def render_settings(
     settings: ParamSchema,
     values: dict[str, Any] | None = None,
     *,
-    columns: int = 2,
+    columns: int | str = 2,
 ) -> dict[str, Any]:
     from nicegui import ui
 
@@ -710,20 +746,21 @@ def render_settings(
     for name, value in settings.defaults().items():
         target.setdefault(name, value)
 
-    with ui.grid(columns=columns).classes("w-full gap-3"):
+    grid_columns = columns if isinstance(columns, int) else "repeat(auto-fit, minmax(136px, 1fr))"
+    with ui.grid(columns=grid_columns).classes("w-full gap-2"):
         for param in settings.params:
             if param.kind is ParamKind.BOOLEAN:
                 ui.checkbox(param.label, value=bool(target.get(param.name))).bind_value(
                     target,
                     param.name,
-                )
+                ).classes("min-w-0")
             elif param.kind is ParamKind.CHOICE:
                 options = {option.value: option.label for option in param.options}
                 ui.select(
                     options,
                     label=param.label,
                     value=target.get(param.name),
-                ).bind_value(target, param.name).classes("w-full")
+                ).bind_value(target, param.name).classes("w-full min-w-0")
             elif param.kind in {ParamKind.INTEGER, ParamKind.FLOAT}:
                 ui.number(
                     label=param.label,
@@ -731,12 +768,12 @@ def render_settings(
                     min=param.minimum,
                     max=param.maximum,
                     step=param.step,
-                ).bind_value(target, param.name).classes("w-full")
+                ).bind_value(target, param.name).classes("w-full min-w-0")
             else:
                 ui.input(param.label, value=target.get(param.name) or "").bind_value(
                     target,
                     param.name,
-                ).classes("w-full")
+                ).classes("w-full min-w-0")
     return target
 
 
@@ -756,6 +793,14 @@ def _record_to_row(index: int, record: ResultRecord) -> dict[str, Any]:
     row = {"id": index, "sample_id": record.sample_id, "engine": record.engine}
     row.update({key: _table_value(value, key) for key, value in record.values.items()})
     return row
+
+
+def _single_record_field_rows(row: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {"field": key.replace("_", " ").title(), "value": value}
+        for key, value in row.items()
+        if key != "id"
+    ]
 
 
 def _table_value(value: Any, key: str = "") -> Any:
