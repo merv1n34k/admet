@@ -86,9 +86,6 @@ CAMERA_MAIN_SETTINGS = (
 
 FLUIDICS_MAIN_SETTINGS = (
     "simulated",
-    "set_count",
-    "replicate_count",
-    "run_volume_ul",
 )
 
 PIPELINE_STAGE_IDS = {"priming", "runs", "wash"}
@@ -218,18 +215,18 @@ class ControlWindow(QMainWindow):
         page_scroll.setWidget(content)
 
         self.action_box_panel, self.action_box_layout = self._box("Action Box")
+        self.action_panel, self.action_layout = self._box("Action Panel")
         self.main_panel, self.main_layout = self._box("Main Window", "MainPanel")
         self.channel_manager_panel, self.channel_manager_layout = self._box("Channel Manager")
         self.results_panel, self.results_layout = self._box("Results")
-        self.action_panel, self.action_layout = self._box("Action Panel")
         self.log_panel, self.log_layout = self._box("Action Log")
 
         for panel in (
             self.action_box_panel,
+            self.action_panel,
             self.main_panel,
             self.channel_manager_panel,
             self.results_panel,
-            self.action_panel,
             self.log_panel,
         ):
             content_layout.addWidget(panel)
@@ -745,14 +742,18 @@ class ControlWindow(QMainWindow):
         title.setObjectName("FieldLabel")
         root.addWidget(title)
 
-        table = QTableWidget(len(FLUIDIC_CHANNELS), 5)
+        rows = len(FLUIDIC_CHANNELS)
+        table = QTableWidget(rows, 5)
         table.setObjectName("RawConfigTable")
         table.setHorizontalHeaderLabels(("Channel", "Calibration", "Scale", "Offset", "Quadratic"))
         table.verticalHeader().hide()
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         for column in range(1, 5):
             table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        if rows > 3:
+            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        else:
+            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
         table.setShowGrid(True)
@@ -769,7 +770,7 @@ class ControlWindow(QMainWindow):
         self._syncing_table = False
 
         table.resizeRowsToContents()
-        _fit_table_height(table)
+        _fit_table_height(table, max_rows=3 if rows > 3 else None)
         root.addWidget(table)
         return panel
 
@@ -812,6 +813,29 @@ class ControlWindow(QMainWindow):
         names: list[str] = []
         if self._stage_uses_camera(stage):
             names.extend(name for name in CAMERA_MAIN_SETTINGS if name in visible_names)
+        if stage.id == "runs":
+            names.extend(
+                name
+                for name in (
+                    "set_count",
+                    "replicate_count",
+                    "run_volume_ul",
+                    "run_aqueous_total_flow_ul_min",
+                )
+                if name in visible_names and name not in names
+            )
+        elif stage.id == "wash":
+            names.extend(
+                name
+                for name in (
+                    "wash_oil_flow_ul_min",
+                    "wash_aqueous_total_flow_ul_min",
+                    "wash_oil_volume_ul",
+                    "wash_pressure_mbar",
+                    "wash_pressure_duration_s",
+                )
+                if name in visible_names and name not in names
+            )
         if self._stage_uses_fluidics(stage):
             names.extend(
                 name
@@ -830,7 +854,10 @@ class ControlWindow(QMainWindow):
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        if rows > 3:
+            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        else:
+            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
         table.setAlternatingRowColors(False)
@@ -847,7 +874,7 @@ class ControlWindow(QMainWindow):
         self._syncing_table = False
 
         table.resizeRowsToContents()
-        _fit_table_height(table)
+        _fit_table_height(table, max_rows=3 if rows > 3 else None)
         return table
 
     def _render_results(self, stage: Stage) -> None:
@@ -883,7 +910,8 @@ class ControlWindow(QMainWindow):
             apply_button.clicked.connect(self._apply_all_corrections)
             apply_button.setEnabled(self._fluigent_ready())
             header_layout.addWidget(apply_button)
-        expand = ui.button("-" if self._action_show_all_params else "+", size="inline")
+        expand = ui.button("basic" if self._action_show_all_params else "advanced", size="large")
+        expand.setMinimumWidth(96)
         expand.clicked.connect(self._toggle_action_params)
         header_layout.addWidget(expand)
         self.action_layout.addWidget(header)
@@ -1090,10 +1118,19 @@ class ControlWindow(QMainWindow):
                 "set_count": self.values.get("set_count"),
                 "replicate_count": self.values.get("replicate_count"),
                 "run_volume_ul": self.values.get("run_volume_ul"),
+                "run_aqueous_total_flow_ul_min": self.values.get("run_aqueous_total_flow_ul_min"),
                 "tick_s": self.values.get("tick_s"),
             }
         if stage.id == "wash":
-            return {"pipeline_name": "Wash", "tick_s": self.values.get("tick_s")}
+            return {
+                "pipeline_name": "Wash",
+                "wash_oil_flow_ul_min": self.values.get("wash_oil_flow_ul_min"),
+                "wash_aqueous_total_flow_ul_min": self.values.get("wash_aqueous_total_flow_ul_min"),
+                "wash_oil_volume_ul": self.values.get("wash_oil_volume_ul"),
+                "wash_pressure_mbar": self.values.get("wash_pressure_mbar"),
+                "wash_pressure_duration_s": self.values.get("wash_pressure_duration_s"),
+                "tick_s": self.values.get("tick_s"),
+            }
         return {"pipeline_name": "Priming", "tick_s": self.values.get("tick_s")}
 
     def _recording_settings(self, run_label: str) -> dict[str, Any]:
@@ -1842,9 +1879,9 @@ class ControlWindow(QMainWindow):
         if stage.id == "runs":
             if not self._fluigent_ready():
                 return "Connect Fluigent before starting test runs."
-            return "Set run count and volume, then start test runs. Camera recording starts automatically when live preview is active."
+            return "Set run count, Oil L volume, and total aqueous flow, then start test runs. Camera recording starts automatically when live preview is active."
         if stage.id == "wash":
-            return "Start wash and follow each protocol prompt until shutdown is complete."
+            return "Set wash volume and pressure duration, then follow each protocol prompt until shutdown is complete."
         return stage.description or stage.label
 
     def _default_controls(self, stage: Stage) -> tuple[StageControl, ...]:
@@ -2614,9 +2651,10 @@ def _video_table(rows: list[dict[str, str]]) -> QTableWidget:
     return table
 
 
-def _fit_table_height(table: QTableWidget) -> None:
+def _fit_table_height(table: QTableWidget, *, max_rows: int | None = None) -> None:
     height = table.horizontalHeader().height() + table.frameWidth() * 2
-    height += sum(table.rowHeight(row) for row in range(table.rowCount()))
+    row_count = table.rowCount() if max_rows is None else min(table.rowCount(), max_rows)
+    height += sum(table.rowHeight(row) for row in range(row_count))
     table.setFixedHeight(height)
 
 

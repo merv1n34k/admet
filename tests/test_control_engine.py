@@ -1,6 +1,6 @@
+import json
 import tempfile
 import unittest
-import json
 from pathlib import Path
 
 import numpy as np
@@ -373,6 +373,40 @@ class FluidicsControlEngineTests(unittest.TestCase):
         pipeline = engine.build_pipeline_from_steps(steps)
 
         self.assertEqual([step.name for step in pipeline], ["solo", "g1", "g2", "g1", "g2"])
+
+    def test_dropseq_protocol_splits_total_aqueous_flow(self):
+        engine = FluidicsControlEngine(FakeControlSDK())
+
+        steps = engine._dropseq_run_protocol(
+            {
+                "set_count": 1,
+                "replicate_count": 1,
+                "run_volume_ul": 150.0,
+                "run_aqueous_total_flow_ul_min": 100.0,
+            }
+        )
+
+        self.assertEqual(steps[0].sensor_setpoints, {0: 300.0, 1: 50.0, 2: 50.0})
+        self.assertIn("Cells M/Beads M 50", steps[0].confirm_message)
+
+    def test_wash_protocol_uses_configured_volume_pressure_and_duration(self):
+        engine = FluidicsControlEngine(FakeControlSDK())
+
+        pipeline = engine.build_pipeline_from_steps(
+            engine._wash_protocol(
+                {
+                    "wash_oil_flow_ul_min": 260.0,
+                    "wash_aqueous_total_flow_ul_min": 180.0,
+                    "wash_oil_volume_ul": 600.0,
+                    "wash_pressure_mbar": 1800.0,
+                    "wash_pressure_duration_s": 90.0,
+                }
+            )
+        )
+
+        self.assertEqual(pipeline[0].sensor_setpoints, {0: 260.0, 1: 90.0, 2: 90.0})
+        self.assertEqual(pipeline[1].pressure_setpoints, {0: 1800.0, 1: 1800.0, 2: 1800.0})
+        self.assertEqual(getattr(pipeline[1].trigger, "_duration_s"), 90.0)
 
     def test_fluidics_control_actions_use_configured_channels(self):
         sdk = FakeControlSDK()

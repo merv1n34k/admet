@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 ACQUISITION_INTERVAL_MS = 100
 STATS_WINDOW_SAMPLES = 300
@@ -48,6 +48,7 @@ class ProtocolStep:
     sensor_setpoints: dict[int, float]
     trigger_type: str
     trigger_params: dict
+    pressure_setpoints: dict[int, float] = field(default_factory=dict)
     on_complete: str = "hold"
     confirm_message: str = ""
     repeat: int = 1
@@ -118,11 +119,20 @@ PIPELINES: dict[str, list[ProtocolStep]] = {
             confirm_message="Start wash phase: 250/80/80 uL/min until Oil L dispenses 500 uL?",
         ),
         ProtocolStep(
+            name="Wash pressure phase",
+            sensor_setpoints={},
+            trigger_type="time",
+            trigger_params={"duration_s": 120.0},
+            pressure_setpoints={0: 2000.0, 1: 2000.0, 2: 2000.0},
+            on_complete="zero",
+            confirm_message="Set all pressure channels to 2000 mbar for 120 seconds?",
+        ),
+        ProtocolStep(
             name="Confirm wash complete",
             sensor_setpoints={},
             trigger_type="time",
             trigger_params={"duration_s": 0.0},
-            confirm_message="Wash phase complete. Confirm pipeline close.",
+            confirm_message="Pressure wash complete. Confirm pipeline close.",
         ),
     ],
 }

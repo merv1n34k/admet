@@ -152,12 +152,18 @@ RUN_SETTINGS = ParamSchema(
         Param("set_count", "Sets", ParamKind.INTEGER, default=1, minimum=1),
         Param("replicate_count", "Replicates", ParamKind.INTEGER, default=1, minimum=1),
         Param("run_volume_ul", "Oil L Volume", ParamKind.FLOAT, default=150.0, minimum=0.1),
+        Param("run_aqueous_total_flow_ul_min", "Total Aqueous Flow", ParamKind.FLOAT, default=80.0, minimum=0.0),
         Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
     )
 )
 
 WASH_SETTINGS = ParamSchema(
     (
+        Param("wash_oil_flow_ul_min", "Oil L Flow", ParamKind.FLOAT, default=250.0, minimum=0.0),
+        Param("wash_aqueous_total_flow_ul_min", "Total Aqueous Flow", ParamKind.FLOAT, default=160.0, minimum=0.0),
+        Param("wash_oil_volume_ul", "Oil L Volume", ParamKind.FLOAT, default=500.0, minimum=0.1),
+        Param("wash_pressure_mbar", "Pressure", ParamKind.FLOAT, default=2000.0, minimum=0.0),
+        Param("wash_pressure_duration_s", "Pressure Duration", ParamKind.FLOAT, default=120.0, minimum=0.0),
         Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
     )
 )

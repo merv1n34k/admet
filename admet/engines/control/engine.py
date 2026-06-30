@@ -118,7 +118,19 @@ CONTROL_ACTIONS = (
         "run_protocol",
         "Run Protocol",
         "protocol",
-        params=("pipeline_name", "set_count", "replicate_count", "run_volume_ul", "tick_s"),
+        params=(
+            "pipeline_name",
+            "set_count",
+            "replicate_count",
+            "run_volume_ul",
+            "run_aqueous_total_flow_ul_min",
+            "wash_oil_flow_ul_min",
+            "wash_aqueous_total_flow_ul_min",
+            "wash_oil_volume_ul",
+            "wash_pressure_mbar",
+            "wash_pressure_duration_s",
+            "tick_s",
+        ),
     ),
     ActionSpec("pause_protocol", "Pause Protocol", "protocol"),
     ActionSpec("resume_protocol", "Resume Protocol", "protocol"),
@@ -126,7 +138,19 @@ CONTROL_ACTIONS = (
     ActionSpec("confirm_protocol", "Confirm Protocol Step", "protocol"),
     ActionSpec("skip_protocol", "Skip Protocol Step", "protocol"),
     ActionSpec("calibrate", "Calibrate", "calibration"),
-    ActionSpec("wash", "Wash", "protocol", params=("tick_s",)),
+    ActionSpec(
+        "wash",
+        "Wash",
+        "protocol",
+        params=(
+            "wash_oil_flow_ul_min",
+            "wash_aqueous_total_flow_ul_min",
+            "wash_oil_volume_ul",
+            "wash_pressure_mbar",
+            "wash_pressure_duration_s",
+            "tick_s",
+        ),
+    ),
 )
 
 
@@ -249,7 +273,7 @@ class FluidicsControlEngine:
             self.hardware.calibrate_all()
             return self._status_result(action)
         if action == "wash":
-            self.start_pipeline("Wash", tick_s=normalized["tick_s"])
+            self.start_pipeline("Wash", settings=normalized, tick_s=normalized["tick_s"])
             return self._status_result(action)
         raise ValueError(f"unsupported fluidics action: {action}")
 
@@ -518,6 +542,8 @@ class FluidicsControlEngine:
             return
         if name == "Drop-Seq" and settings:
             steps = self.build_pipeline_from_steps(self._dropseq_run_protocol(settings))
+        elif name == "Wash" and settings:
+            steps = self.build_pipeline_from_steps(self._wash_protocol(settings))
         else:
             steps = self.build_pipeline(name)
         sensor_to_channel = {
@@ -568,6 +594,7 @@ class FluidicsControlEngine:
                 name=step.name,
                 sensor_setpoints=dict(step.sensor_setpoints),
                 trigger=create_trigger(step.trigger_type, step.trigger_params),
+                pressure_setpoints=dict(step.pressure_setpoints),
                 on_complete=step.on_complete,
                 confirm_message=step.confirm_message,
             )
@@ -579,6 +606,8 @@ class FluidicsControlEngine:
         set_count = int(settings["set_count"])
         replicate_count = int(settings["replicate_count"])
         run_volume_ul = float(settings["run_volume_ul"])
+        aqueous_total = float(settings["run_aqueous_total_flow_ul_min"])
+        aqueous_channel = aqueous_total / 2.0
         for set_index in range(1, set_count + 1):
             for replicate_index in range(1, replicate_count + 1):
                 label = f"set{set_index:02d}_rep{replicate_index:02d}"
@@ -586,12 +615,13 @@ class FluidicsControlEngine:
                     (
                         ProtocolStep(
                             name=f"Run {label}",
-                            sensor_setpoints={0: 300.0, 1: 40.0, 2: 40.0},
+                            sensor_setpoints={0: 300.0, 1: aqueous_channel, 2: aqueous_channel},
                             trigger_type="volume",
                             trigger_params={"sensor_index": 0, "target_volume_ul": run_volume_ul},
                             on_complete="zero",
                             confirm_message=(
-                                f"Start {label}: Oil L 300 uL/min, Cells M/Beads M 40 uL/min?"
+                                f"Start {label}: Oil L 300 uL/min, "
+                                f"Cells M/Beads M {aqueous_channel:g} uL/min?"
                             ),
                         ),
                         ProtocolStep(
@@ -604,6 +634,44 @@ class FluidicsControlEngine:
                     )
                 )
         return steps
+
+    def _wash_protocol(self, settings: dict[str, Any]) -> list[ProtocolStep]:
+        oil_flow = float(settings["wash_oil_flow_ul_min"])
+        aqueous_channel = float(settings["wash_aqueous_total_flow_ul_min"]) / 2.0
+        oil_volume = float(settings["wash_oil_volume_ul"])
+        pressure = float(settings["wash_pressure_mbar"])
+        duration_s = float(settings["wash_pressure_duration_s"])
+        return [
+            ProtocolStep(
+                name="Wash flow phase",
+                sensor_setpoints={0: oil_flow, 1: aqueous_channel, 2: aqueous_channel},
+                trigger_type="volume",
+                trigger_params={"sensor_index": 0, "target_volume_ul": oil_volume},
+                on_complete="zero",
+                confirm_message=(
+                    f"Start wash phase 1: {oil_flow:g}/{aqueous_channel:g}/{aqueous_channel:g} "
+                    f"uL/min until Oil L dispenses {oil_volume:g} uL?"
+                ),
+            ),
+            ProtocolStep(
+                name="Wash pressure phase",
+                sensor_setpoints={},
+                pressure_setpoints={0: pressure, 1: pressure, 2: pressure},
+                trigger_type="time",
+                trigger_params={"duration_s": duration_s},
+                on_complete="zero",
+                confirm_message=(
+                    f"Set all pressure channels to {pressure:g} mbar for {duration_s:g} seconds?"
+                ),
+            ),
+            ProtocolStep(
+                name="Confirm wash complete",
+                sensor_setpoints={},
+                trigger_type="time",
+                trigger_params={"duration_s": 0.0},
+                confirm_message="Pressure wash complete. Confirm pipeline close.",
+            ),
+        ]
 
     def _connect(self, settings: dict[str, Any]) -> EngineResult:
         try:

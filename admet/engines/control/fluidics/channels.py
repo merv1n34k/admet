@@ -105,12 +105,24 @@ class ChannelManager:
                 setpoint,
             )
 
+    def pipeline_set_pressure(self, channel_idx: int, pressure_mbar: float) -> None:
+        with self._lock:
+            channel = self._channels[channel_idx]
+            channel.owner = "pipeline"
+            channel.active_setpoint = 0.0
+            channel.regulation_active = False
+            channel.mode = "pressure"
+            channel.pressure_setpoint = pressure_mbar
+            self._sdk.set_pressure(channel.pressure_index, pressure_mbar)
+
     def pipeline_release_channel(self, channel_idx: int) -> None:
         with self._lock:
             channel = self._channels[channel_idx]
             if channel.owner != "pipeline":
                 return
 
+            if channel.mode == "pressure":
+                self._sdk.set_pressure(channel.pressure_index, 0.0)
             channel.owner = "user"
             channel.active_setpoint = channel.base_setpoint
             if channel.base_setpoint > 0 or channel.regulation_active:
@@ -131,11 +143,15 @@ class ChannelManager:
             for channel in self._channels:
                 if channel.owner == "pipeline":
                     channel.active_setpoint = 0.0
-                    self._sdk.set_sensor_regulation(
-                        channel.sensor_index,
-                        channel.pressure_index,
-                        0.0,
-                    )
+                    if channel.mode == "pressure":
+                        channel.pressure_setpoint = 0.0
+                        self._sdk.set_pressure(channel.pressure_index, 0.0)
+                    else:
+                        self._sdk.set_sensor_regulation(
+                            channel.sensor_index,
+                            channel.pressure_index,
+                            0.0,
+                        )
 
     def pipeline_resume_all(self) -> None:
         with self._lock:
@@ -146,11 +162,14 @@ class ChannelManager:
             self._pipeline_paused = False
             for channel in self._channels:
                 if channel.owner == "pipeline":
-                    self._sdk.set_sensor_regulation(
-                        channel.sensor_index,
-                        channel.pressure_index,
-                        0.0,
-                    )
+                    if channel.mode == "pressure":
+                        self._sdk.set_pressure(channel.pressure_index, 0.0)
+                    else:
+                        self._sdk.set_sensor_regulation(
+                            channel.sensor_index,
+                            channel.pressure_index,
+                            0.0,
+                        )
                     channel.owner = "user"
                     channel.active_setpoint = 0.0
                     channel.regulation_active = False

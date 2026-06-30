@@ -25,6 +25,9 @@ class ChannelController(Protocol):
     def pipeline_set_setpoint(self, channel_index: int, value: float) -> None:
         ...
 
+    def pipeline_set_pressure(self, channel_index: int, pressure_mbar: float) -> None:
+        ...
+
     def pipeline_release_channel(self, channel_index: int) -> None:
         ...
 
@@ -184,6 +187,8 @@ class PipelineEngine(threading.Thread):
             channel_index = self._sensor_to_channel.get(sensor_index)
             if channel_index is not None:
                 self._channel_manager.pipeline_set_setpoint(channel_index, setpoint)
+        for channel_index, pressure_mbar in step.pressure_setpoints.items():
+            self._channel_manager.pipeline_set_pressure(channel_index, pressure_mbar)
 
         step.trigger.reset()
         while not self._stop_event.is_set() and not self._skip_event.is_set():
@@ -220,6 +225,11 @@ class PipelineEngine(threading.Thread):
                 continue
             if step.on_complete == "zero":
                 self._channel_manager.pipeline_set_setpoint(channel_index, 0.0)
+            elif step.on_complete == "revert":
+                self._channel_manager.pipeline_release_channel(channel_index)
+        for channel_index in step.pressure_setpoints:
+            if step.on_complete == "zero":
+                self._channel_manager.pipeline_set_pressure(channel_index, 0.0)
             elif step.on_complete == "revert":
                 self._channel_manager.pipeline_release_channel(channel_index)
 

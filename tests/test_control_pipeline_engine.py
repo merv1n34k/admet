@@ -28,6 +28,9 @@ class FakeChannelManager:
     def pipeline_set_setpoint(self, channel_index, value):
         self.calls.append(("set", channel_index, value))
 
+    def pipeline_set_pressure(self, channel_index, pressure_mbar):
+        self.calls.append(("pressure", channel_index, pressure_mbar))
+
     def pipeline_release_channel(self, channel_index):
         self.calls.append(("release", channel_index))
 
@@ -102,6 +105,34 @@ class PipelineEngineTests(unittest.TestCase):
         self.assertEqual(step.status, StepStatus.SKIPPED)
         self.assertNotIn(("set", 0, 1.0), manager.calls)
         self.assertEqual(manager.calls[-1], ("release_all",))
+
+    def test_pressure_step_applies_and_zeros_pressure(self):
+        manager = FakeChannelManager()
+        events: Queue[PipelineEvent] = Queue()
+        step = PipelineStep(
+            "pressure wash",
+            {},
+            TimeTrigger(0.0),
+            pressure_setpoints={0: 2000.0, 1: 2000.0},
+            on_complete="zero",
+        )
+        engine = PipelineEngine(
+            [step],
+            manager,
+            FakeAcquisition(),
+            events,
+            {},
+            tick_s=0.001,
+        )
+
+        engine.start()
+        engine.join(timeout=1.0)
+
+        self.assertIn(("pressure", 0, 2000.0), manager.calls)
+        self.assertIn(("pressure", 1, 2000.0), manager.calls)
+        self.assertIn(("pressure", 0, 0.0), manager.calls)
+        self.assertIn(("pressure", 1, 0.0), manager.calls)
+        self.assertEqual(engine.state, PipelineState.COMPLETED)
 
 
 def _last_event(events: Queue[PipelineEvent]) -> PipelineEvent:
