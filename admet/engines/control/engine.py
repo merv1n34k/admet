@@ -39,8 +39,9 @@ from admet.engines.control.session import (
     RecordingMetadata,
     RecordingSession,
     WriterFactory,
+    create_recording_id,
     create_recording_report_dir,
-    write_recording_summary,
+    write_recording_metadata,
 )
 from admet.engines.control.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES
 
@@ -161,6 +162,7 @@ class FluidicsControlEngine:
         self._recording_session: RecordingSession | None = None
         self._csv_recording: RecordingMetadata | None = None
         self._csv_recording_report_dir: Path | None = None
+        self._csv_recordings: list[dict[str, Any]] = []
         self._last_recording: RecordingMetadata | None = None
         self._video_writer_factory = video_writer_factory
         self._corrected_sensors: set[int] = set()
@@ -348,24 +350,26 @@ class FluidicsControlEngine:
         recording_label = str(settings["recording_label"])
         camera_recorder = self._camera_acquisition if self.camera_live else None
         if camera_recorder is not None:
-            session = RecordingSession(
-                report_root,
-                camera_recorder,
-                _CsvRecordingBackend(self, context),
-                recording_label=recording_label,
-                writer_factory=self._video_writer_factory,
-            )
+            session = self._recording_session
+            if session is None or session.report_root != report_root:
+                session = RecordingSession(
+                    report_root,
+                    camera_recorder,
+                    _CsvRecordingBackend(self, context),
+                    writer_factory=self._video_writer_factory,
+                )
+                self._recording_session = session
             camera_recorder.set_recording_complete_callback(self._on_recording_complete)
             if settings["camera_preview_off_recording"]:
                 camera_recorder.set_preview_enabled(False)
 
             width, height = self._recording_frame_size(settings)
             metadata = session.start_recording(
+                recording_label,
                 width=width,
                 height=height,
                 fps=float(settings["camera_video_fps"]),
             )
-            self._recording_session = session
             self._last_recording = metadata
             return {
                 "csv_path": metadata.fluidics_csv,
@@ -373,10 +377,12 @@ class FluidicsControlEngine:
                 "recording": metadata.to_dict(),
             }
 
-        report_dir = create_recording_report_dir(report_root, recording_label)
+        report_dir = create_recording_report_dir(report_root)
         fluidics_dir = report_dir / "fluidics"
         fluidics_dir.mkdir(parents=True, exist_ok=True)
-        recording_id = report_dir.name
+        if self._csv_recording_report_dir != report_dir:
+            self._csv_recordings = []
+        recording_id = create_recording_id(recording_label)
         csv_path = self._start_csv_recording(
             str(fluidics_dir),
             context,
@@ -397,7 +403,7 @@ class FluidicsControlEngine:
         self._csv_recording = metadata
         self._csv_recording_report_dir = report_dir
         self._last_recording = metadata
-        write_recording_summary(report_dir, [])
+        write_recording_metadata(report_dir, self._csv_recordings, current=metadata)
         return {"csv_path": csv_path, "report_dir": str(report_dir), "recording": metadata.to_dict()}
 
     def _start_csv_recording(
@@ -447,7 +453,8 @@ class FluidicsControlEngine:
         metadata.duration_s = max(0.0, time.monotonic() - metadata.started_monotonic_s)
         self._last_recording = metadata
         if self._csv_recording_report_dir is not None:
-            write_recording_summary(self._csv_recording_report_dir, [metadata.to_dict()])
+            self._csv_recordings.append(metadata.to_dict())
+            write_recording_metadata(self._csv_recording_report_dir, self._csv_recordings)
         self._csv_recording = None
         report_dir = str(self._csv_recording_report_dir or "")
         self._csv_recording_report_dir = None
@@ -982,6 +989,10 @@ class FluidicsControlEngine:
             metadata["recordings"] = list(self._recording_session.recordings)
             if self._recording_session.current is not None:
                 metadata["current_recording"] = self._recording_session.current.to_dict()
+        elif self._csv_recordings:
+            metadata["recordings"] = list(self._csv_recordings)
+        if self._csv_recording is not None:
+            metadata["current_recording"] = self._csv_recording.to_dict()
         if self._last_recording is not None:
             metadata["last_recording"] = self._last_recording.to_dict()
         if extra_metadata:

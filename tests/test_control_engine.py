@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 import numpy as np
@@ -253,7 +254,10 @@ class FluidicsControlEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = engine.run_action(
                 "start_recording",
-                {"recording_root": "media/control", "recording_label": "set01_rep01"},
+                {
+                    "recording_root": "media/control/control_20260701_120000",
+                    "recording_label": "set01_rep01",
+                },
                 EngineContext(workdir=tmpdir),
             )
             csv_path = Path(result.artifacts["csv_path"])
@@ -262,6 +266,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
 
         self.assertEqual(csv_path.parent.name, "fluidics")
         self.assertEqual(csv_path.parent.parent.parent.name, "control")
+        self.assertEqual(csv_path.parent.parent.name, "control_20260701_120000")
         self.assertTrue(csv_path.name.startswith("set01_rep01_"))
         self.assertFalse(engine.recording_active)
 
@@ -277,7 +282,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
             result = engine.run_action(
                 "start_recording",
                 {
-                    "recording_root": "media/control",
+                    "recording_root": "media/control/control_20260701_120000",
                     "recording_label": "set01_rep02",
                     "camera_video_fps": 120.0,
                     "camera_preview_off_recording": True,
@@ -285,15 +290,30 @@ class FluidicsControlEngineTests(unittest.TestCase):
                 EngineContext(workdir=tmpdir),
             )
             stop = engine.run_action("stop_recording", {})
+            second = engine.run_action(
+                "start_recording",
+                {
+                    "recording_root": "media/control/control_20260701_120000",
+                    "recording_label": "set01_rep03",
+                    "camera_video_fps": 120.0,
+                    "camera_preview_off_recording": True,
+                },
+                EngineContext(workdir=tmpdir),
+            )
+            second_stop = engine.run_action("stop_recording", {})
             report_dir = Path(result.artifacts["report_dir"])
-            summary_path = report_dir / "summary.json"
-            summary_exists = summary_path.exists()
+            metadata_path = report_dir / "metadata.json"
+            metadata_exists = metadata_path.exists()
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
         self.assertTrue(result.artifacts["csv_path"].endswith(".csv"))
+        self.assertEqual(second.artifacts["report_dir"], result.artifacts["report_dir"])
         self.assertEqual(report_dir.parent.name, "control")
-        self.assertTrue(report_dir.name.startswith("set01_rep02_"))
-        self.assertTrue(summary_exists)
-        self.assertEqual(Path(stop.artifacts["video_path"]).name, f"{report_dir.name}.avi")
+        self.assertEqual(report_dir.name, "control_20260701_120000")
+        self.assertTrue(metadata_exists)
+        self.assertTrue(Path(stop.artifacts["video_path"]).name.startswith("set01_rep02_"))
+        self.assertTrue(Path(second_stop.artifacts["video_path"]).name.startswith("set01_rep03_"))
+        self.assertEqual(metadata["recording_count"], 2)
         self.assertEqual(Path(stop.artifacts["recording"]["fluidics_csv"]).parent.name, "fluidics")
         self.assertEqual(stop.artifacts["recording"]["width"], 16)
         self.assertEqual(stop.artifacts["recording"]["height"], 12)

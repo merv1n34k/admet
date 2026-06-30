@@ -70,13 +70,11 @@ class RecordingSession:
         camera: RecordingCamera,
         control: ControlBackend,
         *,
-        recording_label: str,
         writer_factory: WriterFactory | None = None,
     ):
         self.report_root = Path(report_root)
         self.camera = camera
         self.control = control
-        self.recording_label = _safe_recording_label(recording_label)
         self.writer_factory = writer_factory or _default_writer_factory
         self.report_dir: Path | None = None
         self.recordings: list[dict[str, Any]] = []
@@ -87,14 +85,15 @@ class RecordingSession:
 
     def create_report_dir(self) -> Path:
         if self.report_dir is None:
-            self.report_dir = create_recording_report_dir(self.report_root, self.recording_label)
+            self.report_dir = create_recording_report_dir(self.report_root)
             (self.report_dir / "video").mkdir(parents=True, exist_ok=True)
             (self.report_dir / "fluidics").mkdir(parents=True, exist_ok=True)
-            self.write_summary()
+            self.write_metadata()
         return self.report_dir
 
     def start_recording(
         self,
+        recording_label: str,
         *,
         width: int,
         height: int,
@@ -105,7 +104,7 @@ class RecordingSession:
         report_dir = self.create_report_dir()
         video_dir = report_dir / "video"
         fluidics_dir = report_dir / "fluidics"
-        recording_id = report_dir.name
+        recording_id = create_recording_id(recording_label)
         writer = self.writer_factory(video_dir, recording_id, width, height, fps)
         if not self.camera.start_recording(writer, max_frames=max_frames, max_time=max_time):
             raise RuntimeError("Failed to start camera recording")
@@ -130,7 +129,7 @@ class RecordingSession:
             converted_fps=fps,
             fluidics_csv=str(result.artifacts.get("csv_path", "")),
         )
-        self.write_summary()
+        self.write_metadata()
         return self.current
 
     def stop_recording(self) -> RecordingMetadata | None:
@@ -167,41 +166,46 @@ class RecordingSession:
         completed = self.current
         self.recordings.append(completed.to_dict())
         self.current = None
-        self.write_summary()
+        self.write_metadata()
         return completed
 
-    def write_summary(self) -> None:
+    def write_metadata(self) -> None:
         if self.report_dir is None:
             return
-        write_recording_summary(self.report_dir, self.recordings)
+        write_recording_metadata(self.report_dir, self.recordings, current=self.current)
 
 
 def _default_writer_factory(video_dir: Path, prefix: str, width: int, height: int, fps: float):
     return VideoWorker(video_dir, prefix, width, height, fps)
 
 
-def create_recording_report_dir(report_root: str | Path, recording_label: str) -> Path:
+def create_recording_report_dir(report_root: str | Path) -> Path:
     root = Path(report_root)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def create_recording_id(recording_label: str) -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = f"{_safe_recording_label(recording_label)}_{stamp}"
-    report_dir = root / base
-    suffix = 2
-    while report_dir.exists():
-        report_dir = root / f"{base}_{suffix}"
-        suffix += 1
-    report_dir.mkdir(parents=True, exist_ok=False)
-    return report_dir
+    return f"{_safe_recording_label(recording_label)}_{stamp}"
 
 
-def write_recording_summary(report_dir: str | Path, recordings: list[dict[str, Any]]) -> None:
+def write_recording_metadata(
+    report_dir: str | Path,
+    recordings: list[dict[str, Any]],
+    *,
+    current: RecordingMetadata | None = None,
+) -> None:
     report_dir = Path(report_dir)
-    summary = {
+    metadata = {
         "updated": datetime.now().isoformat(timespec="seconds"),
         "report_dir": str(report_dir),
         "recording_count": len(recordings),
         "recordings": recordings,
     }
-    (report_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    if current is not None:
+        metadata["current_recording"] = current.to_dict()
+    (report_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
 def _safe_recording_label(value: str) -> str:

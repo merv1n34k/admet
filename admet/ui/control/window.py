@@ -116,6 +116,7 @@ class ControlWindow(QMainWindow):
         self.log_entries: list[str] = ["Control UI ready."]
         self.toc_rows: list[dict[str, Any]] = []
         self.project_path: Path | None = None
+        self._control_recording_dir: Path | None = None
         self._last_frame_id = 0
         self._last_status_poll = 0.0
         self._last_poll_error = ""
@@ -124,6 +125,7 @@ class ControlWindow(QMainWindow):
         self._qt_frame: np.ndarray | None = None
         self._latest_snapshot: Any | None = None
         self._syncing_table = False
+        self._action_show_all_params = False
         self.instruction_card: NotificationCard | None = None
         self.notification: NotificationCard | None = None
         self._instruction_text = ""
@@ -216,7 +218,6 @@ class ControlWindow(QMainWindow):
         page_scroll.setWidget(content)
 
         self.action_box_panel, self.action_box_layout = self._box("Action Box")
-        self.settings_panel, self.settings_layout = self._box("Settings")
         self.main_panel, self.main_layout = self._box("Main Window", "MainPanel")
         self.channel_manager_panel, self.channel_manager_layout = self._box("Channel Manager")
         self.results_panel, self.results_layout = self._box("Results")
@@ -225,7 +226,6 @@ class ControlWindow(QMainWindow):
 
         for panel in (
             self.action_box_panel,
-            self.settings_panel,
             self.main_panel,
             self.channel_manager_panel,
             self.results_panel,
@@ -339,13 +339,30 @@ class ControlWindow(QMainWindow):
             self.project_badge.setText(self._project_text())
 
     def _new_project(self) -> None:
-        project_id = f"control_{time.strftime('%Y%m%d_%H%M%S')}"
-        self.api.session = new_session(project_id, "combined")
-        self.project_path = None
-        self.api.workdir = None
+        path, _filter = QFileDialog.getSaveFileName(
+            self,
+            "New admet project",
+            str(session_path(Path.cwd() / f"admet_{time.strftime('%Y%m%d_%H%M%S')}")),
+            "admet projects (*.admetp)",
+        )
+        if not path:
+            return
+        target = session_path(Path(path))
+        project_id = target.stem
+        session = new_session(project_id, "combined")
+        try:
+            self.project_path = save_session(target, session)
+        except Exception as exc:
+            self._set_status("Project create failed", "danger")
+            self._notify(f"Project create failed: {exc}", "danger", timeout_ms=0)
+            return
+        self.api.session = session
+        self.api.workdir = str(self.project_path)
+        self._control_recording_dir = None
         self._sync_project_badge()
         self._set_status("Project created", "success")
-        self._append_log(f"project: created {project_id}")
+        self._notify("Project created", "success")
+        self._append_log(f"project: created {self.project_path}")
         self._render_current_stage()
 
     def _select_project(self) -> None:
@@ -364,6 +381,7 @@ class ControlWindow(QMainWindow):
             return
         self.project_path = session_path(Path(path))
         self.api.workdir = str(self.project_path)
+        self._control_recording_dir = None
         self._sync_project_badge()
         self._set_status("Project selected", "success")
         self._notify("Project selected", "success")
@@ -373,7 +391,6 @@ class ControlWindow(QMainWindow):
     def _save_project(self) -> None:
         if self.api.session is None:
             self._new_project()
-        if self.api.session is None:
             return
         target = self.project_path
         if target is None:
@@ -428,7 +445,6 @@ class ControlWindow(QMainWindow):
             self._acknowledge_camera_frame()
         self._clear_layout(self.action_box_layout)
         self._clear_layout(self.main_layout)
-        self._clear_layout(self.settings_layout)
         self._clear_layout(self.channel_manager_layout)
         self._clear_layout(self.results_layout)
         self._clear_layout(self.action_layout)
@@ -445,7 +461,6 @@ class ControlWindow(QMainWindow):
             self._ensure_fluigent_availability()
         self._render_action_box(stage)
         self._render_main(stage)
-        self._render_settings(stage)
         self._render_channel_manager(stage)
         self._render_results(stage)
         self._render_action(stage)
@@ -472,7 +487,7 @@ class ControlWindow(QMainWindow):
         action_layout.addWidget(command_row)
         self.action_box_layout.addWidget(action_box)
 
-    def _render_main(self, _stage: Stage) -> None:
+    def _render_main(self, stage: Stage) -> None:
         display = QWidget()
         display.setObjectName("MainDisplay")
         layout = QHBoxLayout(display)
@@ -485,13 +500,20 @@ class ControlWindow(QMainWindow):
         self.plot_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         layout.addWidget(self.plot_panel, 1)
 
+        preview_column = QWidget()
+        preview_layout = QVBoxLayout(preview_column)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(8)
+        if self._stage_uses_camera(stage) and self._project_ready():
+            preview_layout.addWidget(self._camera_selector_row())
         self.preview = PreviewDisplay()
         self.preview.frame_painted.connect(self._acknowledge_camera_frame)
         self.preview.setObjectName("CameraPreview")
         self.preview.setMinimumSize(420, PREVIEW_MIN_HEIGHT)
         self.preview.setMaximumHeight(PREVIEW_MAX_HEIGHT)
         self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        layout.addWidget(self.preview, 1)
+        preview_layout.addWidget(self.preview)
+        layout.addWidget(preview_column, 1)
 
         if self._latest_snapshot is not None:
             self.plot_panel.update_from_snapshot(self._latest_snapshot)
@@ -692,24 +714,6 @@ class ControlWindow(QMainWindow):
             False,
         )
 
-    def _render_settings(self, stage: Stage) -> None:
-        if self._stage_uses_camera(stage) and not self._project_ready():
-            label = QLabel("Create or select a project to start camera setup.")
-            label.setObjectName("StageSummary")
-            self.settings_layout.addWidget(label)
-            return
-        if self._stage_uses_camera(stage):
-            self.settings_layout.addWidget(self._camera_selector_row())
-        params = self._main_settings(stage)
-        if params:
-            self.settings_layout.addWidget(self._param_table(params))
-        if stage.id == "corrections":
-            self.settings_layout.addWidget(self._correction_matrix_widget())
-            apply_button = ui.button("Apply All Corrections", variant="primary", size="inline")
-            apply_button.clicked.connect(self._apply_all_corrections)
-            apply_button.setEnabled(self._fluigent_ready())
-            self.settings_layout.addWidget(apply_button)
-
     def _render_channel_manager(self, stage: Stage) -> None:
         if self.channel_manager_panel is not None:
             self.channel_manager_panel.setVisible(self._stage_uses_fluidics(stage))
@@ -817,12 +821,15 @@ class ControlWindow(QMainWindow):
         return [self._param_by_name(name) for name in names]
 
     def _param_table(self, params: list[Param]) -> QTableWidget:
-        table = QTableWidget(len(params), 2)
+        rows = max(1, (len(params) + 1) // 2)
+        table = QTableWidget(rows, 4)
         table.setObjectName("RawConfigTable")
-        table.setHorizontalHeaderLabels(("Parameter", "Value"))
+        table.setHorizontalHeaderLabels(("Parameter", "Value", "Parameter", "Value"))
         table.verticalHeader().hide()
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
@@ -830,11 +837,13 @@ class ControlWindow(QMainWindow):
         table.setShowGrid(True)
 
         self._syncing_table = True
-        for row, param in enumerate(params):
+        for index, param in enumerate(params):
+            row = index // 2
+            column = 0 if index % 2 == 0 else 2
             key = QTableWidgetItem(param.label)
             key.setFlags(key.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            table.setItem(row, 0, key)
-            table.setCellWidget(row, 1, self._param_editor(param))
+            table.setItem(row, column, key)
+            table.setCellWidget(row, column + 1, self._param_editor(param))
         self._syncing_table = False
 
         table.resizeRowsToContents()
@@ -856,11 +865,29 @@ class ControlWindow(QMainWindow):
         if video_rows:
             self.results_layout.addWidget(_video_table(video_rows))
 
-        rows = self._result_rows()
-        self.results_layout.addWidget(_field_table(rows))
-
     def _render_action(self, stage: Stage) -> None:
-        params = self._stage_params(stage)
+        params = self._stage_params(stage) if self._action_show_all_params else self._main_settings(stage)
+        if not params:
+            params = self._stage_params(stage)
+
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
+        title = QLabel("Parameters")
+        title.setObjectName("FieldLabel")
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+        if stage.id == "corrections":
+            apply_button = ui.button("Apply All Corrections", variant="primary", size="inline")
+            apply_button.clicked.connect(self._apply_all_corrections)
+            apply_button.setEnabled(self._fluigent_ready())
+            header_layout.addWidget(apply_button)
+        expand = ui.button("-" if self._action_show_all_params else "+", size="inline")
+        expand.clicked.connect(self._toggle_action_params)
+        header_layout.addWidget(expand)
+        self.action_layout.addWidget(header)
+
         if not params:
             label = QLabel("No editable parameters for this section.")
             label.setObjectName("StageSummary")
@@ -869,6 +896,10 @@ class ControlWindow(QMainWindow):
 
         self.action_table = self._param_table(params)
         self.action_layout.addWidget(self.action_table)
+
+    def _toggle_action_params(self) -> None:
+        self._action_show_all_params = not self._action_show_all_params
+        self._render_current_stage()
 
     def _render_log(self) -> None:
         log = QLabel("\n".join(self.log_entries[-80:]))
@@ -1009,6 +1040,8 @@ class ControlWindow(QMainWindow):
             return
         self._latest_pipeline_event = None
         self._clear_pipeline_confirmation()
+        if stage.id == "runs":
+            self._control_recording_dir = None
         if self._run("run_protocol", self._protocol_run_settings(stage), refresh=False) is None:
             self._render_current_stage()
             return
@@ -1066,8 +1099,12 @@ class ControlWindow(QMainWindow):
     def _recording_settings(self, run_label: str) -> dict[str, Any]:
         if self.project_path is None:
             return {}
+        if self._control_recording_dir is None:
+            self._control_recording_dir = (
+                self.project_path / "media" / "control" / f"control_{time.strftime('%Y%m%d_%H%M%S')}"
+            )
         return {
-            "recording_root": str(self.project_path / "media" / "control"),
+            "recording_root": str(self._control_recording_dir),
             "recording_label": run_label,
         }
 
@@ -1703,12 +1740,18 @@ class ControlWindow(QMainWindow):
 
         if not file_ids:
             return
+        item_id = _recording_item_id(recording)
+        existing_item = _find_session_item(self.api.session.items, item_id)
+        item_files = list(existing_item.files if existing_item is not None else ())
+        for file_id in file_ids:
+            if file_id not in item_files:
+                item_files.append(file_id)
         item = SessionItem(
-            id=_recording_item_id(recording),
+            id=item_id,
             project_type="control_acquisition",
             engine=self.api.engine.id,
             settings={"recording_label": str(recording.get("recording_id") or recording.get("video_prefix") or "")},
-            files=tuple(file_ids),
+            files=tuple(item_files),
             metadata=_recording_item_metadata(recording),
         )
         items = _upsert_session_item(list(self.api.session.items), item)
@@ -1764,32 +1807,6 @@ class ControlWindow(QMainWindow):
         if last_recording is not None:
             recordings.append(last_recording.to_dict())
         return recordings
-
-    def _result_rows(self) -> list[tuple[str, str]]:
-        rows: list[tuple[str, str]] = []
-        if self.last_result is not None:
-            for stat in self.last_result.result_set.stats:
-                value = f"{stat.value} {stat.unit}".strip()
-                rows.append((stat.name.replace("_", " ").title(), value))
-        metadata = self.last_metadata
-        for key in (
-            "action",
-            "connected",
-            "simulated",
-            "camera_connected",
-            "camera_live",
-            "camera_fps",
-            "recording_active",
-            "pipeline_state",
-            "queued_pipeline_events",
-            "camera_message",
-            "fluigent_sdk_message",
-        ):
-            if key in metadata:
-                rows.append((key.replace("_", " ").title(), _display_value(metadata[key])))
-        if not rows:
-            rows.append(("Status", "No results yet"))
-        return rows
 
     def _camera_status_text(self) -> str:
         metadata = self.last_metadata
@@ -2567,29 +2584,6 @@ class PreviewDisplay(QWidget):
         self.frame_painted.emit()
 
 
-def _field_table(rows: list[tuple[str, str]]) -> QTableWidget:
-    table = QTableWidget(len(rows), 2)
-    table.setObjectName("RawConfigTable")
-    table.setHorizontalHeaderLabels(("Field", "Value"))
-    table.verticalHeader().hide()
-    table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-    table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-    table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
-    table.setShowGrid(True)
-    for row, (field, value) in enumerate(rows):
-        key = QTableWidgetItem(field)
-        key.setFlags(key.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        val = QTableWidgetItem(value)
-        val.setFlags(val.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        table.setItem(row, 0, key)
-        table.setItem(row, 1, val)
-    table.resizeRowsToContents()
-    _fit_table_height(table)
-    return table
-
-
 def _video_table(rows: list[dict[str, str]]) -> QTableWidget:
     columns = (
         ("video", "Video"),
@@ -2701,9 +2695,21 @@ def _session_file_id(prefix: str, path: str, files: list[SessionFile]) -> str:
 
 
 def _recording_item_id(recording: dict[str, Any]) -> str:
-    source = str(recording.get("recording_id") or recording.get("video_prefix") or Path(str(recording.get("video_path") or "")).stem)
+    source = str(
+        Path(str(recording.get("report_dir") or "")).name
+        or recording.get("recording_id")
+        or recording.get("video_prefix")
+        or Path(str(recording.get("video_path") or "")).stem
+    )
     base = "acq-" + "".join(ch.lower() if ch.isalnum() else "-" for ch in source).strip("-")
     return base or "acq-recording"
+
+
+def _find_session_item(items: tuple[SessionItem, ...], item_id: str) -> SessionItem | None:
+    for item in items:
+        if item.id == item_id:
+            return item
+    return None
 
 
 def _upsert_session_file(files: list[SessionFile], stored: SessionFile) -> list[SessionFile]:

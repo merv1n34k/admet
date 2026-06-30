@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from admet.core.engine import EngineResult
 from admet.core.schema import ResultSet
@@ -81,19 +82,20 @@ class FakeControlBackend:
 
 
 class RecordingSessionTests(unittest.TestCase):
-    def test_start_and_stop_recording_writes_summary(self):
+    def test_start_and_stop_recording_writes_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
+            report_dir = Path(tmpdir) / "control_20260701_120000"
             camera = FakeCameraRecorder()
             control = FakeControlBackend()
             session = RecordingSession(
-                tmpdir,
+                report_dir,
                 camera,
                 control,
-                recording_label="run1",
                 writer_factory=FakeWriter,
             )
 
             started = session.start_recording(
+                "set01_rep01",
                 width=640,
                 height=240,
                 fps=120.0,
@@ -102,10 +104,11 @@ class RecordingSessionTests(unittest.TestCase):
             stopped = session.stop_recording()
 
             report_dir = session.report_dir
-            summary = json.loads((report_dir / "summary.json").read_text(encoding="utf-8"))
+            metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
 
-        self.assertTrue(started.video_prefix.startswith("run1_"))
+        self.assertTrue(started.video_prefix.startswith("set01_rep01_"))
         self.assertEqual(started.fluidics_csv, str(report_dir / "fluidics" / f"{started.video_prefix}.csv"))
+        self.assertEqual(report_dir.name, "control_20260701_120000")
         self.assertEqual(camera.start_args, (10, None))
         self.assertEqual(control.actions[0][0], "start_recording")
         self.assertEqual(Path(control.actions[0][1]["fluidics_dir"]).name, "fluidics")
@@ -115,24 +118,25 @@ class RecordingSessionTests(unittest.TestCase):
         self.assertEqual(stopped.converted_fps, 120.0)
         self.assertGreater(stopped.acquisition_fps, 0.0)
         self.assertEqual(Path(stopped.video_path).name, f"{started.video_prefix}.avi")
-        self.assertEqual(summary["recording_count"], 1)
-        self.assertEqual(summary["recordings"][0]["video_prefix"], started.video_prefix)
-        self.assertEqual(summary["recordings"][0]["converted_fps"], 120.0)
-        self.assertGreater(summary["recordings"][0]["acquisition_fps"], 0.0)
+        self.assertEqual(metadata["recording_count"], 1)
+        self.assertEqual(metadata["recordings"][0]["video_prefix"], started.video_prefix)
+        self.assertEqual(metadata["recordings"][0]["converted_fps"], 120.0)
+        self.assertGreater(metadata["recordings"][0]["acquisition_fps"], 0.0)
 
     def test_camera_auto_stop_finalizes_full_session(self):
         with tempfile.TemporaryDirectory() as tmpdir:
+            report_dir = Path(tmpdir) / "control_20260701_120000"
             camera = FakeCameraRecorder()
             control = FakeControlBackend()
             session = RecordingSession(
-                tmpdir,
+                report_dir,
                 camera,
                 control,
-                recording_label="run1",
                 writer_factory=FakeWriter,
             )
 
             session.start_recording(
+                "set01_rep01",
                 width=640,
                 height=240,
                 fps=120.0,
@@ -141,26 +145,30 @@ class RecordingSessionTests(unittest.TestCase):
             camera.complete_from_camera_limit()
 
             report_dir = session.report_dir
-            summary = json.loads((report_dir / "summary.json").read_text(encoding="utf-8"))
+            metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
 
         self.assertIsNone(session.current)
         self.assertEqual(control.actions[0][0], "start_recording")
         self.assertEqual(control.actions[1][0], "stop_recording")
-        self.assertEqual(summary["recording_count"], 1)
-        self.assertEqual(summary["recordings"][0]["frames_recorded"], 5)
-        self.assertEqual(summary["recordings"][0]["frames_written"], 7)
+        self.assertEqual(metadata["recording_count"], 1)
+        self.assertEqual(metadata["recordings"][0]["frames_recorded"], 5)
+        self.assertEqual(metadata["recordings"][0]["frames_written"], 7)
 
     def test_recording_artifact_registers_video_csv_and_acquisition_item(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project = Path(tmpdir) / "study.admetp"
             session = save_session(project, new_session("study", "combined"))
-            acq_dir = session / "media" / "control" / "set01_rep02_20260701_120000"
+            acq_dir = session / "media" / "control" / "control_20260701_120000"
             video_path = acq_dir / "video" / "set01_rep02_20260701_120000.avi"
             csv_path = acq_dir / "fluidics" / "set01_rep02_20260701_120000.csv"
+            second_video_path = acq_dir / "video" / "set01_rep03_20260701_120030.avi"
+            second_csv_path = acq_dir / "fluidics" / "set01_rep03_20260701_120030.csv"
             video_path.parent.mkdir(parents=True)
             csv_path.parent.mkdir(parents=True)
             video_path.write_bytes(b"AVI")
             csv_path.write_text("timestamp,elapsed_s\n", encoding="utf-8")
+            second_video_path.write_bytes(b"AVI")
+            second_csv_path.write_text("timestamp,elapsed_s\n", encoding="utf-8")
 
             window = ControlWindow.__new__(ControlWindow)
             window.api = SimpleNamespace(
@@ -183,17 +191,70 @@ class RecordingSessionTests(unittest.TestCase):
                     "acquisition_fps": 118.5,
                 }
             )
+            window._store_recording_artifact(
+                {
+                    "recording_id": "set01_rep03_20260701_120030",
+                    "report_dir": str(acq_dir),
+                    "video_path": str(second_video_path),
+                    "fluidics_csv": str(second_csv_path),
+                    "width": 640,
+                    "height": 240,
+                    "converted_fps": 120.0,
+                    "acquisition_fps": 117.5,
+                }
+            )
 
             saved = load_session(session)
 
-        roles = {file.role: file for file in saved.files}
-        self.assertIn("control_video", roles)
-        self.assertIn("control_fluidics_csv", roles)
-        self.assertEqual(roles["control_video"].path, "media/control/set01_rep02_20260701_120000/video/set01_rep02_20260701_120000.avi")
-        self.assertEqual(roles["control_fluidics_csv"].path, "media/control/set01_rep02_20260701_120000/fluidics/set01_rep02_20260701_120000.csv")
+        video_files = [file for file in saved.files if file.role == "control_video"]
+        csv_files = [file for file in saved.files if file.role == "control_fluidics_csv"]
+        self.assertEqual(len(video_files), 2)
+        self.assertEqual(len(csv_files), 2)
+        self.assertIn(
+            "media/control/control_20260701_120000/video/set01_rep02_20260701_120000.avi",
+            {file.path for file in video_files},
+        )
+        self.assertIn(
+            "media/control/control_20260701_120000/fluidics/set01_rep02_20260701_120000.csv",
+            {file.path for file in csv_files},
+        )
         self.assertEqual(len(saved.items), 1)
         self.assertEqual(saved.items[0].project_type, "control_acquisition")
-        self.assertEqual(set(saved.items[0].files), {roles["control_video"].id, roles["control_fluidics_csv"].id})
+        self.assertEqual(len(saved.items[0].files), 4)
+
+    def test_new_project_uses_selected_path_name_and_saves_manifest(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "study.admetp"
+            window = ControlWindow.__new__(ControlWindow)
+            window.api = SimpleNamespace(session=None, workdir=None)
+            window.project_path = None
+            window.project_badge = None
+            window._set_status = lambda *_args: None
+            window._notify = lambda *_args, **_kwargs: None
+            window._append_log = lambda _message: None
+            window._render_current_stage = lambda: None
+
+            selected_paths = []
+
+            def select_path(_parent, _title, suggested, _filter):
+                selected_paths.append(Path(suggested).name)
+                return str(target), ""
+
+            with patch(
+                "admet.ui.control.window.QFileDialog.getSaveFileName",
+                side_effect=select_path,
+            ):
+                window._new_project()
+
+            saved = load_session(target)
+            manifest_exists = (target / "manifest.json").exists()
+
+        self.assertEqual(window.api.session.project_id, "study")
+        self.assertEqual(saved.project_id, "study")
+        self.assertEqual(window.project_path, target)
+        self.assertEqual(window.api.workdir, str(target))
+        self.assertTrue(manifest_exists)
+        self.assertRegex(selected_paths[0], r"^admet_\d{8}_\d{6}\.admetp$")
 
 
 if __name__ == "__main__":
