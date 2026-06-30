@@ -3,9 +3,10 @@
 from .acquisition import AcquisitionThread, ChannelStats, DataSnapshot
 from .channels import ChannelManager, ChannelState
 from .csv_logger import CsvLogger
-from .hardware import HardwareManager, HardwareState
+from .hardware import FluigentConnectionError, HardwareManager, HardwareState
 from .sdk import (
     FluigentSDK,
+    FluigentSDKError,
     FluigentSDKUnavailableError,
     PressureChannelInfo,
     SDKAvailability,
@@ -20,7 +21,9 @@ __all__ = [
     "ChannelStats",
     "CsvLogger",
     "DataSnapshot",
+    "FluigentConnectionError",
     "FluigentSDK",
+    "FluigentSDKError",
     "FluigentSDKUnavailableError",
     "HardwareManager",
     "HardwareState",

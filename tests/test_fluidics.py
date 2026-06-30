@@ -10,6 +10,7 @@ from admet.engines.control.fluidics import (
     AcquisitionThread,
     ChannelManager,
     CsvLogger,
+    FluigentConnectionError,
     FluigentSDK,
     FluigentSDKUnavailableError,
     HardwareManager,
@@ -35,6 +36,9 @@ class FakeFluidicsSDK:
             SensorChannelInfo(1, 1, 21, 1, "sensor", "Flow_M_dual", smin=0.0, smax=40.0),
         ]
         self.initialized = False
+
+    def detect_instruments(self):
+        return [{"serial": 1, "type": "LineUP"}]
 
     def create_simulated_instrument(self, instr_type, serial, firmware, config):
         self.calls.append(("create_sim", instr_type, serial, firmware, list(config)))
@@ -137,6 +141,27 @@ class HardwareManagerTests(unittest.TestCase):
     def test_calibrate_requires_connection(self):
         with self.assertRaises(RuntimeError):
             HardwareManager(FakeFluidicsSDK()).calibrate(0)
+
+    def test_missing_real_instrument_does_not_block_later_simulated_connect(self):
+        class NoInstrumentSDK(FakeFluidicsSDK):
+            def detect_instruments(self):
+                return []
+
+        sdk = NoInstrumentSDK()
+        manager = HardwareManager(sdk)
+
+        with self.assertRaises(FluigentConnectionError):
+            manager.connect(simulated=False)
+
+        self.assertFalse(manager.connected)
+        self.assertFalse(manager.state.simulated)
+        self.assertNotIn(("init", None), sdk.calls)
+
+        state = manager.connect(simulated=True)
+
+        self.assertTrue(state.connected)
+        self.assertTrue(state.simulated)
+        self.assertIn(("init", None), sdk.calls)
 
 
 class ChannelManagerTests(unittest.TestCase):

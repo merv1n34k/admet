@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,7 +20,6 @@ class CameraAvailability:
     camera_count: int = 0
     cameras: tuple[str, ...] = ()
     transport_layers: tuple[str, ...] = ()
-    pylon_camemu: str = ""
     pylon_module_loaded: bool = False
     message: str = ""
     error_type: str = ""
@@ -50,14 +48,8 @@ class Camera:
             log.debug("Camera enumeration failed: %s", exc)
             return []
 
-    def preflight(self, pylon_camemu: str | None = None) -> CameraAvailability:
+    def preflight(self) -> CameraAvailability:
         module_was_loaded = self._pylon is not None
-        previous_camemu = os.environ.get("PYLON_CAMEMU", "")
-        changed_after_load = False
-        if pylon_camemu is not None and pylon_camemu.strip():
-            changed_after_load = module_was_loaded and pylon_camemu.strip() != previous_camemu
-            os.environ["PYLON_CAMEMU"] = pylon_camemu.strip()
-        active_camemu = os.environ.get("PYLON_CAMEMU", "")
         try:
             pylon = self._pylon_module()
             factory = pylon.TlFactory.GetInstance()
@@ -67,7 +59,6 @@ class Camera:
             return CameraAvailability(
                 pypylon_available=False,
                 refresh_ok=False,
-                pylon_camemu=active_camemu,
                 pylon_module_loaded=module_was_loaded,
                 message=str(exc.__cause__ or exc),
                 error_type=type(exc.__cause__ or exc).__name__,
@@ -78,15 +69,12 @@ class Camera:
             message = f"{camera_count} Basler camera(s) detected."
         else:
             message = "No Basler cameras are currently enumerated; refresh after attaching one."
-        if changed_after_load:
-            message = f"{message} Restart the app if camera driver environment changed."
         return CameraAvailability(
             pypylon_available=True,
             refresh_ok=True,
             camera_count=camera_count,
             cameras=cameras,
             transport_layers=transport_layers,
-            pylon_camemu=active_camemu,
             pylon_module_loaded=self._pylon is not None,
             message=message,
         )

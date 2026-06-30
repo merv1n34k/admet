@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 
 from admet.core.api import AdmetAPI
@@ -23,6 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    try:
+        _main(argv)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        return
+
+
+def _main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
 

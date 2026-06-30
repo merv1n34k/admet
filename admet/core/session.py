@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 PROJECT_EXTENSION = ".admetp"
-SCHEMA_VERSION = 1
+MANIFEST_FILENAME = "manifest.json"
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,6 @@ class AdmetSession:
     caches: tuple[SessionCache, ...] = ()
     items: tuple[SessionItem, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
-    schema_version: int = SCHEMA_VERSION
     created_at: str = ""
     updated_at: str = ""
 
@@ -56,26 +56,22 @@ class AdmetSession:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AdmetSession:
-        schema_version = data.get("schema_version")
-        if schema_version != SCHEMA_VERSION:
-            raise ValueError(f"unsupported .admetp schema version: {schema_version!r}")
         session = cls(
-            project_id=data["project_id"],
-            project_type=data["project_type"],
-            files=tuple(SessionFile(**item) for item in data.get("files", ())),
-            caches=tuple(SessionCache(**item) for item in data.get("caches", ())),
+            project_id=str(data.get("project_id") or data.get("id") or "project"),
+            project_type=str(data.get("project_type") or "combined"),
+            files=tuple(
+                _session_file_from_dict(item, index)
+                for index, item in enumerate(data.get("files", ()), start=1)
+            ),
+            caches=tuple(
+                _session_cache_from_dict(item, index)
+                for index, item in enumerate(data.get("caches", ()), start=1)
+            ),
             items=tuple(
-                SessionItem(
-                    **{
-                        **item,
-                        "files": tuple(item.get("files", ())),
-                        "caches": tuple(item.get("caches", ())),
-                    }
-                )
-                for item in data.get("items", ())
+                _session_item_from_dict(item, index)
+                for index, item in enumerate(data.get("items", ()), start=1)
             ),
             metadata=dict(data.get("metadata", {})),
-            schema_version=schema_version,
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
         )
@@ -106,31 +102,66 @@ def new_session(
 
 def save_session(path: str | Path, session: AdmetSession) -> Path:
     target = session_path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "media").mkdir(exist_ok=True)
+    (target / "cache").mkdir(exist_ok=True)
     session = session.touch()
+    session = _relativize_session_paths(session, target)
     validate_session(session)
-    with target.open("w", encoding="utf-8") as handle:
+    with _manifest_path(target).open("w", encoding="utf-8") as handle:
         json.dump(session.to_dict(), handle, indent=2, sort_keys=True)
     return target
 
 
 def load_session(path: str | Path) -> AdmetSession:
-    with session_path(path).open("r", encoding="utf-8") as handle:
+    with _manifest_path(path).open("r", encoding="utf-8") as handle:
         return AdmetSession.from_dict(json.load(handle))
 
 
 def session_path(path: str | Path) -> Path:
     target = Path(path)
+    if target.name == MANIFEST_FILENAME:
+        target = target.parent
     if target.suffix != PROJECT_EXTENSION:
         target = target.with_suffix(PROJECT_EXTENSION)
     return target
 
 
-def resolve_session_path(project_path: str | Path, stored_path: str) -> Path:
+def resolve_session_path(
+    project_path: str | Path,
+    stored_path: str,
+    *,
+    media_root: str | Path | None = None,
+) -> Path:
     path = Path(stored_path)
     if path.is_absolute():
         return path
-    return session_path(project_path).parent / path
+    root = Path(media_root) if media_root is not None else session_path(project_path)
+    return root / path
+
+
+def missing_files(
+    session: AdmetSession,
+    project_path: str | Path,
+    *,
+    media_root: str | Path | None = None,
+) -> list[tuple[SessionFile, Path]]:
+    missing: list[tuple[SessionFile, Path]] = []
+    for file in session.files:
+        resolved = resolve_session_path(project_path, file.path, media_root=media_root)
+        if not resolved.exists():
+            missing.append((file, resolved))
+    return missing
+
+
+def content_cache_key(file_path: str | Path, settings: dict[str, Any] | None = None) -> str:
+    digest = hashlib.sha256()
+    with Path(file_path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    digest.update(b"\0")
+    digest.update(json.dumps(settings or {}, sort_keys=True, default=str).encode("utf-8"))
+    return digest.hexdigest()
 
 
 def validate_session(session: AdmetSession) -> None:
@@ -154,6 +185,81 @@ def validate_session(session: AdmetSession) -> None:
         missing_caches = set(item.caches) - cache_ids
         if missing_caches:
             raise ValueError(f"item {item.id!r} references unknown caches: {sorted(missing_caches)!r}")
+
+
+def _manifest_path(path: str | Path) -> Path:
+    return session_path(path) / MANIFEST_FILENAME
+
+
+def _session_file_from_dict(data: dict[str, Any], index: int) -> SessionFile:
+    return SessionFile(
+        id=str(data.get("id") or f"file-{index}"),
+        path=str(data.get("path") or ""),
+        role=str(data.get("role") or "media"),
+        media_type=str(data.get("media_type") or ""),
+        metadata=dict(data.get("metadata", {})),
+    )
+
+
+def _session_cache_from_dict(data: dict[str, Any], index: int) -> SessionCache:
+    return SessionCache(
+        id=str(data.get("id") or f"cache-{index}"),
+        path=str(data.get("path") or ""),
+        engine=str(data.get("engine") or ""),
+        file_id=str(data.get("file_id") or ""),
+        metadata=dict(data.get("metadata", {})),
+    )
+
+
+def _session_item_from_dict(data: dict[str, Any], index: int) -> SessionItem:
+    return SessionItem(
+        id=str(data.get("id") or f"item-{index}"),
+        project_type=str(data.get("project_type") or "combined"),
+        engine=str(data.get("engine") or ""),
+        settings=dict(data.get("settings", {})),
+        files=tuple(data.get("files", ())),
+        caches=tuple(data.get("caches", ())),
+        metadata=dict(data.get("metadata", {})),
+    )
+
+
+def _relativize_session_paths(session: AdmetSession, root: Path) -> AdmetSession:
+    root = root.resolve()
+    return replace(
+        session,
+        files=tuple(
+            replace(file, path=_relativize_path(file.path, root, metadata=file.metadata))
+            for file in session.files
+        ),
+        caches=tuple(
+            replace(cache, path=_relativize_path(cache.path, root, metadata=cache.metadata))
+            for cache in session.caches
+        ),
+    )
+
+
+def _relativize_path(path: str, root: Path, *, metadata: dict[str, Any]) -> str:
+    if not path:
+        return path
+    stored = Path(path)
+    if not stored.is_absolute():
+        return stored.as_posix()
+    try:
+        return stored.resolve().relative_to(root).as_posix()
+    except ValueError:
+        if _allows_external_path(metadata):
+            return str(stored)
+        raise ValueError(
+            f"absolute path outside project bundle requires metadata.external=true: {path}"
+        ) from None
+
+
+def _allows_external_path(metadata: dict[str, Any]) -> bool:
+    return bool(
+        metadata.get("external")
+        or metadata.get("external_media")
+        or metadata.get("nas")
+    )
 
 
 def _unique_ids(label: str, values) -> set[str]:

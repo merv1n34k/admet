@@ -10,6 +10,13 @@ STABILITY_WINDOW_SAMPLES = int(STABILITY_DURATION_S / (ACQUISITION_INTERVAL_MS /
 
 PIPELINE_TICK_MS = 200
 
+FLUIDIC_CHANNELS = (
+    ("oil_l", "Oil L", "IPA", 2.25, 0.0, 0.0),
+    ("cells_m", "Cells M", "H2O", 1.0, 0.0, 0.0),
+    ("beads_m", "Beads M", "H2O", 1.0, 0.0, 0.0),
+)
+FLUIDIC_CHANNEL_LABELS = tuple(label for _key, label, *_rest in FLUIDIC_CHANNELS)
+
 SIM_INSTR_TYPE = 4
 SIM_INSTRUMENTS = [
     {"serial": 1001, "config": [1, 100, 0, 5, 7, 0, 0, 0, 0, 0]},
@@ -22,16 +29,8 @@ SENSOR_REAL_SMAX = {
     "Flow_M": 80.0,
 }
 
-PRESSURE_CHANNEL_NAMES = [
-    "Oil Pressure",
-    "Cells Pressure",
-    "Beads Pressure",
-]
-SENSOR_CHANNEL_NAMES = [
-    "Oil Flow (L)",
-    "Cells Flow (M)",
-    "Beads Flow (M)",
-]
+PRESSURE_CHANNEL_NAMES = list(FLUIDIC_CHANNEL_LABELS)
+SENSOR_CHANNEL_NAMES = list(FLUIDIC_CHANNEL_LABELS)
 
 SENSOR_CALIBRATIONS = {
     "None": 0,
@@ -85,28 +84,45 @@ PIPELINES: dict[str, list[ProtocolStep]] = {
     ],
     "Priming": [
         ProtocolStep(
-            name="Prime Oil",
+            name="Prime Oil L",
             sensor_setpoints={0: 250.0},
             trigger_type="volume",
             trigger_params={"sensor_index": 0, "target_volume_ul": 40.0},
             on_complete="zero",
-            confirm_message="Prime Oil Flow (L) at 250 ul/min for 40 ul. Proceed?",
+            confirm_message="Prime Oil L at 250 uL/min for 40 uL. Proceed?",
         ),
         ProtocolStep(
-            name="Prime Cells",
+            name="Prime Cells M",
             sensor_setpoints={1: 67.0},
             trigger_type="volume",
             trigger_params={"sensor_index": 1, "target_volume_ul": 5.0},
             on_complete="zero",
-            confirm_message="Prime Cells Flow (M) at 67 ul/min for 5 ul. Proceed?",
+            confirm_message="Prime Cells M at 67 uL/min for 5 uL. Proceed?",
         ),
         ProtocolStep(
-            name="Prime Beads",
+            name="Prime Beads M",
             sensor_setpoints={2: 67.0},
             trigger_type="volume",
             trigger_params={"sensor_index": 2, "target_volume_ul": 5.0},
             on_complete="zero",
-            confirm_message="Prime Beads Flow (M) at 67 ul/min for 5 ul. Proceed?",
+            confirm_message="Prime Beads M at 67 uL/min for 5 uL. Proceed?",
+        ),
+    ],
+    "Wash": [
+        ProtocolStep(
+            name="Wash flow phase",
+            sensor_setpoints={0: 250.0, 1: 80.0, 2: 80.0},
+            trigger_type="volume",
+            trigger_params={"sensor_index": 0, "target_volume_ul": 500.0},
+            on_complete="zero",
+            confirm_message="Start wash phase: 250/80/80 uL/min until Oil L dispenses 500 uL?",
+        ),
+        ProtocolStep(
+            name="Confirm wash complete",
+            sensor_setpoints={},
+            trigger_type="time",
+            trigger_params={"duration_s": 0.0},
+            confirm_message="Wash phase complete. Confirm pipeline close.",
         ),
     ],
 }

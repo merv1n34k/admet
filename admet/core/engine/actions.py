@@ -36,6 +36,12 @@ def validate_action_settings(
     if unknown_settings:
         raise KeyError(f"unknown settings: {sorted(unknown_settings)!r}")
 
+    undeclared_settings = set(settings) - set(action.params)
+    if undeclared_settings:
+        raise KeyError(
+            f"settings not declared by action {action.id!r}: {sorted(undeclared_settings)!r}"
+        )
+
     missing_params = set(action.params) - set(by_name)
     if missing_params:
         raise KeyError(f"action {action.id!r} references unknown settings: {sorted(missing_params)!r}")

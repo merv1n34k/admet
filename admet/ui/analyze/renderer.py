@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import replace
 from functools import partial
+from pathlib import Path
 from typing import Any
 
+from admet.core.api import AdmetAPI
 from admet.core.engine import EngineContext, EngineResult
 from admet.core.schema import ParamKind, ParamSchema, ResultRecord, ResultSet
+from admet.core.session import new_session, save_session, session_path
 from admet.core.workflow import Stage, StageControl, StageStatus, StageSurface, Workflow, WorkflowState
 
 
@@ -24,10 +28,79 @@ def render_workflow(
         <style>
         body { background: #f7f8fa; }
         .admet-shell { min-height: 100vh; color: #17202a; font-size: 13px; }
-        .admet-topbar { border-bottom: 1px solid #d9dee7; background: #ffffff; }
-        .admet-sidebar { border-right: 1px solid #d9dee7; background: #ffffff; }
-        .admet-panel { border: 1px solid #d9dee7; background: #ffffff; border-radius: 10px; }
+        .admet-topbar,
+        .admet-panel,
+        .admet-sidebar {
+          border: 1px solid #d7e2ea;
+          background: #ffffff;
+          border-radius: 8px;
+          transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+        }
+        .admet-sidebar { width: 15.5rem; align-self: flex-start; }
+        .admet-surface {
+          background: #f0f5f8;
+          border: 1px solid #d7e2ea;
+          border-radius: 8px;
+          transition: background-color 140ms ease, border-color 140ms ease;
+        }
         .admet-muted { color: #677383; }
+        .admet-project-badge {
+          background: #f0f5f8;
+          border: 1px solid #d7e2ea;
+          border-radius: 8px;
+          padding: 5px 9px;
+          color: #52677a;
+        }
+        .admet-transport {
+          background: #ffffff;
+          border: 0;
+          border-radius: 0;
+          overflow: hidden;
+        }
+        .admet-transport .q-btn {
+          flex: 1 1 0;
+          border-radius: 0;
+          border: 0;
+          background: #ffffff;
+          color: #16212b;
+          min-height: 22px;
+          padding: 0;
+          font-weight: 500;
+          transition: background-color 120ms ease, color 120ms ease;
+        }
+        .admet-transport .q-btn:hover { background: #f0f5f8; }
+        .admet-transport-separator {
+          width: 1px;
+          align-self: stretch;
+          background: #d7e2ea;
+        }
+        .admet-dot {
+          display: inline-block;
+          width: 8px;
+          height: 8px;
+          border-radius: 999px;
+          flex: 0 0 auto;
+          transition: background-color 140ms ease, opacity 140ms ease, transform 140ms ease;
+        }
+        .admet-dot-sm {
+          width: 6px;
+          height: 6px;
+        }
+        .admet-dot-done { background: #1b6b53; }
+        .admet-dot-processing { background: #b7791f; }
+        .admet-dot-error { background: #8b2b2b; }
+        .admet-dot-inactive { background: #8a98a6; }
+        .admet-progress {
+          height: 4px;
+          background: transparent;
+          border-radius: 0;
+          overflow: hidden;
+        }
+        .admet-progress-fill {
+          height: 100%;
+          border-radius: 0;
+          transition: width 220ms ease, background-color 140ms ease;
+        }
         .admet-camera {
           background: #151a21;
           color: #dfe7f1;
@@ -38,28 +111,58 @@ def render_workflow(
           object-fit: contain;
         }
         .admet-camera img { object-fit: contain; }
-        .admet-camera-settings { border-top: 1px solid #d9dee7; background: #ffffff; }
+        .admet-camera-settings { border-top: 1px solid #d7e2ea; background: #ffffff; }
         .admet-action-grid { grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); }
         .admet-action-grid .q-btn { width: 100%; }
-        .admet-toc-button { min-height: 30px; border-radius: 999px; }
+        .admet-toc-row {
+          min-height: 24px;
+          cursor: pointer;
+          border-radius: 6px;
+          transition: background-color 120ms ease, color 120ms ease;
+        }
+        .admet-toc-row:hover { background: #f0f5f8; }
         .admet-shell .q-btn {
           min-height: 28px;
           padding: 2px 8px;
-          border-radius: 999px;
+          border-radius: 8px;
           text-transform: none;
           font-size: 12px;
         }
-        .admet-shell .q-badge { border-radius: 999px; font-size: 10px; padding: 2px 6px; }
         .admet-shell .q-field__control { min-height: 34px; border-radius: 8px; }
         .admet-shell .q-field, .admet-shell .q-checkbox { min-width: 0; }
         .admet-shell .q-checkbox__label { white-space: normal; line-height: 1.2; }
         .admet-shell .q-table th, .admet-shell .q-table td { padding: 4px 8px; }
+        .admet-shell .q-table,
+        .admet-shell .q-table__card {
+          border: 1px solid #d7e2ea;
+          box-shadow: none;
+        }
+        .admet-shell .q-table th {
+          background: #f0f5f8;
+          border-bottom: 1px solid #d7e2ea;
+        }
+        .admet-shell .q-table td {
+          border-color: #d7e2ea;
+          border-bottom: 1px solid #d7e2ea;
+        }
+        .admet-shell .q-table tbody tr:last-child td {
+          border-bottom: 0;
+        }
         .admet-record-table .q-table th,
         .admet-record-table .q-table td {
           white-space: normal;
           overflow-wrap: anywhere;
           word-break: break-word;
           vertical-align: top;
+        }
+        .admet-log {
+          background: #f0f5f8;
+          border: 1px solid #d7e2ea;
+          border-radius: 8px;
+          padding: 8px 10px;
+          color: #52677a;
+          font-family: ui-monospace, Menlo, Consolas, monospace;
+          white-space: pre-wrap;
         }
         </style>
         """
@@ -97,6 +200,7 @@ class CoreWorkflowView:
         }
         self.status = "Ready"
         self.status_kind = "info"
+        self.action_log: list[str] = ["Analyze UI ready."]
         self.last_result: EngineResult | None = None
         self.batch_files: list[dict[str, Any]] = []
         self._selection_drag_start: tuple[int, int] | None = None
@@ -118,18 +222,19 @@ class CoreWorkflowView:
         from nicegui import ui
 
         ui.query("body").classes("m-0")
-        with ui.column().classes("admet-shell w-full gap-0"):
+        with ui.column().classes("admet-shell w-full gap-3 p-3"):
             self._render_topbar()
-            with ui.row().classes("w-full flex-nowrap gap-0 grow"):
-                with ui.column().classes("admet-sidebar w-80 shrink-0 gap-2 p-3"):
+            with ui.row().classes("w-full flex-nowrap gap-3 grow items-start"):
+                with ui.column().classes("admet-sidebar shrink-0 gap-1 p-3"):
                     self._render_workflow_sidebar()
                 with ui.column().classes("grow gap-3 p-3"):
                     stage = self.workflow.current_stage(self.state)
                     for surface in stage.surfaces:
                         self._render_surface(surface)
                     self._render_stage_panel()
-                    self._render_batch_panel()
                     self._render_results_panel()
+                    self._render_action_panel()
+                    self._render_action_log_panel()
 
     def _render_topbar(self) -> None:
         from nicegui import ui
@@ -138,50 +243,84 @@ class CoreWorkflowView:
             with ui.column().classes("gap-0"):
                 ui.label(self.workflow.label).classes("text-base font-semibold")
             with ui.row().classes("items-center gap-2"):
-                ui.badge(self.status_kind.upper()).props(_badge_color(self.status_kind))
+                ui.label(self._project_text()).classes("admet-project-badge text-xs")
+                ui.button("New Project", on_click=self._new_project).props("dense no-caps outline")
+                ui.button("Select Project", on_click=self._select_project).props("dense no-caps outline")
+                ui.button("Save Project", on_click=self._save_project).props("dense no-caps outline")
                 ui.label(self.status).classes("text-sm")
+
+    def _project_text(self) -> str:
+        if isinstance(self.engine, AdmetAPI) and self.engine.session is not None:
+            return f"Project: {self.engine.session.project_id}.admetp"
+        return "Project: none"
+
+    def _new_project(self) -> None:
+        if not isinstance(self.engine, AdmetAPI):
+            self._set_status("No API attached.", "warning")
+            self._refresh()
+            return
+        project_id = f"analyze_{time.strftime('%Y%m%d_%H%M%S')}"
+        self.engine.session = new_session(project_id, "combined")
+        self._set_status("Project created.", "success")
+        self._append_log(f"project: created {project_id}")
+        self._refresh()
+
+    def _select_project(self) -> None:
+        self._set_status("Upload .admetp through the Action Panel file browse.", "warning")
+        self._append_log("project: select requested")
+        self._refresh()
+
+    def _save_project(self) -> None:
+        if not isinstance(self.engine, AdmetAPI):
+            self._set_status("No API attached.", "warning")
+            self._refresh()
+            return
+        if self.engine.session is None:
+            project_id = f"analyze_{time.strftime('%Y%m%d_%H%M%S')}"
+            self.engine.session = new_session(project_id, "combined")
+        workdir = Path(self.engine.workdir or ".")
+        target = session_path(workdir / self.engine.session.project_id)
+        try:
+            save_session(target, self.engine.session)
+        except Exception as exc:
+            self._set_status(f"Project save failed: {exc}", "error")
+            self._append_log(f"project: save failed: {exc}")
+            self._refresh()
+            return
+        self._set_status("Project saved.", "success")
+        self._append_log(f"project: saved {target}")
+        self._refresh()
 
     def _render_workflow_sidebar(self) -> None:
         from nicegui import ui
 
-        ui.label("Workflow").classes("text-sm font-semibold")
+        ui.label("Workflow").classes("text-xs font-semibold admet-muted uppercase")
         for index, stage in enumerate(self.workflow.stages):
             status = self.state.statuses[stage.id]
             selected = index == self.state.index
-            with ui.column().classes("gap-2"):
-                button = ui.button(
-                    stage.label,
-                    icon=_status_icon(status),
-                    on_click=partial(self._activate_index, index),
-                ).props("dense no-caps flat align=left")
-                button.classes(
-                    "admet-toc-button w-full justify-start text-xs"
-                    + (" bg-blue-50 text-blue-800" if selected else "")
-                )
-                with ui.row().classes("items-center gap-1 pl-2 flex-wrap"):
-                    ui.badge(status.value).props(_status_badge(status))
+            status_key = _status_key(status, selected, self.status_kind)
+            with ui.column().classes("gap-1 py-1"):
+                with ui.row().classes("admet-toc-row w-full items-center gap-2").on(
+                    "click",
+                    lambda _event, idx=index: self._activate_index(idx),
+                ):
+                    ui.html(_dot_html(status_key))
+                    ui.label(stage.label).classes(
+                        "text-sm"
+                        + (" font-semibold" if status_key == "processing" else "")
+                        + (" admet-muted" if status_key == "inactive" else "")
+                    )
             if selected:
-                self._render_stage_controls(stage)
-        with ui.row().classes("gap-1 pt-1"):
-            ui.button("Previous", icon="chevron_left", on_click=self._previous_stage).props(
-                "dense no-caps outline"
-            )
-            ui.button("Next", icon="chevron_right", on_click=self._next_stage).props(
-                "dense no-caps outline"
-            )
-
-    def _render_stage_controls(self, stage: Stage) -> None:
-        from nicegui import ui
-
-        controls = stage.controls or self._default_controls(stage)
-        with ui.column().classes("gap-1 pl-2"):
-            for control in controls:
-                props = _button_props(control.variant)
-                ui.button(
-                    control.label,
-                    icon=_control_icon(control),
-                    on_click=partial(self._handle_control, stage, control),
-                ).props(props).classes("w-full justify-start")
+                with ui.column().classes("gap-1 pl-4"):
+                    for sub_index, subsection in enumerate(_stage_subsections(stage)):
+                        sub_status = _subsection_status(status_key, sub_index, 3)
+                        with ui.row().classes("items-center"):
+                            ui.label(subsection).classes(
+                                "text-xs" + (" admet-muted" if sub_status == "inactive" else "")
+                            )
+        with ui.row().classes("gap-1 pt-2"):
+            ui.button("Previous", on_click=self._previous_stage).props("dense no-caps outline")
+            ui.button("Next", on_click=self._next_stage).props("dense no-caps outline")
 
     def _render_surface(self, surface: StageSurface) -> None:
         if surface.kind == "camera":
@@ -439,51 +578,90 @@ class CoreWorkflowView:
 
         stage = self.workflow.current_stage(self.state)
         with ui.column().classes("admet-panel w-full gap-3 p-3"):
-            with ui.row().classes("w-full items-start justify-between"):
-                with ui.column().classes("gap-1"):
-                    ui.label(stage.label).classes("text-base font-semibold")
-                    if stage.description:
-                        ui.label(stage.description).classes("admet-muted")
-                ui.badge(self.state.statuses[stage.id].value).props(
-                    _status_badge(self.state.statuses[stage.id])
-                )
+            self._render_process_bar(stage)
+            with ui.column().classes("gap-1"):
+                ui.label(stage.label).classes("text-xl font-semibold")
+                if stage.description:
+                    ui.label(stage.description).classes("admet-muted")
 
             if stage.instructions:
                 with ui.column().classes("gap-1"):
                     for instruction in stage.instructions:
                         ui.label(instruction).classes("text-sm")
 
+    def _render_process_bar(self, stage: Stage) -> None:
+        from nicegui import ui
+
+        status = self.state.statuses[stage.id]
+        status_key = _status_key(status, True, self.status_kind)
+        progress = self._stage_progress(stage, status_key)
+        with ui.column().classes("admet-surface w-full gap-0 overflow-hidden"):
+            with ui.element("div").classes("admet-progress w-full"):
+                ui.element("div").classes("admet-progress-fill").style(
+                    f"width: {progress:.1f}%; background: {_status_color(status_key)};"
+                )
+            with ui.row().classes("w-full items-center gap-0"):
+                self._render_transport_controls(stage)
+
+    def _render_transport_controls(self, stage: Stage) -> None:
+        from nicegui import ui
+
+        controls: list[tuple[str, Any]] = []
+        controls.extend(
+            (_short_control_label(control.label), partial(self._handle_control, stage, control))
+            for control in (stage.controls or self._default_controls(stage))
+            if not (control.completes and control.action is None)
+        )
+        with ui.row().classes("admet-transport w-full items-stretch gap-0"):
+            for index, (label, callback) in enumerate(controls):
+                if index:
+                    ui.element("div").classes("admet-transport-separator")
+                ui.button(label, on_click=callback).props("dense no-caps flat")
+
+    def _render_action_panel(self) -> None:
+        from nicegui import ui
+
+        stage = self.workflow.current_stage(self.state)
+        with ui.column().classes("admet-panel w-full gap-3 p-3"):
+            ui.label("Action Panel").classes("text-sm font-semibold")
+            if self.workflow.id == "analyze":
+                ui.upload(
+                    label="Browse Files",
+                    multiple=True,
+                    auto_upload=True,
+                    on_upload=self._handle_upload,
+                ).classes("w-full")
+                rows = self.batch_files or [{"name": "No files selected", "size": ""}]
+                ui.table(
+                    columns=[
+                        {"name": "name", "label": "File", "field": "name"},
+                        {"name": "size", "label": "Size", "field": "size"},
+                    ],
+                    rows=rows,
+                    row_key="name",
+                ).classes("admet-record-table w-full").props("wrap-cells dense flat")
+
             if stage.show_settings and stage.settings.params:
-                ui.label("Section Settings").classes("text-sm font-semibold")
-                render_settings(stage.settings, self.values)
+                ui.label("Section Values").classes("text-xs font-semibold admet-muted")
+                render_settings(stage.settings, self.values, columns="auto")
 
             engine_settings = self._unclaimed_engine_settings()
             if engine_settings.params:
-                with ui.expansion("Engine Settings", icon="tune").classes("w-full"):
-                    render_settings(engine_settings, self.values)
+                ui.label("Engine Values").classes("text-xs font-semibold admet-muted")
+                render_settings(engine_settings, self.values, columns="auto")
 
-    def _render_batch_panel(self) -> None:
+            if not stage.settings.params and not engine_settings.params and self.workflow.id != "analyze":
+                ui.label("No editable values for this section.").classes("admet-muted")
+
+    def _render_action_log_panel(self) -> None:
+        import html
+
         from nicegui import ui
 
-        if self.workflow.id != "analyze":
-            return
         with ui.column().classes("admet-panel w-full gap-2 p-3"):
-            ui.label("Batch").classes("text-sm font-semibold")
-            ui.upload(
-                label="Browse Files",
-                multiple=True,
-                auto_upload=True,
-                on_upload=self._handle_upload,
-            ).classes("w-full")
-            rows = self.batch_files or [{"name": "No files selected", "size": ""}]
-            ui.table(
-                columns=[
-                    {"name": "name", "label": "File", "field": "name"},
-                    {"name": "size", "label": "Size", "field": "size"},
-                ],
-                rows=rows,
-                row_key="name",
-            ).classes("w-full")
+            ui.label("Action Log").classes("text-sm font-semibold")
+            lines = [html.escape(line) for line in self.action_log[-80:]]
+            ui.html("<br>".join(lines) or "No actions yet.").classes("admet-log w-full text-xs")
 
     def _render_results_panel(self) -> None:
         from nicegui import ui
@@ -596,6 +774,7 @@ class CoreWorkflowView:
             )
         except Exception as exc:
             self._set_status(f"{action} failed: {exc}", "error")
+            self._append_log(f"{action}: {type(exc).__name__}: {exc}")
             self._notify(str(exc), "negative")
             self._refresh()
             return
@@ -603,6 +782,7 @@ class CoreWorkflowView:
         self.last_result = result
         self._store_stage_result(result)
         self._set_status(f"{action} complete.", "success")
+        self._append_log(f"{action}: complete")
         if complete_after:
             self._complete_current(refresh=False)
         self._refresh()
@@ -624,8 +804,10 @@ class CoreWorkflowView:
         try:
             self.state = self.workflow.complete_current(self.state, confirmed=True)
             self._set_status("Stage complete.", "success")
+            self._append_log("stage: complete")
         except Exception as exc:
             self._set_status(str(exc), "error")
+            self._append_log(f"stage: {type(exc).__name__}: {exc}")
             self._notify(str(exc), "negative")
         if refresh:
             self._refresh()
@@ -634,8 +816,10 @@ class CoreWorkflowView:
         try:
             self.state = self.workflow.skip_current(self.state)
             self._set_status("Stage skipped.", "warning")
+            self._append_log("stage: skipped")
         except Exception as exc:
             self._set_status(str(exc), "error")
+            self._append_log(f"skip: {type(exc).__name__}: {exc}")
             self._notify(str(exc), "negative")
         self._refresh()
 
@@ -688,15 +872,51 @@ class CoreWorkflowView:
             return {}
         return result_set.metadata
 
+    def _workflow_progress(self) -> float:
+        total = max(1, len(self.workflow.stages))
+        done = sum(
+            1
+            for stage in self.workflow.stages
+            if self.state.statuses.get(stage.id) in {StageStatus.COMPLETE, StageStatus.SKIPPED}
+        )
+        current = self.workflow.current_stage(self.state)
+        if self.state.statuses.get(current.id) is StageStatus.ACTIVE:
+            done += 0.55
+        return min(100.0, done / total * 100.0)
+
+    def _stage_progress(self, stage: Stage, status_key: str) -> float:
+        if status_key == "done":
+            return 100.0
+        if status_key in {"inactive", "error"}:
+            return 0.0
+        metadata = self._latest_metadata()
+        if any(surface.kind == "camera" for surface in stage.surfaces):
+            if metadata.get("camera_live"):
+                return 100.0
+            if metadata.get("camera_connected"):
+                return 65.0
+            if metadata.get("camera_count"):
+                return 30.0
+            return 0.0
+        if stage.action and metadata.get("action") == stage.action:
+            return 100.0
+        return 45.0
+
     def _handle_upload(self, event: Any) -> None:
         size = getattr(getattr(event, "content", None), "size", "")
         self.batch_files.append({"name": getattr(event, "name", "upload"), "size": size})
         self._set_status("Batch file added.", "success")
+        self._append_log(f"upload: {getattr(event, 'name', 'upload')}")
         self._refresh()
 
     def _set_status(self, message: str, kind: str) -> None:
         self.status = message
         self.status_kind = kind
+
+    def _append_log(self, message: str) -> None:
+        import time
+
+        self.action_log.append(f"{time.strftime('%H:%M:%S')} {message}")
 
     def _toggle_camera_settings(self) -> None:
         self._show_camera_settings = not self._show_camera_settings
@@ -706,7 +926,7 @@ class CoreWorkflowView:
         try:
             from nicegui import ui
 
-            ui.notify(message, type=kind)
+            ui.notify(message, type=kind, position="bottom-right")
         except Exception:
             return
 
@@ -813,30 +1033,60 @@ def _table_value(value: Any, key: str = "") -> Any:
     return value
 
 
-def _badge_color(kind: str) -> str:
-    return {
-        "success": "color=green",
-        "warning": "color=orange",
-        "error": "color=red",
-    }.get(kind, "color=blue")
+def _stage_subsections(stage: Stage) -> tuple[str, ...]:
+    labels = [surface.title for surface in stage.surfaces if surface.title]
+    labels.extend(param.label for param in stage.settings.params)
+    labels.extend(control.label for control in stage.controls)
+    labels.extend(stage.instructions)
+    return tuple(labels[:3])
 
 
-def _status_badge(status: StageStatus) -> str:
+def _subsection_status(parent_status: str, index: int, count: int) -> str:
+    if parent_status in {"done", "inactive", "error"}:
+        return parent_status
+    if count <= 1:
+        return "processing"
+    if index == 0:
+        return "done"
+    if index == 1:
+        return "processing"
+    return "inactive"
+
+
+def _status_key(status: StageStatus, selected: bool, status_kind: str) -> str:
+    if selected and status_kind == "error":
+        return "error"
+    if status is StageStatus.COMPLETE:
+        return "done"
+    if status is StageStatus.ACTIVE:
+        return "processing"
+    return "inactive"
+
+
+def _status_color(status: str) -> str:
     return {
-        StageStatus.PENDING: "color=grey",
-        StageStatus.ACTIVE: "color=blue",
-        StageStatus.COMPLETE: "color=green",
-        StageStatus.SKIPPED: "color=orange",
+        "done": "#1b6b53",
+        "processing": "#b7791f",
+        "error": "#8b2b2b",
+        "inactive": "#8a98a6",
     }[status]
 
 
-def _status_icon(status: StageStatus) -> str:
-    return {
-        StageStatus.PENDING: "radio_button_unchecked",
-        StageStatus.ACTIVE: "play_arrow",
-        StageStatus.COMPLETE: "check_circle",
-        StageStatus.SKIPPED: "skip_next",
-    }[status]
+def _dot_html(status: str, *, small: bool = False) -> str:
+    size_class = " admet-dot-sm" if small else ""
+    return f'<span class="admet-dot{size_class} admet-dot-{status}"></span>'
+
+
+def _short_control_label(label: str) -> str:
+    replacements = {
+        "Import Ready": "Import",
+        "Matrix Ready": "Matrix",
+        "Run Analysis": "Run",
+        "Review Done": "Done",
+        "Skip Export": "Skip",
+        "Export Done": "Export",
+    }
+    return replacements.get(label, label)
 
 
 def _button_props(variant: str) -> str:

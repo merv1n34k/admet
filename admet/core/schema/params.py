@@ -43,12 +43,15 @@ class Param:
         if self.kind is ParamKind.BOOLEAN and not isinstance(value, bool):
             raise TypeError(f"{self.name} must be a boolean")
         if self.kind is ParamKind.INTEGER:
+            if isinstance(value, bool):
+                raise TypeError(f"{self.name} must be an integer")
             if isinstance(value, float) and value.is_integer():
                 value = int(value)
             if not isinstance(value, int):
                 raise TypeError(f"{self.name} must be an integer")
-        if self.kind is ParamKind.FLOAT and not isinstance(value, int | float):
-            raise TypeError(f"{self.name} must be a number")
+        if self.kind is ParamKind.FLOAT:
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise TypeError(f"{self.name} must be a number")
         if self.kind in {ParamKind.TEXT, ParamKind.PATH} and not isinstance(value, str):
             raise TypeError(f"{self.name} must be text")
         if self.kind is ParamKind.CHOICE and self.options:
@@ -56,7 +59,7 @@ class Param:
             if value not in allowed:
                 raise ValueError(f"{self.name} must be one of {sorted(allowed)!r}")
 
-        if isinstance(value, int | float):
+        if isinstance(value, int | float) and not isinstance(value, bool):
             if self.minimum is not None and value < self.minimum:
                 raise ValueError(f"{self.name} must be >= {self.minimum}")
             if self.maximum is not None and value > self.maximum:

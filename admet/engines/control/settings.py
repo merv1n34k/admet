@@ -1,9 +1,22 @@
 from __future__ import annotations
 
-import os
-
 from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema
-from admet.engines.control.fluidics.config import PIPELINES, SENSOR_CALIBRATIONS
+from admet.engines.control.fluidics.config import (
+    FLUIDIC_CHANNELS,
+    PIPELINES,
+    SENSOR_CALIBRATIONS,
+)
+
+CORRECTION_PARAM_NAMES = tuple(
+    name
+    for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
+    for name in (
+        f"{prefix}_calibration",
+        f"{prefix}_scale",
+        f"{prefix}_offset",
+        f"{prefix}_quadratic",
+    )
+)
 
 
 def merge_schemas(*schemas: ParamSchema) -> ParamSchema:
@@ -25,7 +38,6 @@ def _calibration_options() -> tuple[ParamOption, ...]:
 CAMERA_SETTINGS = ParamSchema(
     (
         Param("camera_index", "Camera Index", ParamKind.INTEGER, default=0, minimum=0),
-        Param("pylon_camemu", "PYLON_CAMEMU", ParamKind.TEXT, default=os.environ.get("PYLON_CAMEMU", "")),
         Param("camera_width", "Width", ParamKind.INTEGER, default=640, minimum=16),
         Param("camera_height", "Height", ParamKind.INTEGER, default=480, minimum=1),
         Param("camera_offset_x", "Offset X", ParamKind.INTEGER, default=0, minimum=0, step=16),
@@ -95,19 +107,30 @@ FLUIGENT_SETTINGS = ParamSchema(
 )
 
 CORRECTION_SETTINGS = ParamSchema(
+    tuple(
+        param
+        for prefix, label, calibration, scale, offset, quadratic in FLUIDIC_CHANNELS
+        for param in (
+            Param(
+                f"{prefix}_calibration",
+                f"{label} Calibration",
+                ParamKind.CHOICE,
+                default=calibration,
+                options=_calibration_options(),
+            ),
+            Param(f"{prefix}_scale", f"{label} Scale", ParamKind.FLOAT, default=scale),
+            Param(f"{prefix}_offset", f"{label} Offset", ParamKind.FLOAT, default=offset),
+            Param(f"{prefix}_quadratic", f"{label} Quadratic", ParamKind.FLOAT, default=quadratic),
+        )
+    )
+)
+
+CHANNEL_CONTROL_SETTINGS = ParamSchema(
     (
-        Param("oil_calibration", "Oil Calibration", ParamKind.CHOICE, default="IPA", options=_calibration_options()),
-        Param("oil_scale_a", "Oil a", ParamKind.FLOAT, default=2.25),
-        Param("oil_scale_b", "Oil b", ParamKind.FLOAT, default=0.0),
-        Param("oil_scale_c", "Oil c", ParamKind.FLOAT, default=0.0),
-        Param("cells_calibration", "Cells Calibration", ParamKind.CHOICE, default="H2O", options=_calibration_options()),
-        Param("cells_scale_a", "Cells a", ParamKind.FLOAT, default=1.0),
-        Param("cells_scale_b", "Cells b", ParamKind.FLOAT, default=0.0),
-        Param("cells_scale_c", "Cells c", ParamKind.FLOAT, default=0.0),
-        Param("beads_calibration", "Beads Calibration", ParamKind.CHOICE, default="H2O", options=_calibration_options()),
-        Param("beads_scale_a", "Beads a", ParamKind.FLOAT, default=1.0),
-        Param("beads_scale_b", "Beads b", ParamKind.FLOAT, default=0.0),
-        Param("beads_scale_c", "Beads c", ParamKind.FLOAT, default=0.0),
+        Param("channel_index", "Channel Index", ParamKind.INTEGER, default=0, minimum=0),
+        Param("channel_flow_ul_min", "Flow", ParamKind.FLOAT, default=0.0, minimum=0.0),
+        Param("channel_pressure_mbar", "Pressure", ParamKind.FLOAT, default=0.0, minimum=0.0),
+        Param("channel_response_s", "Response", ParamKind.INTEGER, default=2, minimum=2, maximum=3600),
     )
 )
 
@@ -123,7 +146,7 @@ RUN_SETTINGS = ParamSchema(
         Param("pipeline_name", "Pipeline", ParamKind.CHOICE, default="Drop-Seq", options=_pipeline_options()),
         Param("set_count", "Sets", ParamKind.INTEGER, default=1, minimum=1),
         Param("replicate_count", "Replicates", ParamKind.INTEGER, default=1, minimum=1),
-        Param("run_volume_ul", "Oil Volume", ParamKind.FLOAT, default=150.0, minimum=0.1),
+        Param("run_volume_ul", "Oil L Volume", ParamKind.FLOAT, default=150.0, minimum=0.1),
         Param("log_dir", "Log Directory", ParamKind.PATH, default="logs"),
         Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
     )
@@ -138,6 +161,7 @@ WASH_SETTINGS = ParamSchema(
 CONTROL_ENGINE_SETTINGS = merge_schemas(
     FLUIGENT_SETTINGS,
     CORRECTION_SETTINGS,
+    CHANNEL_CONTROL_SETTINGS,
     RUN_SETTINGS,
     WASH_SETTINGS,
     PROTOCOL_SETTINGS,

@@ -14,31 +14,31 @@ class _ControlSize:
 
 
 class Theme:
-    BG_BLACK = "#000000"
-    BG_DARK = "#1a1a1a"
-    BG_DARKER = "#141414"
-    BG_MEDIUM = "#222222"
-    BG_RAISED = "#242424"
-    BG_CONTROL = "#2b2b2b"
-    BG_CONTROL_HOVER = "#353535"
-    BG_CONTROL_PRESSED = "#404040"
+    BG_BLACK = "#101820"
+    BG_DARK = "#f7fafc"
+    BG_DARKER = "#edf3f7"
+    BG_MEDIUM = "#edf3f7"
+    BG_RAISED = "#f0f5f8"
+    BG_CONTROL = "#ffffff"
+    BG_CONTROL_HOVER = "#f0f5f8"
+    BG_CONTROL_PRESSED = "#e6eef4"
 
-    TEXT_WHITE = "#d4d4d4"
-    TEXT_MUTED = "#888888"
-    TEXT_SUBTLE = "#666666"
-    TEXT_DISABLED = "#555555"
+    TEXT_WHITE = "#16212b"
+    TEXT_MUTED = "#52677a"
+    TEXT_SUBTLE = "#7b8c9a"
+    TEXT_DISABLED = "#9aa7b2"
 
-    BORDER_COOL = "#333333"
-    BORDER_HOVER = "#444444"
+    BORDER_COOL = "#d7e2ea"
+    BORDER_HOVER = "#a9bac8"
 
-    ACCENT = "#3498db"
-    ACCENT_HOVER = "#2980b9"
-    SUCCESS = "#27ae60"
-    SUCCESS_HOVER = "#2ecc71"
-    DANGER = "#c0392b"
-    DANGER_HOVER = "#e74c3c"
-    WARNING = "#f39c12"
-    WARNING_DARK = "#e67e22"
+    ACCENT = "#225d82"
+    ACCENT_HOVER = "#1b4a68"
+    SUCCESS = "#1b6b53"
+    SUCCESS_HOVER = "#185e49"
+    DANGER = "#8b2b2b"
+    DANGER_HOVER = "#742323"
+    WARNING = "#b7791f"
+    WARNING_DARK = "#9d661a"
 
     FONT_SIZE_SMALL = 11
     FONT_SIZE_BODY = 13
@@ -53,15 +53,15 @@ class Theme:
     GROUP_GAP = SPACE_2
     PANEL_PADDING = SPACE_3
     WINDOW_PADDING = SPACE_4
-    RADIUS = 4
-    SPLITTER_HANDLE_WIDTH = 12
+    RADIUS = 8
+    SPLITTER_HANDLE_WIDTH = 8
 
 
 _SIZES = {
     "inline": _ControlSize(20, Theme.FONT_SIZE_BODY),
-    "default": _ControlSize(22, Theme.FONT_SIZE_BODY),
-    "large": _ControlSize(28, Theme.FONT_SIZE_BODY),
-    "stage": _ControlSize(22, Theme.FONT_SIZE_BODY),
+    "default": _ControlSize(20, Theme.FONT_SIZE_BODY),
+    "large": _ControlSize(24, Theme.FONT_SIZE_BODY),
+    "stage": _ControlSize(20, Theme.FONT_SIZE_BODY),
 }
 
 _SPACING = {
@@ -132,8 +132,10 @@ def text_qss(
 def button_qss(kind: ButtonVariant = "neutral", *, size: ControlSize = "default") -> str:
     bg, hover = _BUTTON_COLORS.get(kind, _BUTTON_COLORS["neutral"])
     token = control_size(size)
+    text = "#ffffff" if kind != "neutral" else Theme.TEXT_WHITE
+    border = bg if kind != "neutral" else Theme.BORDER_COOL
     return (
-        f"QPushButton {{ background-color: {bg}; border: none; color: {Theme.TEXT_WHITE}; "
+        f"QPushButton {{ background-color: {bg}; border: 1px solid {border}; color: {text}; "
         f"border-radius: {Theme.RADIUS}px; padding: 0; font-size: {token.font_size}px; "
         f"font-weight: 600; min-height: {token.height}px; max-height: {token.height}px; }}"
         f"QPushButton:hover {{ background-color: {hover}; }}"
@@ -335,6 +337,183 @@ QMainWindow {{
 QLabel {{
     background: transparent;
 }}
+QFrame#TopPanel,
+QFrame#WorkflowToc {{
+    background: {Theme.BG_CONTROL};
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: {Theme.RADIUS}px;
+}}
+QFrame#MainPanel,
+QFrame#Panel {{
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+}}
+QLabel#AppTitle {{
+    font-size: 20px;
+    font-weight: 650;
+}}
+QLabel#MutedText,
+QLabel#StageSummary {{
+    color: {Theme.TEXT_MUTED};
+}}
+QLabel#FieldLabel {{
+    color: {Theme.TEXT_MUTED};
+    font-weight: 600;
+}}
+QLabel#ChannelName {{
+    color: {Theme.TEXT_WHITE};
+    font-weight: 650;
+}}
+QLabel#ProjectBadge {{
+    background: {Theme.BG_RAISED};
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: {Theme.RADIUS}px;
+    padding: 5px 9px;
+    color: {Theme.TEXT_MUTED};
+}}
+QLabel#StageTitle {{
+    font-size: 24px;
+    font-weight: 650;
+}}
+QLabel#PanelTitle {{
+    font-size: 16px;
+    font-weight: 650;
+}}
+QLabel#TocTitle {{
+    color: {Theme.TEXT_MUTED};
+    font-size: 11px;
+    font-weight: 650;
+}}
+QFrame#TocSection,
+QWidget#TocRow {{
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+}}
+QFrame#InlinePanel {{
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+}}
+QWidget#MainDisplay {{
+    background: transparent;
+}}
+QWidget#ChannelCard {{
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+}}
+QWidget#TocRow:hover {{
+    background: {Theme.BG_RAISED};
+}}
+QLabel#TocStage {{
+    background: transparent;
+    font-size: 13px;
+}}
+QFrame#ProcessBar {{
+    background: {Theme.BG_RAISED};
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: {Theme.RADIUS}px;
+}}
+QFrame#ProtocolStatus {{
+    background: {Theme.BG_CONTROL};
+    border: 0;
+    border-bottom: 1px solid {Theme.BORDER_COOL};
+    border-top-left-radius: {Theme.RADIUS}px;
+    border-top-right-radius: {Theme.RADIUS}px;
+}}
+QLabel#ProtocolStatusLabel {{
+    background: transparent;
+    color: {Theme.TEXT_WHITE};
+    font-size: 14px;
+    font-weight: 650;
+}}
+QLabel#ProtocolConfirmLabel {{
+    background: {Theme.BG_RAISED};
+    border-left: 3px solid {Theme.WARNING};
+    color: {Theme.TEXT_WHITE};
+    padding: 6px 8px;
+    font-size: 13px;
+}}
+QWidget#CommandRow {{
+    background: transparent;
+}}
+QFrame#TransportButtons {{
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+}}
+QFrame#TransportSeparator {{
+    background: {Theme.BORDER_COOL};
+    border: 0;
+}}
+QPushButton#TransportButton {{
+    background: {Theme.BG_CONTROL};
+    border: 0;
+    border-radius: 0;
+    color: {Theme.TEXT_WHITE};
+    min-height: 22px;
+    max-height: 22px;
+    padding: 0;
+    font-weight: 500;
+}}
+QPushButton#TransportButton:hover {{
+    background: {Theme.BG_CONTROL_HOVER};
+}}
+QPushButton#TransportButton:pressed {{
+    background: {Theme.BG_CONTROL_PRESSED};
+}}
+QPushButton#TransportButton:checked {{
+    background: {Theme.BG_CONTROL_PRESSED};
+    color: {Theme.ACCENT};
+    font-weight: 650;
+}}
+QPushButton#TransportButton:disabled {{
+    color: {Theme.TEXT_DISABLED};
+    background: {Theme.BG_CONTROL};
+}}
+QPushButton#TransportButtonWarning {{
+    background: {Theme.WARNING};
+    border: 0;
+    border-radius: 0;
+    color: #ffffff;
+    min-height: 22px;
+    max-height: 22px;
+    padding: 0;
+    font-weight: 700;
+}}
+QPushButton#TransportButtonWarning:hover {{
+    background: {Theme.WARNING_DARK};
+}}
+QPushButton#TransportButtonWarning:pressed {{
+    background: {Theme.WARNING_DARK};
+}}
+QLabel#ProcessAction {{
+    background: transparent;
+    font-weight: 600;
+}}
+QWidget#CameraPreview {{
+    background: {Theme.BG_BLACK};
+    color: #dfe7f1;
+    border-radius: {Theme.RADIUS}px;
+}}
+QWidget#CameraSelectorRow {{
+    background: transparent;
+}}
+QComboBox#CameraSelector {{
+    min-height: 24px;
+    max-height: 24px;
+}}
+QLabel#LogText {{
+    background: {Theme.BG_RAISED};
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: {Theme.RADIUS}px;
+    padding: 8px 10px;
+    color: {Theme.TEXT_MUTED};
+    font-family: Menlo, Consolas, monospace;
+    font-size: 12px;
+}}
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
     background-color: {Theme.BG_CONTROL};
     border: 1px solid {Theme.BORDER_COOL};
@@ -349,7 +528,7 @@ QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {{
 }}
 QPushButton {{
     background-color: {Theme.BG_CONTROL};
-    border: none;
+    border: 1px solid {Theme.BORDER_COOL};
     border-radius: {Theme.RADIUS}px;
     min-height: {default.height}px;
     max-height: {default.height}px;
@@ -394,40 +573,77 @@ QGroupBox::title {{
     subcontrol-position: top left;
     left: {Theme.PANEL_PADDING}px;
     padding: 0 {Theme.CONTROL_GAP}px;
-    color: {Theme.ACCENT};
+    color: {Theme.TEXT_MUTED};
 }}
 QProgressBar {{
     border: 1px solid {Theme.BORDER_COOL};
-    border-radius: 3px;
-    background: {Theme.BG_MEDIUM};
+    border-radius: 5px;
+    background: {Theme.BG_CONTROL};
     text-align: center;
-    max-height: 10px;
+    max-height: 8px;
+}}
+QProgressBar#ProcessProgress {{
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    min-height: 4px;
+    max-height: 4px;
 }}
 QProgressBar::chunk {{
     background: {Theme.ACCENT};
-    border-radius: 2px;
+    border-radius: 4px;
+}}
+QProgressBar#ProcessProgress::chunk {{
+    border-radius: 0;
+}}
+QProgressBar#ProtocolProgress {{
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: 4px;
+    background: {Theme.BG_RAISED};
+    color: {Theme.TEXT_WHITE};
+    text-align: center;
+    min-height: 18px;
+    max-height: 18px;
+    font-size: 12px;
+    font-weight: 600;
+}}
+QProgressBar#ProtocolProgress::chunk {{
+    border-radius: 3px;
 }}
 QScrollArea {{
     border: none;
     background: transparent;
 }}
-QSplitter::handle {{
-    background: {Theme.BG_DARK};
-}}
-QSplitter::handle:horizontal {{
-    width: {Theme.SPLITTER_HANDLE_WIDTH}px;
+QScrollArea#PageScroll {{
+    border: none;
+    background: transparent;
 }}
 QPlainTextEdit, QTableWidget {{
     background-color: {Theme.BG_CONTROL};
     border: 1px solid {Theme.BORDER_COOL};
     border-radius: {Theme.RADIUS}px;
     color: {Theme.TEXT_WHITE};
+    gridline-color: {Theme.BORDER_COOL};
 }}
 QHeaderView::section {{
     background-color: {Theme.BG_RAISED};
     color: {Theme.TEXT_MUTED};
-    border: none;
-    padding: 2px;
+    border: 0;
+    border-bottom: 1px solid {Theme.BORDER_COOL};
+    padding: 3px 6px;
+}}
+QTableWidget#RawConfigTable::item {{
+    border-color: {Theme.BORDER_COOL};
+    border-bottom: 1px solid {Theme.BORDER_COOL};
+    border-right: 1px solid {Theme.BORDER_COOL};
+    padding: 4px 7px;
+}}
+QScrollBar:horizontal,
+QScrollBar:vertical {{
+    width: 0;
+    height: 0;
+    background: transparent;
+    border: 0;
 }}
 """
 

@@ -11,6 +11,7 @@ from admet.core.engine import (
 from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema, ResultRecord, ResultSet
 from admet.core.workflow import Stage, StageControl, StageStatus, Workflow, WorkflowRunner
 from admet.ui.analyze.renderer import _record_to_row, _single_record_field_rows
+from admet.workflows import create_control_workflow
 
 
 class ParamSchemaTests(unittest.TestCase):
@@ -38,31 +39,52 @@ class ParamSchemaTests(unittest.TestCase):
             schema.validate({"threshold": -1})
         with self.assertRaises(ValueError):
             schema.validate({"mode": "c"})
+        with self.assertRaises(TypeError):
+            Param("limit", "Limit", ParamKind.INTEGER, default=1).validate(True)
+        with self.assertRaises(TypeError):
+            Param("threshold", "Threshold", ParamKind.FLOAT, default=1.0).validate(False)
 
 
 class ActionSpecTests(unittest.TestCase):
-    def test_action_settings_validate_only_declared_params(self):
+    def test_action_settings_validate_catalog_contract(self):
         schema = ParamSchema(
             (
                 Param("required_path", "Required Path", ParamKind.PATH, default=None, required=True),
                 Param("limit", "Limit", ParamKind.INTEGER, default=1, minimum=1),
+                Param("enabled", "Enabled", ParamKind.BOOLEAN, default=True),
             )
         )
         actions = (ActionSpec("ping", "Ping", "diagnostics", params=("limit",)),)
 
         self.assertEqual(validate_action_settings(schema, actions, "ping", {"limit": 2}), {"limit": 2})
-
-    def test_action_settings_reject_unknown_action_and_settings(self):
-        schema = ParamSchema((Param("limit", "Limit", ParamKind.INTEGER, default=1),))
-        actions = (ActionSpec("ping", "Ping", "diagnostics", params=("limit",)),)
-
         with self.assertRaises(ValueError):
             validate_action_settings(schema, actions, "missing", {"limit": 1})
         with self.assertRaises(KeyError):
             validate_action_settings(schema, actions, "ping", {"limit": 1, "extra": True})
+        with self.assertRaises(KeyError):
+            validate_action_settings(schema, actions, "ping", {"limit": 1, "enabled": False})
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_control_workflow_declares_runtime_contract(self):
+        workflow = create_control_workflow()
+        stage_ids = [stage.id for stage in workflow.stages]
+        runs = next(stage for stage in workflow.stages if stage.id == "runs")
+        actions = {control.action for control in runs.controls}
+        corrections = next(stage for stage in workflow.stages if stage.id == "corrections")
+        correction_names = {param.name for param in corrections.settings.params}
+
+        self.assertEqual(stage_ids, ["scene", "fluigent", "corrections", "priming", "runs", "wash"])
+        self.assertNotIn("start_recording", actions)
+        self.assertNotIn("stop_recording", actions)
+        self.assertNotIn("run_protocol", actions)
+        expected_names = {
+            f"{prefix}_{suffix}"
+            for prefix in ("oil_l", "cells_m", "beads_m")
+            for suffix in ("calibration", "scale", "offset", "quadratic")
+        }
+        self.assertEqual(correction_names, expected_names)
+
     def test_advance_skip_and_rewind(self):
         workflow = Workflow(
             "demo",

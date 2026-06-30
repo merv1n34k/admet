@@ -9,6 +9,10 @@ from .sdk import FluigentSDK, PressureChannelInfo, SensorChannelInfo
 log = logging.getLogger(__name__)
 
 
+class FluigentConnectionError(RuntimeError):
+    pass
+
+
 @dataclass
 class HardwareState:
     connected: bool = False
@@ -31,21 +35,39 @@ class HardwareManager:
         if self.state.connected:
             self.disconnect()
 
-        self.state.simulated = simulated
-        if simulated:
-            for instrument in SIM_INSTRUMENTS:
-                self._sdk.create_simulated_instrument(
-                    SIM_INSTR_TYPE,
-                    instrument["serial"],
-                    0,
-                    instrument["config"],
+        if not simulated:
+            detected = self.detect_instruments()
+            if not detected:
+                self._cleanup_failed_connect(simulated=False)
+                raise FluigentConnectionError(
+                    "No Fluigent instruments detected. Attach a Fluigent device or enable simulated hardware."
                 )
 
-        self._sdk.init()
-        self._detect_channels()
-        if simulated:
-            self._apply_real_sensor_ranges()
-        self.state.connected = True
+        created_simulated = False
+        self.state = HardwareState(simulated=simulated)
+        try:
+            if simulated:
+                for instrument in SIM_INSTRUMENTS:
+                    self._sdk.create_simulated_instrument(
+                        SIM_INSTR_TYPE,
+                        instrument["serial"],
+                        0,
+                        instrument["config"],
+                    )
+                created_simulated = True
+
+            self._sdk.init()
+            self._detect_channels()
+            if not self.state.pressure_channels and not self.state.sensor_channels:
+                raise FluigentConnectionError(
+                    "No Fluigent pressure or flow channels detected."
+                )
+            if simulated:
+                self._apply_real_sensor_ranges()
+            self.state.connected = True
+        except Exception:
+            self._cleanup_failed_connect(simulated=created_simulated)
+            raise
         log.info(
             "Connected fluidics hardware: %d pressure channels, %d sensor channels",
             len(self.state.pressure_channels),
@@ -78,6 +100,24 @@ class HardwareManager:
         self.state.controllers = self._sdk.get_controllers_info()
         self.state.pressure_channels = self._sdk.get_pressure_channels_info()
         self.state.sensor_channels = self._sdk.get_sensor_channels_info()
+
+    def detect_instruments(self) -> list[dict]:
+        if not hasattr(self._sdk, "detect_instruments"):
+            return [{"serial": None, "type": "unknown"}]
+        return list(self._sdk.detect_instruments())
+
+    def _cleanup_failed_connect(self, *, simulated: bool) -> None:
+        try:
+            self._sdk.close()
+        except Exception:
+            log.debug("Failed to close Fluigent SDK after failed connect", exc_info=True)
+        if simulated:
+            for instrument in SIM_INSTRUMENTS:
+                try:
+                    self._sdk.remove_simulated_instrument(SIM_INSTR_TYPE, instrument["serial"])
+                except Exception:
+                    log.debug("Failed to remove simulated instrument", exc_info=True)
+        self.state = HardwareState()
 
     def _apply_real_sensor_ranges(self) -> None:
         for channel in self.state.sensor_channels:

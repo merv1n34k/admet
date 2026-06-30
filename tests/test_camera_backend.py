@@ -182,15 +182,11 @@ class CameraTests(unittest.TestCase):
         self.assertEqual(status.camera_count, 0)
         self.assertIn("refresh", status.message)
 
-    def test_preflight_reports_camemu_and_transport_layers(self):
+    def test_preflight_reports_transport_layers(self):
         camera = Camera(EmptyFakePylon)
 
-        with patch.dict("os.environ", {}, clear=True):
-            status = camera.preflight("1")
+        status = camera.preflight()
 
-        self.assertEqual(status.pylon_camemu, "1")
-        self.assertNotIn("PYLON_CAMEMU", status.message)
-        self.assertNotIn("emulator", status.message.lower())
         self.assertIn("Basler Camera Emulator / BaslerCamEmu", status.transport_layers)
 
 

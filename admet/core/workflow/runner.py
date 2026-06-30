@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from admet.core.engine import Engine, EngineContext, EngineResult, validate_action_settings
+from admet.core.engine import Engine, EngineContext, EngineResult, action_spec
 
 from .model import Workflow, WorkflowState
 
@@ -27,8 +27,8 @@ class WorkflowRunner:
         stage = self.workflow.current_stage(state)
         result = None
         if stage.action is not None:
-            validated = validate_action_settings(self.engine.settings, self.engine.actions, stage.action, settings)
-            result = self.engine.run_action(stage.action, validated, context)
+            action_spec(self.engine.actions, stage.action)
+            result = self.engine.run_action(stage.action, settings, context)
             data = dict(state.data)
             data[stage.id] = result
             state = replace(state, data=data)

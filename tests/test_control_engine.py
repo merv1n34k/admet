@@ -2,13 +2,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from admet.core.engine import EngineContext
 from admet.engines.control.engine import FluidicsControlEngine
 from admet.engines.control.camera import Camera
 from admet.engines.control.camera.camera import CameraAvailability
 from admet.engines.control.fluidics import PressureChannelInfo, SensorChannelInfo
 from admet.engines.control.fluidics.config import ProtocolStep
-from admet.engines.control.settings import CONTROL_ENGINE_SETTINGS
 
 
 class FakeControlSDK:
@@ -22,6 +23,9 @@ class FakeControlSDK:
             SensorChannelInfo(0, 1, 20, 0, "sensor", "Flow_L_dual", smin=0.0, smax=100.0),
             SensorChannelInfo(1, 1, 21, 1, "sensor", "Flow_M_dual", smin=0.0, smax=40.0),
         ]
+
+    def detect_instruments(self):
+        return [{"serial": 1, "type": "LineUP"}]
 
     def create_simulated_instrument(self, instr_type, serial, firmware, config):
         self.calls.append(("create_sim", instr_type, serial, firmware, list(config)))
@@ -47,8 +51,14 @@ class FakeControlSDK:
     def set_sensor_custom_scale(self, sensor_index, a, b=0.0, c=0.0, smax=None):
         self.calls.append(("custom_scale", sensor_index, a, b, c, smax))
 
+    def set_sensor_calibration(self, sensor_index, calibration):
+        self.calls.append(("sensor_calibration", sensor_index, calibration))
+
     def set_sensor_regulation(self, sensor_index, pressure_index, setpoint):
         self.calls.append(("regulate", sensor_index, pressure_index, setpoint))
+
+    def set_sensor_regulation_response(self, sensor_index, response_s):
+        self.calls.append(("sensor_response", sensor_index, response_s))
 
     def set_pressure(self, pressure_index, pressure):
         self.calls.append(("pressure", pressure_index, pressure))
@@ -91,13 +101,12 @@ class FakeEngineCamera:
         self.set_calls = []
         self.applied = {}
 
-    def preflight(self, pylon_camemu=None):
+    def preflight(self):
         return CameraAvailability(
             pypylon_available=True,
             refresh_ok=True,
             camera_count=1,
             cameras=("Basler Test (123)",),
-            pylon_camemu=pylon_camemu or "",
             pylon_module_loaded=True,
             message="1 Basler camera(s) detected.",
         )
@@ -117,10 +126,69 @@ class FakeEngineCamera:
         return {name: {"value": self.applied.get(name)} for name in names if name in self.applied}
 
 
-class FluidicsControlEngineTests(unittest.TestCase):
-    def test_engine_defaults_keep_priming_protocol(self):
-        self.assertEqual(CONTROL_ENGINE_SETTINGS.defaults()["pipeline_name"], "Priming")
+class FakeVideoWriter:
+    def __init__(self, video_dir, prefix, width, height, fps):
+        self.video_dir = Path(video_dir)
+        self.prefix = prefix
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.frame_count = 3
+        self.path = self.video_dir / f"{prefix}_fake.avi"
 
+    def start(self):
+        self.video_dir.mkdir(parents=True, exist_ok=True)
+        return True
+
+    def write(self, frame):
+        return True
+
+    def stop(self):
+        self.path.write_bytes(b"AVI")
+        return str(self.path)
+
+
+class FakeCameraAcquisition:
+    def __init__(self):
+        self.recording = False
+        self.writer = None
+        self.callback = None
+        self.preview_enabled = True
+        self.last_recording_frames = None
+        self.last_writer_frame_count = None
+
+    def is_alive(self):
+        return True
+
+    def start_recording(self, writer, *, max_frames=None, max_time=None):
+        self.writer = writer
+        self.recording = writer.start()
+        return self.recording
+
+    def stop_recording(self):
+        self.last_recording_frames = 3
+        self.last_writer_frame_count = self.writer.frame_count
+        self.recording = False
+        self.writer.stop()
+        self.writer = None
+        return self.last_recording_frames
+
+    def set_recording_complete_callback(self, callback):
+        self.callback = callback
+
+    def set_preview_enabled(self, enabled):
+        self.preview_enabled = enabled
+
+
+class FakeFrameAcknowledger:
+    def __init__(self):
+        self.processed = 0
+
+    def frame_processed(self):
+        self.processed += 1
+
+
+class FluidicsControlEngineTests(unittest.TestCase):
     def test_connect_configures_channels_and_returns_status(self):
         sdk = FakeControlSDK()
         engine = FluidicsControlEngine(sdk)
@@ -145,6 +213,38 @@ class FluidicsControlEngineTests(unittest.TestCase):
         self.assertFalse(engine.hardware.connected)
         self.assertIn(("close",), sdk.calls)
 
+    def test_missing_real_fluigent_returns_warning_and_preserves_simulated_connect(self):
+        class NoInstrumentSDK(FakeControlSDK):
+            def detect_instruments(self):
+                return []
+
+        sdk = NoInstrumentSDK()
+        engine = FluidicsControlEngine(sdk)
+
+        preflight = engine.run_action("verify_backend", {})
+        self.assertEqual(preflight.result_set.metadata["fluigent_instrument_count"], 0)
+
+        missing = engine.run_action(
+            "connect_fluidics",
+            {"simulated": False, "start_polling": False},
+        )
+        metadata = missing.result_set.metadata
+
+        self.assertFalse(metadata["fluigent_connect_ok"])
+        self.assertFalse(metadata["connected"])
+        self.assertFalse(engine.hardware.connected)
+        self.assertEqual(engine.channel_manager.channels, [])
+        self.assertNotIn(("init", None), sdk.calls)
+
+        connected = engine.run_action(
+            "connect_fluidics",
+            {"simulated": True, "start_polling": False},
+        )
+
+        self.assertTrue(connected.result_set.metadata["fluigent_connect_ok"])
+        self.assertTrue(connected.result_set.metadata["connected"])
+        self.assertTrue(connected.result_set.metadata["simulated"])
+
     def test_start_recording_uses_context_workdir(self):
         sdk = FakeControlSDK()
         engine = FluidicsControlEngine(sdk)
@@ -162,6 +262,59 @@ class FluidicsControlEngineTests(unittest.TestCase):
         self.assertTrue(result.result_set.metadata["recording_active"])
         engine.run_action("stop_recording", {})
         self.assertFalse(engine.recording_active)
+
+    def test_start_recording_pairs_camera_video_and_fluidics_csv(self):
+        sdk = FakeControlSDK()
+        engine = FluidicsControlEngine(sdk, video_writer_factory=FakeVideoWriter)
+        camera = FakeCameraAcquisition()
+        engine._camera_acquisition = camera
+        engine._camera_last_frame = np.zeros((12, 16), dtype=np.uint8)
+        engine.run_action("connect_fluidics", {"simulated": False, "start_polling": False})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = engine.run_action(
+                "start_recording",
+                {
+                    "log_dir": "fluidics-logs",
+                    "camera_output_dir": "recordings",
+                    "camera_video_prefix": "run1",
+                    "camera_video_fps": 120.0,
+                    "camera_preview_off_recording": True,
+                },
+                EngineContext(workdir=tmpdir),
+            )
+            stop = engine.run_action("stop_recording", {})
+            report_dir = Path(result.artifacts["report_dir"])
+            summary_path = report_dir / "summary.json"
+            summary_exists = summary_path.exists()
+
+        self.assertTrue(result.artifacts["csv_path"].endswith(".csv"))
+        self.assertEqual(report_dir.parent.name, "recordings")
+        self.assertTrue(summary_exists)
+        self.assertTrue(stop.artifacts["video_path"].endswith("run1_fake.avi"))
+        self.assertFalse(engine.recording_active)
+        self.assertTrue(camera.preview_enabled)
+
+    def test_camera_frame_delivery_waits_for_ui_acknowledgement(self):
+        engine = FluidicsControlEngine(FakeControlSDK())
+        acknowledger = FakeFrameAcknowledger()
+        engine._camera_acquisition = acknowledger
+        frames = []
+        unsubscribe = engine.subscribe_camera_frames(frames.append)
+        source = np.ones((2, 3), dtype=np.uint8)
+
+        engine._on_camera_frame(source)
+
+        self.assertEqual(len(frames), 1)
+        self.assertIsNot(frames[0], source)
+        self.assertEqual(acknowledger.processed, 0)
+
+        engine.acknowledge_camera_frame()
+
+        self.assertEqual(acknowledger.processed, 1)
+        unsubscribe()
+        engine._on_camera_frame(source)
+        self.assertEqual(acknowledger.processed, 2)
 
     def test_build_pipeline_expands_group_repeats(self):
         engine = FluidicsControlEngine(FakeControlSDK())
@@ -194,17 +347,46 @@ class FluidicsControlEngineTests(unittest.TestCase):
 
         self.assertEqual([step.name for step in pipeline], ["solo", "g1", "g2", "g1", "g2"])
 
-    def test_calibrate_action_uses_all_pressure_channels(self):
+    def test_fluidics_control_actions_use_configured_channels(self):
         sdk = FakeControlSDK()
         engine = FluidicsControlEngine(sdk)
         engine.run_action("connect_fluidics", {"simulated": False, "start_polling": False})
 
-        result = engine.run_action("calibrate", {})
+        calibrate = engine.run_action("calibrate", {})
+        corrections = engine.run_action(
+            "apply_corrections",
+            {
+                "oil_l_calibration": "IPA",
+                "oil_l_scale": 2.25,
+                "oil_l_offset": 0.0,
+                "oil_l_quadratic": 0.0,
+                "cells_m_calibration": "H2O",
+                "cells_m_scale": 1.0,
+                "cells_m_offset": 0.0,
+                "cells_m_quadratic": 0.0,
+                "beads_m_calibration": "H2O",
+                "beads_m_scale": 1.0,
+                "beads_m_offset": 0.0,
+                "beads_m_quadratic": 0.0,
+            },
+        )
+        engine.run_action("set_channel_flow", {"channel_index": 1, "channel_flow_ul_min": 67.0})
+        engine.run_action("set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 120.0})
+        engine.run_action("set_channel_response", {"channel_index": 1, "channel_response_s": 4})
+        engine.run_action("stop_channel", {"channel_index": 1})
 
-        self.assertEqual(result.result_set.metadata["action"], "calibrate")
-        self.assertEqual(result.result_set.records, ())
+        self.assertEqual(calibrate.result_set.metadata["action"], "calibrate")
+        self.assertEqual(corrections.result_set.metadata["action"], "apply_corrections")
         self.assertIn(("calibrate", 0), sdk.calls)
         self.assertIn(("calibrate", 1), sdk.calls)
+        self.assertIn(("sensor_calibration", 0, 2), sdk.calls)
+        self.assertIn(("sensor_calibration", 1, 1), sdk.calls)
+        self.assertIn(("custom_scale", 0, 2.25, 0.0, 0.0, None), sdk.calls)
+        self.assertIn(("custom_scale", 1, 1.0, 0.0, 0.0, None), sdk.calls)
+        self.assertIn(("regulate", 1, 1, 67.0), sdk.calls)
+        self.assertIn(("pressure", 0, 120.0), sdk.calls)
+        self.assertIn(("sensor_response", 1, 4), sdk.calls)
+        self.assertIn(("pressure", 1, 0.0), sdk.calls)
 
     def test_camera_refresh_and_connect_are_nonfatal_without_device(self):
         engine = FluidicsControlEngine(FakeControlSDK())
@@ -215,8 +397,6 @@ class FluidicsControlEngineTests(unittest.TestCase):
 
         self.assertTrue(refresh.result_set.metadata["pypylon_available"])
         self.assertEqual(refresh.result_set.metadata["camera_count"], 0)
-        self.assertNotIn("pylon_camemu", refresh.result_set.metadata)
-        self.assertNotIn("pylon_camemu", refresh.result_set.metadata["camera"])
         self.assertFalse(connect.result_set.metadata["camera_connect_ok"])
         self.assertIn("not currently available", connect.result_set.metadata["camera_connect_message"])
 

@@ -13,6 +13,10 @@ class FluigentSDKUnavailableError(ImportError):
     """Raised when the Fluigent SDK is required but unavailable."""
 
 
+class FluigentSDKError(RuntimeError):
+    """Raised when the Fluigent SDK reports a failed operation."""
+
+
 @dataclass(frozen=True)
 class SDKAvailability:
     available: bool
@@ -97,7 +101,9 @@ class FluigentSDK:
         self._module().fgt_remove_simulated_instr(instr_type, serial)
 
     def init(self, instruments: list[int] | None = None) -> None:
-        self._module().fgt_init(instruments)
+        status = self._module().fgt_init(instruments)
+        if int(status) != 0:
+            raise FluigentSDKError(f"Fluigent SDK initialization failed: {status}")
         self._initialized = True
 
     def close(self) -> None:
@@ -121,6 +127,13 @@ class FluigentSDK:
 
     def get_sensor_channel_count(self) -> int:
         return self._module().fgt_get_sensorChannelCount()
+
+    def detect_instruments(self) -> list[dict[str, Any]]:
+        serial_numbers, instrument_types = self._module().fgt_detect()
+        return [
+            {"serial": int(serial), "type": str(instrument_type)}
+            for serial, instrument_type in zip(serial_numbers, instrument_types, strict=False)
+        ]
 
     def get_pressure_channels_info(self) -> list[PressureChannelInfo]:
         module = self._module()
@@ -214,6 +227,7 @@ class FluigentSDK:
             raise FluigentSDKUnavailableError(
                 "Fluigent SDK is required for hardware fluidics control."
             ) from exc
+        _configure_sdk_reporting(self._sdk)
         return self._sdk
 
 
@@ -248,3 +262,9 @@ def _import_fluigent_sdk():
             category=Warning,
         )
         return importlib.import_module("Fluigent.SDK")
+
+
+def _configure_sdk_reporting(module) -> None:
+    set_mode = getattr(module, "fgt_set_errorReportMode", None)
+    if callable(set_mode):
+        set_mode("none")

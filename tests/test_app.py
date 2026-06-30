@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import unittest
@@ -40,6 +41,14 @@ class AppCliTests(unittest.TestCase):
             main(["control"])
 
         run_control.assert_called_once_with()
+
+    def test_keyboard_interrupt_exits_cleanly(self):
+        with patch("admet.app.run_control_ui", side_effect=KeyboardInterrupt):
+            main(["control"])
+
+    def test_async_cancelled_error_exits_cleanly(self):
+        with patch("admet.app.run_analyze_ui", side_effect=asyncio.CancelledError):
+            main(["analyze"])
 
 
 if __name__ == "__main__":
