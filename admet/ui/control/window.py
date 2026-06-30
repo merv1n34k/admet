@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import re
 from collections import deque
 from dataclasses import replace
 from pathlib import Path
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import (
 from admet.core.api import AdmetAPI
 from admet.core.engine import EngineResult
 from admet.core.schema import Param, ParamKind
-from admet.core.session import SessionFile, load_session, new_session, save_session, session_path
+from admet.core.session import SessionFile, SessionItem, load_session, new_session, save_session, session_path
 from admet.core.workflow import Stage, StageControl, StageStatus
 from admet.engines.control.fluidics.config import (
     FLUIDIC_CHANNEL_LABELS,
@@ -341,6 +342,7 @@ class ControlWindow(QMainWindow):
         project_id = f"control_{time.strftime('%Y%m%d_%H%M%S')}"
         self.api.session = new_session(project_id, "combined")
         self.project_path = None
+        self.api.workdir = None
         self._sync_project_badge()
         self._set_status("Project created", "success")
         self._append_log(f"project: created {project_id}")
@@ -360,7 +362,8 @@ class ControlWindow(QMainWindow):
             self._set_status("Project load failed", "danger")
             self._notify(f"Project load failed: {exc}", "danger", timeout_ms=0)
             return
-        self.project_path = Path(path)
+        self.project_path = session_path(Path(path))
+        self.api.workdir = str(self.project_path)
         self._sync_project_badge()
         self._set_status("Project selected", "success")
         self._notify("Project selected", "success")
@@ -389,10 +392,23 @@ class ControlWindow(QMainWindow):
             self._set_status("Project save failed", "danger")
             self._notify(f"Project save failed: {exc}", "danger", timeout_ms=0)
             return
+        self.api.workdir = str(self.project_path)
         self._sync_project_badge()
         self._set_status("Project saved", "success")
         self._notify("Project saved", "success")
         self._append_log(f"project: saved {self.project_path}")
+
+    def _ensure_recording_project(self) -> bool:
+        if self.api.session is None:
+            self._notify("Create or select a project before recording.", "warning", timeout_ms=0)
+            return False
+        if self.project_path is None:
+            self._notify("Save the project before recording.", "warning", timeout_ms=0)
+            self._save_project()
+        if self.project_path is None:
+            return False
+        self.api.workdir = str(self.project_path)
+        return True
 
     def _select_stage(self, index: int) -> None:
         index = max(0, min(index, len(self.workflow.stages) - 1))
@@ -932,6 +948,8 @@ class ControlWindow(QMainWindow):
             self._set_status("Project required", "warning")
             self._notify("Create or select a project before camera setup.", "warning", timeout_ms=0)
             return None
+        if action == "start_recording" and not self._ensure_recording_project():
+            return None
         if self._action_requires_camera_live(action) and not self._camera_scene_ready():
             self._set_status("Camera live preview required", "warning")
             self._notify("Connect camera and start live preview first.", "warning", timeout_ms=0)
@@ -983,18 +1001,7 @@ class ControlWindow(QMainWindow):
             self._render_current_stage()
             return
 
-        started_recording = False
-        if (
-            stage.id == "runs"
-            and self._camera_scene_ready()
-            and not self.last_metadata.get("recording_active")
-        ):
-            if self._run("start_recording", refresh=False) is None:
-                self._render_current_stage()
-                return
-            started_recording = True
-        if self._run("run_protocol", refresh=False) is None and started_recording:
-            self._run("stop_recording", raise_errors=False, refresh=False)
+        self._run("run_protocol", refresh=False)
         self._render_current_stage()
 
     def _start_pipeline_stage(self, stage: Stage) -> None:
@@ -1002,19 +1009,7 @@ class ControlWindow(QMainWindow):
             return
         self._latest_pipeline_event = None
         self._clear_pipeline_confirmation()
-        started_recording = False
-        if (
-            stage.id == "runs"
-            and self._camera_scene_ready()
-            and not self.last_metadata.get("recording_active")
-        ):
-            if self._run("start_recording", refresh=False) is None:
-                self._render_current_stage()
-                return
-            started_recording = True
         if self._run("run_protocol", self._protocol_run_settings(stage), refresh=False) is None:
-            if started_recording:
-                self._run("stop_recording", raise_errors=False, refresh=False)
             self._render_current_stage()
             return
         self._render_current_stage()
@@ -1035,11 +1030,23 @@ class ControlWindow(QMainWindow):
         self._refresh_action_box(stage)
 
     def _confirm_pipeline_step(self, stage: Stage | None = None) -> None:
+        if stage is None:
+            stage = self.workflow.current_stage(self.workflow_state)
+        confirmation = self._pending_pipeline_confirmation()
+        if stage.id == "runs":
+            run_label = _run_start_label(confirmation)
+            if run_label and not self.last_metadata.get("recording_active"):
+                if self._run(
+                    "start_recording",
+                    self._recording_settings(run_label),
+                    refresh=False,
+                    notify_success=False,
+                ) is None:
+                    self._refresh_action_box(stage)
+                    return
         self._run("confirm_protocol", refresh=False, notify_success=False)
         self._clear_pipeline_confirmation()
         self._dismiss_notification()
-        if stage is None:
-            stage = self.workflow.current_stage(self.workflow_state)
         if stage.id in PIPELINE_STAGE_IDS:
             self._refresh_action_box(stage)
 
@@ -1055,6 +1062,14 @@ class ControlWindow(QMainWindow):
         if stage.id == "wash":
             return {"pipeline_name": "Wash", "tick_s": self.values.get("tick_s")}
         return {"pipeline_name": "Priming", "tick_s": self.values.get("tick_s")}
+
+    def _recording_settings(self, run_label: str) -> dict[str, Any]:
+        if self.project_path is None:
+            return {}
+        return {
+            "recording_root": str(self.project_path / "media" / "control"),
+            "recording_label": run_label,
+        }
 
     def _toggle_pause(self) -> None:
         action = "resume_protocol" if self.last_metadata.get("pipeline_state") == "paused" else "pause_protocol"
@@ -1210,6 +1225,8 @@ class ControlWindow(QMainWindow):
             confirmation = str(getattr(latest, "confirmation_message", "") or "").strip()
             if confirmation:
                 self._pipeline_pending_confirmation = confirmation
+                if stage.id == "runs":
+                    self._sync_run_recording_for_confirmation(confirmation)
                 self._show_pipeline_confirmation_notice(stage, latest)
             elif self._pending_pipeline_confirmation():
                 self._show_pipeline_confirmation_notice(stage, latest)
@@ -1218,6 +1235,13 @@ class ControlWindow(QMainWindow):
             self._refresh_action_box(stage)
         if self._pipeline_event_state(latest) == "completed":
             self._complete_completed_pipeline_stage()
+
+    def _sync_run_recording_for_confirmation(self, confirmation: str) -> None:
+        if not _run_complete_label(confirmation):
+            return
+        if not self.last_metadata.get("recording_active"):
+            return
+        self._run("stop_recording", raise_errors=False, refresh=False, notify_success=False)
 
     def _complete_completed_pipeline_stage(self) -> None:
         stage = self.workflow.current_stage(self.workflow_state)
@@ -1393,7 +1417,7 @@ class ControlWindow(QMainWindow):
         return self.runtime_state["camera_live"]
 
     def _action_requires_camera_live(self, action: str) -> bool:
-        return action == "start_recording"
+        return False
 
     def _action_requires_project(self, action: str) -> bool:
         return action in {
@@ -1528,7 +1552,14 @@ class ControlWindow(QMainWindow):
 
     def _stage_params(self, stage: Stage) -> list[Param]:
         params: dict[str, Param] = {}
-        hidden = {"camera_index", "start_polling", "pipeline_name", "tick_s", "log_dir"}
+        hidden = {
+            "camera_index",
+            "start_polling",
+            "pipeline_name",
+            "tick_s",
+            "recording_root",
+            "recording_label",
+        }
         for param in stage.settings.params:
             if param.name in hidden:
                 continue
@@ -1625,36 +1656,69 @@ class ControlWindow(QMainWindow):
     def _store_recording_artifact(self, recording: Any) -> None:
         if not isinstance(recording, dict) or self.api.session is None:
             return
+        file_ids: list[str] = []
+        files = list(self.api.session.files)
+
         video_path = str(recording.get("video_path") or "")
-        if not video_path:
-            return
-        if self.project_path is not None:
+        if video_path and self.project_path is not None:
             video_path = str(Path(video_path).resolve())
             recording = {**recording, "video_path": video_path}
-        metadata = _video_metadata(recording)
-        if self.project_path is not None and not _path_is_relative_to(Path(video_path), self.project_path):
-            metadata["external"] = True
-        files = list(self.api.session.files)
-        file_id = _video_file_id(video_path, files)
-        stored = SessionFile(
-            id=file_id,
-            path=video_path,
-            role="control_video",
-            media_type="video/avi",
-            metadata=metadata,
+        if video_path:
+            metadata = _video_metadata(recording)
+            if self.project_path is not None and not _path_is_relative_to(Path(video_path), self.project_path):
+                metadata["external"] = True
+            file_id = _video_file_id(video_path, files)
+            files = _upsert_session_file(
+                files,
+                SessionFile(
+                    id=file_id,
+                    path=video_path,
+                    role="control_video",
+                    media_type="video/avi",
+                    metadata=metadata,
+                ),
+            )
+            file_ids.append(file_id)
+
+        fluidics_csv = str(recording.get("fluidics_csv") or "")
+        if fluidics_csv and self.project_path is not None:
+            fluidics_csv = str(Path(fluidics_csv).resolve())
+            recording = {**recording, "fluidics_csv": fluidics_csv}
+        if fluidics_csv:
+            csv_metadata = _fluidics_csv_metadata(recording)
+            if self.project_path is not None and not _path_is_relative_to(Path(fluidics_csv), self.project_path):
+                csv_metadata["external"] = True
+            file_id = _session_file_id("fluidics", fluidics_csv, files)
+            files = _upsert_session_file(
+                files,
+                SessionFile(
+                    id=file_id,
+                    path=fluidics_csv,
+                    role="control_fluidics_csv",
+                    media_type="text/csv",
+                    metadata=csv_metadata,
+                ),
+            )
+            file_ids.append(file_id)
+
+        if not file_ids:
+            return
+        item = SessionItem(
+            id=_recording_item_id(recording),
+            project_type="control_acquisition",
+            engine=self.api.engine.id,
+            settings={"recording_label": str(recording.get("recording_id") or recording.get("video_prefix") or "")},
+            files=tuple(file_ids),
+            metadata=_recording_item_metadata(recording),
         )
-        for index, file in enumerate(files):
-            if file.id == file_id or file.path == video_path or file.metadata.get("video_path") == video_path:
-                files[index] = stored
-                break
-        else:
-            files.append(stored)
-        self.api.session = replace(self.api.session, files=tuple(files))
+        items = _upsert_session_item(list(self.api.session.items), item)
+        self.api.session = replace(self.api.session, files=tuple(files), items=tuple(items))
         if self.project_path is not None:
             try:
                 self.project_path = save_session(self.project_path, self.api.session)
+                self.api.workdir = str(self.project_path)
             except Exception as exc:
-                self._append_log(f"project: video metadata save failed: {exc}")
+                self._append_log(f"project: acquisition metadata save failed: {exc}")
 
     def _video_rows(self) -> list[dict[str, str]]:
         rows: dict[str, dict[str, str]] = {}
@@ -2580,8 +2644,25 @@ def _video_metadata(recording: dict[str, Any]) -> dict[str, Any]:
         "dimensions": f"{width}x{height}" if width and height else "",
         "acquisition_fps": acquisition_fps,
         "converted_fps": converted_fps,
-        "droplegen_csv": str(recording.get("droplegen_csv") or ""),
+        "fluidics_csv": str(recording.get("fluidics_csv") or ""),
     }
+
+
+def _fluidics_csv_metadata(recording: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "fluidics_csv": str(recording.get("fluidics_csv") or ""),
+        "recording_id": str(recording.get("recording_id") or recording.get("video_prefix") or ""),
+        "started_at": str(recording.get("started_at") or ""),
+        "stopped_at": str(recording.get("stopped_at") or ""),
+        "duration_s": float(recording.get("duration_s") or 0.0),
+    }
+
+
+def _recording_item_metadata(recording: dict[str, Any]) -> dict[str, Any]:
+    metadata = _video_metadata(recording)
+    metadata.update(_fluidics_csv_metadata(recording))
+    metadata["report_dir"] = str(recording.get("report_dir") or "")
+    return metadata
 
 
 def _video_row(recording: dict[str, Any]) -> dict[str, str]:
@@ -2601,18 +2682,51 @@ def _video_row(recording: dict[str, Any]) -> dict[str, str]:
 
 
 def _video_file_id(video_path: str, files: list[SessionFile]) -> str:
+    return _session_file_id("video", video_path, files)
+
+
+def _session_file_id(prefix: str, path: str, files: list[SessionFile]) -> str:
     for file in files:
-        if file.path == video_path or file.metadata.get("video_path") == video_path:
+        if file.path == path or file.metadata.get("video_path") == path or file.metadata.get("fluidics_csv") == path:
             return file.id
-    stem = Path(video_path).stem or "video"
-    base = "video-" + "".join(ch.lower() if ch.isalnum() else "-" for ch in stem).strip("-")
+    stem = Path(path).stem or prefix
+    base = prefix + "-" + "".join(ch.lower() if ch.isalnum() else "-" for ch in stem).strip("-")
     existing = {file.id for file in files}
-    candidate = base or "video"
+    candidate = base or prefix
     index = 2
     while candidate in existing:
         candidate = f"{base}-{index}"
         index += 1
     return candidate
+
+
+def _recording_item_id(recording: dict[str, Any]) -> str:
+    source = str(recording.get("recording_id") or recording.get("video_prefix") or Path(str(recording.get("video_path") or "")).stem)
+    base = "acq-" + "".join(ch.lower() if ch.isalnum() else "-" for ch in source).strip("-")
+    return base or "acq-recording"
+
+
+def _upsert_session_file(files: list[SessionFile], stored: SessionFile) -> list[SessionFile]:
+    for index, file in enumerate(files):
+        if (
+            file.id == stored.id
+            or file.path == stored.path
+            or file.metadata.get("video_path") == stored.path
+            or file.metadata.get("fluidics_csv") == stored.path
+        ):
+            files[index] = stored
+            return files
+    files.append(stored)
+    return files
+
+
+def _upsert_session_item(items: list[SessionItem], stored: SessionItem) -> list[SessionItem]:
+    for index, item in enumerate(items):
+        if item.id == stored.id:
+            items[index] = stored
+            return items
+    items.append(stored)
+    return items
 
 
 def _path_is_relative_to(path: Path, root: Path) -> bool:
@@ -2670,6 +2784,16 @@ def _pipeline_start_label(stage: Stage) -> str:
     if stage.id == "wash":
         return "Run Wash"
     return "Start"
+
+
+def _run_start_label(message: str) -> str:
+    match = re.search(r"\bStart\s+(set\d{2}_rep\d{2})\b", message)
+    return match.group(1) if match else ""
+
+
+def _run_complete_label(message: str) -> str:
+    match = re.search(r"\b(set\d{2}_rep\d{2})\s+complete\b", message)
+    return match.group(1) if match else ""
 
 
 def _status_dot(status: str, size: int) -> QLabel:

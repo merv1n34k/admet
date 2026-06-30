@@ -2,10 +2,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from admet.core.engine import EngineResult
 from admet.core.schema import ResultSet
+from admet.core.session import load_session, new_session, save_session
 from admet.engines.control import RecordingSession
+from admet.ui.control.window import ControlWindow
 
 
 class FakeWriter:
@@ -16,7 +19,7 @@ class FakeWriter:
         self.height = height
         self.fps = fps
         self.frame_count = 7
-        self.path = self.video_dir / f"{prefix}_fake.avi"
+        self.path = self.video_dir / f"{prefix}.avi"
 
     def start(self):
         self.video_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +75,7 @@ class FakeControlBackend:
     def run_action(self, action, settings, context=None):
         self.actions.append((action, dict(settings)))
         if action == "start_recording":
-            csv_path = str(Path(settings["log_dir"]) / "droplegen_fake.csv")
+            csv_path = str(Path(settings["fluidics_dir"]) / settings["csv_filename"])
             return EngineResult(ResultSet(), artifacts={"csv_path": csv_path})
         return EngineResult(ResultSet())
 
@@ -86,11 +89,11 @@ class RecordingSessionTests(unittest.TestCase):
                 tmpdir,
                 camera,
                 control,
+                recording_label="run1",
                 writer_factory=FakeWriter,
             )
 
             started = session.start_recording(
-                "run1",
                 width=640,
                 height=240,
                 fps=120.0,
@@ -101,17 +104,19 @@ class RecordingSessionTests(unittest.TestCase):
             report_dir = session.report_dir
             summary = json.loads((report_dir / "summary.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(started.video_prefix, "run1")
+        self.assertTrue(started.video_prefix.startswith("run1_"))
+        self.assertEqual(started.fluidics_csv, str(report_dir / "fluidics" / f"{started.video_prefix}.csv"))
         self.assertEqual(camera.start_args, (10, None))
         self.assertEqual(control.actions[0][0], "start_recording")
+        self.assertEqual(Path(control.actions[0][1]["fluidics_dir"]).name, "fluidics")
         self.assertEqual(control.actions[1][0], "stop_recording")
         self.assertEqual(stopped.frames_recorded, 5)
         self.assertEqual(stopped.frames_written, 7)
         self.assertEqual(stopped.converted_fps, 120.0)
         self.assertGreater(stopped.acquisition_fps, 0.0)
-        self.assertTrue(stopped.video_path.endswith("run1_fake.avi"))
+        self.assertEqual(Path(stopped.video_path).name, f"{started.video_prefix}.avi")
         self.assertEqual(summary["recording_count"], 1)
-        self.assertEqual(summary["recordings"][0]["video_prefix"], "run1")
+        self.assertEqual(summary["recordings"][0]["video_prefix"], started.video_prefix)
         self.assertEqual(summary["recordings"][0]["converted_fps"], 120.0)
         self.assertGreater(summary["recordings"][0]["acquisition_fps"], 0.0)
 
@@ -123,11 +128,11 @@ class RecordingSessionTests(unittest.TestCase):
                 tmpdir,
                 camera,
                 control,
+                recording_label="run1",
                 writer_factory=FakeWriter,
             )
 
             session.start_recording(
-                "run1",
                 width=640,
                 height=240,
                 fps=120.0,
@@ -144,6 +149,51 @@ class RecordingSessionTests(unittest.TestCase):
         self.assertEqual(summary["recording_count"], 1)
         self.assertEqual(summary["recordings"][0]["frames_recorded"], 5)
         self.assertEqual(summary["recordings"][0]["frames_written"], 7)
+
+    def test_recording_artifact_registers_video_csv_and_acquisition_item(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project = Path(tmpdir) / "study.admetp"
+            session = save_session(project, new_session("study", "combined"))
+            acq_dir = session / "media" / "control" / "set01_rep02_20260701_120000"
+            video_path = acq_dir / "video" / "set01_rep02_20260701_120000.avi"
+            csv_path = acq_dir / "fluidics" / "set01_rep02_20260701_120000.csv"
+            video_path.parent.mkdir(parents=True)
+            csv_path.parent.mkdir(parents=True)
+            video_path.write_bytes(b"AVI")
+            csv_path.write_text("timestamp,elapsed_s\n", encoding="utf-8")
+
+            window = ControlWindow.__new__(ControlWindow)
+            window.api = SimpleNamespace(
+                session=load_session(session),
+                engine=SimpleNamespace(id="fluidics"),
+                workdir=str(session),
+            )
+            window.project_path = session
+            window._append_log = lambda _message: None
+
+            window._store_recording_artifact(
+                {
+                    "recording_id": "set01_rep02_20260701_120000",
+                    "report_dir": str(acq_dir),
+                    "video_path": str(video_path),
+                    "fluidics_csv": str(csv_path),
+                    "width": 640,
+                    "height": 240,
+                    "converted_fps": 120.0,
+                    "acquisition_fps": 118.5,
+                }
+            )
+
+            saved = load_session(session)
+
+        roles = {file.role: file for file in saved.files}
+        self.assertIn("control_video", roles)
+        self.assertIn("control_fluidics_csv", roles)
+        self.assertEqual(roles["control_video"].path, "media/control/set01_rep02_20260701_120000/video/set01_rep02_20260701_120000.avi")
+        self.assertEqual(roles["control_fluidics_csv"].path, "media/control/set01_rep02_20260701_120000/fluidics/set01_rep02_20260701_120000.csv")
+        self.assertEqual(len(saved.items), 1)
+        self.assertEqual(saved.items[0].project_type, "control_acquisition")
+        self.assertEqual(set(saved.items[0].files), {roles["control_video"].id, roles["control_fluidics_csv"].id})
 
 
 if __name__ == "__main__":

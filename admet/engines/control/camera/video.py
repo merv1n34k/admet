@@ -4,7 +4,6 @@ import logging
 import shutil
 import subprocess
 import tempfile
-import time
 from collections.abc import Callable
 from pathlib import Path
 from queue import Empty, Full, Queue
@@ -102,8 +101,7 @@ class VideoWorker:
             shutil.rmtree(self.frames_dir, ignore_errors=True)
             return ""
 
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        video_path = self.output_dir / f"{self.prefix}_{timestamp}.avi"
+        video_path = self.output_dir / f"{self.prefix}.avi"
         if self.encoder is not None:
             return self.encoder(self.frames_dir, video_path, self.width, self.height, self.fps)
         return self._start_ffmpeg_encode(video_path)

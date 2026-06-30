@@ -65,9 +65,7 @@ CAMERA_SURFACE_OPTIONS = {
             "title": "Capture",
             "icon": "fiber_manual_record",
             "params": (
-                "camera_output_dir",
                 "camera_image_prefix",
-                "camera_video_prefix",
                 "camera_video_fps",
                 "camera_preview_off_recording",
             ),

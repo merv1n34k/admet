@@ -40,6 +40,8 @@ WriterFactory = Callable[[Path, str, int, int, float], Any]
 class RecordingMetadata:
     started_at: str
     started_monotonic_s: float
+    recording_id: str
+    report_dir: str
     output_dir: str
     video_prefix: str
     width: int
@@ -47,7 +49,7 @@ class RecordingMetadata:
     fps: float
     converted_fps: float = 0.0
     acquisition_fps: float = 0.0
-    droplegen_csv: str = ""
+    fluidics_csv: str = ""
     stopped_at: str = ""
     duration_s: float = 0.0
     frames_recorded: int | None = None
@@ -68,11 +70,13 @@ class RecordingSession:
         camera: RecordingCamera,
         control: ControlBackend,
         *,
+        recording_label: str,
         writer_factory: WriterFactory | None = None,
     ):
         self.report_root = Path(report_root)
         self.camera = camera
         self.control = control
+        self.recording_label = _safe_recording_label(recording_label)
         self.writer_factory = writer_factory or _default_writer_factory
         self.report_dir: Path | None = None
         self.recordings: list[dict[str, Any]] = []
@@ -83,16 +87,14 @@ class RecordingSession:
 
     def create_report_dir(self) -> Path:
         if self.report_dir is None:
-            stamp = datetime.now().strftime("%y%m%d-%H%M%S")
-            self.report_dir = self.report_root / stamp
+            self.report_dir = create_recording_report_dir(self.report_root, self.recording_label)
             (self.report_dir / "video").mkdir(parents=True, exist_ok=True)
-            (self.report_dir / "droplegen").mkdir(parents=True, exist_ok=True)
+            (self.report_dir / "fluidics").mkdir(parents=True, exist_ok=True)
             self.write_summary()
         return self.report_dir
 
     def start_recording(
         self,
-        prefix: str,
         *,
         width: int,
         height: int,
@@ -102,22 +104,31 @@ class RecordingSession:
     ) -> RecordingMetadata:
         report_dir = self.create_report_dir()
         video_dir = report_dir / "video"
-        droplegen_dir = report_dir / "droplegen"
-        writer = self.writer_factory(video_dir, prefix, width, height, fps)
+        fluidics_dir = report_dir / "fluidics"
+        recording_id = report_dir.name
+        writer = self.writer_factory(video_dir, recording_id, width, height, fps)
         if not self.camera.start_recording(writer, max_frames=max_frames, max_time=max_time):
             raise RuntimeError("Failed to start camera recording")
 
-        result = self.control.run_action("start_recording", {"log_dir": str(droplegen_dir)})
+        result = self.control.run_action(
+            "start_recording",
+            {
+                "fluidics_dir": str(fluidics_dir),
+                "csv_filename": f"{recording_id}.csv",
+            },
+        )
         self.current = RecordingMetadata(
             started_at=datetime.now().isoformat(timespec="seconds"),
             started_monotonic_s=time.monotonic(),
+            recording_id=recording_id,
+            report_dir=str(report_dir),
             output_dir=str(video_dir),
-            video_prefix=prefix,
+            video_prefix=recording_id,
             width=width,
             height=height,
             fps=fps,
             converted_fps=fps,
-            droplegen_csv=str(result.artifacts.get("csv_path", "")),
+            fluidics_csv=str(result.artifacts.get("csv_path", "")),
         )
         self.write_summary()
         return self.current
@@ -139,7 +150,7 @@ class RecordingSession:
         candidates = []
         if output_dir.exists() and self.current.video_prefix:
             candidates = sorted(
-                output_dir.glob(f"{self.current.video_prefix}_*.avi"),
+                output_dir.glob(f"{self.current.video_prefix}.avi"),
                 key=lambda path: path.stat().st_mtime,
             )
 
@@ -162,17 +173,41 @@ class RecordingSession:
     def write_summary(self) -> None:
         if self.report_dir is None:
             return
-        summary = {
-            "updated": datetime.now().isoformat(timespec="seconds"),
-            "report_dir": str(self.report_dir),
-            "recording_count": len(self.recordings),
-            "recordings": self.recordings,
-        }
-        (self.report_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        write_recording_summary(self.report_dir, self.recordings)
 
 
 def _default_writer_factory(video_dir: Path, prefix: str, width: int, height: int, fps: float):
     return VideoWorker(video_dir, prefix, width, height, fps)
+
+
+def create_recording_report_dir(report_root: str | Path, recording_label: str) -> Path:
+    root = Path(report_root)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = f"{_safe_recording_label(recording_label)}_{stamp}"
+    report_dir = root / base
+    suffix = 2
+    while report_dir.exists():
+        report_dir = root / f"{base}_{suffix}"
+        suffix += 1
+    report_dir.mkdir(parents=True, exist_ok=False)
+    return report_dir
+
+
+def write_recording_summary(report_dir: str | Path, recordings: list[dict[str, Any]]) -> None:
+    report_dir = Path(report_dir)
+    summary = {
+        "updated": datetime.now().isoformat(timespec="seconds"),
+        "report_dir": str(report_dir),
+        "recording_count": len(recordings),
+        "recordings": recordings,
+    }
+    (report_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+
+def _safe_recording_label(value: str) -> str:
+    label = "".join(ch.lower() if ch.isalnum() else "_" for ch in str(value).strip())
+    label = "_".join(part for part in label.split("_") if part)
+    return label or "recording"
 
 
 def _writer_frame_count(camera: RecordingCamera) -> int | None:

@@ -6,9 +6,17 @@ from pathlib import Path
 
 
 class CsvLogger:
-    def __init__(self, log_dir: str | Path = "logs"):
-        self._log_dir = Path(log_dir)
-        self._log_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(
+        self,
+        output_dir: str | Path = "logs",
+        *,
+        prefix: str = "fluidics",
+        filename: str = "",
+    ):
+        self._output_dir = Path(output_dir)
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+        self._prefix = prefix
+        self._filename = filename
         self._file = None
         self._writer = None
         self._row_count = 0
@@ -24,7 +32,8 @@ class CsvLogger:
 
     def start(self, pressure_count: int, sensor_count: int) -> str:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._filepath = str(self._log_dir / f"droplegen_{timestamp}.csv")
+        filename = self._filename or f"{self._prefix}_{timestamp}.csv"
+        self._filepath = str(self._output_dir / filename)
 
         self._file = open(self._filepath, "w", encoding="utf-8", newline="")
         headers = ["timestamp", "elapsed_s"]

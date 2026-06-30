@@ -134,7 +134,7 @@ class FakeVideoWriter:
         self.height = height
         self.fps = fps
         self.frame_count = 3
-        self.path = self.video_dir / f"{prefix}_fake.avi"
+        self.path = self.video_dir / f"{prefix}.avi"
 
     def start(self):
         self.video_dir.mkdir(parents=True, exist_ok=True)
@@ -253,14 +253,16 @@ class FluidicsControlEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = engine.run_action(
                 "start_recording",
-                {"log_dir": "fluidics-logs"},
+                {"recording_root": "media/control", "recording_label": "set01_rep01"},
                 EngineContext(workdir=tmpdir),
             )
             csv_path = Path(result.artifacts["csv_path"])
+            self.assertTrue(result.result_set.metadata["recording_active"])
+            engine.run_action("stop_recording", {})
 
-        self.assertEqual(csv_path.parent.name, "fluidics-logs")
-        self.assertTrue(result.result_set.metadata["recording_active"])
-        engine.run_action("stop_recording", {})
+        self.assertEqual(csv_path.parent.name, "fluidics")
+        self.assertEqual(csv_path.parent.parent.parent.name, "control")
+        self.assertTrue(csv_path.name.startswith("set01_rep01_"))
         self.assertFalse(engine.recording_active)
 
     def test_start_recording_pairs_camera_video_and_fluidics_csv(self):
@@ -275,9 +277,8 @@ class FluidicsControlEngineTests(unittest.TestCase):
             result = engine.run_action(
                 "start_recording",
                 {
-                    "log_dir": "fluidics-logs",
-                    "camera_output_dir": "recordings",
-                    "camera_video_prefix": "run1",
+                    "recording_root": "media/control",
+                    "recording_label": "set01_rep02",
                     "camera_video_fps": 120.0,
                     "camera_preview_off_recording": True,
                 },
@@ -289,9 +290,11 @@ class FluidicsControlEngineTests(unittest.TestCase):
             summary_exists = summary_path.exists()
 
         self.assertTrue(result.artifacts["csv_path"].endswith(".csv"))
-        self.assertEqual(report_dir.parent.name, "recordings")
+        self.assertEqual(report_dir.parent.name, "control")
+        self.assertTrue(report_dir.name.startswith("set01_rep02_"))
         self.assertTrue(summary_exists)
-        self.assertTrue(stop.artifacts["video_path"].endswith("run1_fake.avi"))
+        self.assertEqual(Path(stop.artifacts["video_path"]).name, f"{report_dir.name}.avi")
+        self.assertEqual(Path(stop.artifacts["recording"]["fluidics_csv"]).parent.name, "fluidics")
         self.assertEqual(stop.artifacts["recording"]["width"], 16)
         self.assertEqual(stop.artifacts["recording"]["height"], 12)
         self.assertEqual(stop.artifacts["recording"]["converted_fps"], 120.0)

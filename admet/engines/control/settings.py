@@ -91,11 +91,16 @@ CAMERA_SETTINGS = ParamSchema(
         Param("camera_selection_y", "Selection Y", ParamKind.INTEGER, default=0, minimum=0),
         Param("camera_selection_w", "Selection W", ParamKind.INTEGER, default=0, minimum=0),
         Param("camera_selection_h", "Selection H", ParamKind.INTEGER, default=0, minimum=0),
-        Param("camera_output_dir", "Output Path", ParamKind.PATH, default="output"),
         Param("camera_image_prefix", "Image Prefix", ParamKind.TEXT, default="img"),
-        Param("camera_video_prefix", "Video Prefix", ParamKind.TEXT, default="vid"),
         Param("camera_video_fps", "Video FPS", ParamKind.FLOAT, default=24.0, minimum=1.0),
         Param("camera_preview_off_recording", "Disable Preview During Recording", ParamKind.BOOLEAN, default=True),
+    )
+)
+
+RECORDING_SETTINGS = ParamSchema(
+    (
+        Param("recording_root", "Recording Root", ParamKind.PATH, default=""),
+        Param("recording_label", "Recording Label", ParamKind.TEXT, default="recording"),
     )
 )
 
@@ -147,7 +152,6 @@ RUN_SETTINGS = ParamSchema(
         Param("set_count", "Sets", ParamKind.INTEGER, default=1, minimum=1),
         Param("replicate_count", "Replicates", ParamKind.INTEGER, default=1, minimum=1),
         Param("run_volume_ul", "Oil L Volume", ParamKind.FLOAT, default=150.0, minimum=0.1),
-        Param("log_dir", "Log Directory", ParamKind.PATH, default="logs"),
         Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
     )
 )
@@ -162,6 +166,7 @@ CONTROL_ENGINE_SETTINGS = merge_schemas(
     FLUIGENT_SETTINGS,
     CORRECTION_SETTINGS,
     CHANNEL_CONTROL_SETTINGS,
+    RECORDING_SETTINGS,
     RUN_SETTINGS,
     WASH_SETTINGS,
     PROTOCOL_SETTINGS,
