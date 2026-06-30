@@ -45,6 +45,8 @@ class RecordingMetadata:
     width: int
     height: int
     fps: float
+    converted_fps: float = 0.0
+    acquisition_fps: float = 0.0
     droplegen_csv: str = ""
     stopped_at: str = ""
     duration_s: float = 0.0
@@ -114,6 +116,7 @@ class RecordingSession:
             width=width,
             height=height,
             fps=fps,
+            converted_fps=fps,
             droplegen_csv=str(result.artifacts.get("csv_path", "")),
         )
         self.write_summary()
@@ -144,6 +147,9 @@ class RecordingSession:
         self.current.duration_s = max(0.0, now - self.current.started_monotonic_s)
         self.current.frames_recorded = frames_recorded
         self.current.frames_written = writer_frame_count
+        frame_count = frames_recorded if frames_recorded is not None else writer_frame_count
+        if frame_count is not None and self.current.duration_s > 0:
+            self.current.acquisition_fps = float(frame_count) / self.current.duration_s
         self.current.video_path = str(candidates[-1]) if candidates else ""
         self.current.video_candidates = [str(path) for path in candidates[-3:]]
 

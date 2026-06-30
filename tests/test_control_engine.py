@@ -292,6 +292,10 @@ class FluidicsControlEngineTests(unittest.TestCase):
         self.assertEqual(report_dir.parent.name, "recordings")
         self.assertTrue(summary_exists)
         self.assertTrue(stop.artifacts["video_path"].endswith("run1_fake.avi"))
+        self.assertEqual(stop.artifacts["recording"]["width"], 16)
+        self.assertEqual(stop.artifacts["recording"]["height"], 12)
+        self.assertEqual(stop.artifacts["recording"]["converted_fps"], 120.0)
+        self.assertGreater(stop.artifacts["recording"]["acquisition_fps"], 0.0)
         self.assertFalse(engine.recording_active)
         self.assertTrue(camera.preview_enabled)
 

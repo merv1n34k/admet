@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 from admet.core.api import AdmetAPI
 from admet.core.engine import EngineResult
 from admet.core.schema import Param, ParamKind
-from admet.core.session import load_session, new_session, save_session, session_path
+from admet.core.session import SessionFile, load_session, new_session, save_session, session_path
 from admet.core.workflow import Stage, StageControl, StageStatus
 from admet.engines.control.fluidics.config import (
     FLUIDIC_CHANNEL_LABELS,
@@ -91,6 +91,7 @@ FLUIDICS_MAIN_SETTINGS = (
 )
 
 PIPELINE_STAGE_IDS = {"priming", "runs", "wash"}
+LEFT_RAIL_WIDTH = 246
 
 
 class ControlWindow(QMainWindow):
@@ -104,6 +105,12 @@ class ControlWindow(QMainWindow):
         self.values = api.settings.defaults()
         self.last_result: EngineResult | None = None
         self.last_metadata: dict[str, Any] = {}
+        self.runtime_state: dict[str, bool] = {
+            "project": False,
+            "camera": False,
+            "camera_live": False,
+            "fluidics": False,
+        }
         self.status_kind = "primary"
         self.log_entries: list[str] = ["Control UI ready."]
         self.toc_rows: list[dict[str, Any]] = []
@@ -116,7 +123,11 @@ class ControlWindow(QMainWindow):
         self._qt_frame: np.ndarray | None = None
         self._latest_snapshot: Any | None = None
         self._syncing_table = False
+        self.instruction_card: NotificationCard | None = None
         self.notification: NotificationCard | None = None
+        self._instruction_text = ""
+        self._notification_text = ""
+        self._notification_kind = "primary"
 
         self.setWindowTitle("admet control")
         self.resize(1440, 920)
@@ -127,6 +138,9 @@ class ControlWindow(QMainWindow):
         self.preview: PreviewDisplay | None = None
         self.action_table: QTableWidget | None = None
         self.camera_selector: QComboBox | None = None
+        self.workflow_toc_panel: QFrame | None = None
+        self.notification_host: QWidget | None = None
+        self.notification_layout: QVBoxLayout | None = None
         self.action_box_panel: QFrame | None = None
         self.channel_manager_panel: QFrame | None = None
         self.channel_panel: ChannelControlPanel | None = None
@@ -166,7 +180,25 @@ class ControlWindow(QMainWindow):
         workspace_layout.setContentsMargins(0, 0, 0, 0)
         workspace_layout.setSpacing(14)
 
-        workspace_layout.addWidget(self._build_toc_panel(), 0, Qt.AlignmentFlag.AlignTop)
+        left_rail = QWidget()
+        left_rail.setFixedWidth(LEFT_RAIL_WIDTH)
+        left_rail.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        left_layout = QVBoxLayout(left_rail)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
+
+        self.workflow_toc_panel = self._build_toc_panel()
+        left_layout.addWidget(self.workflow_toc_panel, 0, Qt.AlignmentFlag.AlignTop)
+        self.notification_host = QWidget()
+        self.notification_host.setObjectName("NotificationHost")
+        self.notification_host.setFixedWidth(LEFT_RAIL_WIDTH)
+        self.notification_host.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+        self.notification_layout = QVBoxLayout(self.notification_host)
+        self.notification_layout.setContentsMargins(0, 0, 0, 0)
+        self.notification_layout.setSpacing(8)
+        left_layout.addWidget(self.notification_host, 0, Qt.AlignmentFlag.AlignTop)
+        left_layout.addStretch()
+        workspace_layout.addWidget(left_rail, 0, Qt.AlignmentFlag.AlignTop)
 
         from PySide6.QtWidgets import QScrollArea
 
@@ -326,7 +358,7 @@ class ControlWindow(QMainWindow):
             self.api.session = load_session(path)
         except Exception as exc:
             self._set_status("Project load failed", "danger")
-            self._notify(f"Project load failed: {exc}", "danger")
+            self._notify(f"Project load failed: {exc}", "danger", timeout_ms=0)
             return
         self.project_path = Path(path)
         self._sync_project_badge()
@@ -355,7 +387,7 @@ class ControlWindow(QMainWindow):
             self.project_path = save_session(target, self.api.session)
         except Exception as exc:
             self._set_status("Project save failed", "danger")
-            self._notify(f"Project save failed: {exc}", "danger")
+            self._notify(f"Project save failed: {exc}", "danger", timeout_ms=0)
             return
         self._sync_project_badge()
         self._set_status("Project saved", "success")
@@ -364,6 +396,7 @@ class ControlWindow(QMainWindow):
 
     def _select_stage(self, index: int) -> None:
         index = max(0, min(index, len(self.workflow.stages) - 1))
+        self._dismiss_notification(restore_instruction=False)
         statuses = dict(self.workflow_state.statuses)
         current = self.workflow.current_stage(self.workflow_state)
         if statuses.get(current.id) is StageStatus.ACTIVE:
@@ -391,6 +424,7 @@ class ControlWindow(QMainWindow):
         self.csv_status = None
 
         stage = self.workflow.current_stage(self.workflow_state)
+        self._refresh_runtime_state()
         if stage.id == "fluigent":
             self._ensure_fluigent_availability()
         self._render_action_box(stage)
@@ -401,6 +435,7 @@ class ControlWindow(QMainWindow):
         self._render_action(stage)
         self._render_log()
         self._sync_toc()
+        self._show_stage_instruction(stage)
 
     def _render_action_box(self, stage: Stage) -> None:
         action_box = QFrame()
@@ -458,7 +493,9 @@ class ControlWindow(QMainWindow):
 
         controls: list[tuple[str, Any, bool, bool, bool]] = []
         if any(surface.kind == "camera" for surface in stage.surfaces):
-            project_ready = self._project_ready()
+            project_ready = self.runtime_state["project"]
+            camera_connected = self.runtime_state["camera"]
+            camera_live = self.runtime_state["camera_live"]
             controls.extend(
                 (
                     (
@@ -471,14 +508,14 @@ class ControlWindow(QMainWindow):
                     (
                         "Connect",
                         lambda _checked=False: self._run("connect_camera"),
-                        project_ready and not self.last_metadata.get("camera_connected"),
+                        project_ready and not camera_connected,
                         False,
                         False,
                     ),
                     (
                         "Disconnect",
                         lambda _checked=False: self._run("disconnect_camera"),
-                        project_ready and bool(self.last_metadata.get("camera_connected")),
+                        project_ready and camera_connected,
                         False,
                         False,
                     ),
@@ -489,8 +526,8 @@ class ControlWindow(QMainWindow):
                             "start_camera_live",
                             "stop_camera_live",
                         ),
-                        project_ready and bool(self.last_metadata.get("camera_connected")),
-                        bool(self.last_metadata.get("camera_live")),
+                        project_ready and camera_connected,
+                        camera_live,
                         True,
                     ),
                 )
@@ -799,6 +836,10 @@ class ControlWindow(QMainWindow):
                 self.monitor_table.update_from_snapshot(self._latest_snapshot)
             self.results_layout.addWidget(self.monitor_table)
 
+        video_rows = self._video_rows()
+        if video_rows:
+            self.results_layout.addWidget(_video_table(video_rows))
+
         rows = self._result_rows()
         self.results_layout.addWidget(_field_table(rows))
 
@@ -889,15 +930,15 @@ class ControlWindow(QMainWindow):
     ):
         if self._action_requires_project(action) and not self._project_ready():
             self._set_status("Project required", "warning")
-            self._notify("Create or select a project before camera setup.", "warning")
+            self._notify("Create or select a project before camera setup.", "warning", timeout_ms=0)
             return None
         if self._action_requires_camera_live(action) and not self._camera_scene_ready():
             self._set_status("Camera live preview required", "warning")
-            self._notify("Connect camera and start live preview first.", "warning")
+            self._notify("Connect camera and start live preview first.", "warning", timeout_ms=0)
             return None
         if self._action_requires_fluigent(action) and not self._fluigent_ready():
             self._set_status("Fluigent connection required", "warning")
-            self._notify("Connect Fluigent first.", "warning")
+            self._notify("Connect Fluigent first.", "warning", timeout_ms=0)
             return None
         payload = self._action_payload(action)
         if settings:
@@ -914,10 +955,13 @@ class ControlWindow(QMainWindow):
             return None
         self.last_result = result
         self.last_metadata = dict(result.result_set.metadata)
+        self._refresh_runtime_state()
+        if action == "stop_recording":
+            self._store_recording_artifact(result.artifacts.get("recording"))
         warning = self._action_result_warning(action, self.last_metadata)
         if warning:
             self._set_status(action, "warning")
-            self._notify(warning, "warning")
+            self._notify(warning, "warning", timeout_ms=0)
             self._append_log(f"{action}: warning: {warning}")
         else:
             self._set_status("Ready", "primary")
@@ -1133,13 +1177,12 @@ class ControlWindow(QMainWindow):
                 message = f"{type(exc).__name__}: {exc}"
                 if message != self._last_poll_error:
                     self._last_poll_error = message
-                    self._set_status("Status poll failed", "danger")
                     self._append_log(f"camera_status: {message}")
-                    self._notify(f"Status poll failed: {exc}", "danger")
                 return
             self._last_poll_error = ""
             self.last_result = result
             self.last_metadata = dict(result.result_set.metadata)
+            self._refresh_runtime_state()
             self._stop_recording_on_finished_pipeline()
 
     def _stop_recording_on_finished_pipeline(self) -> None:
@@ -1292,9 +1335,9 @@ class ControlWindow(QMainWindow):
         if status in {"inactive", "error"}:
             return 0.0
         if self._stage_uses_camera(stage):
-            if self.last_metadata.get("camera_live"):
+            if self.runtime_state["camera_live"]:
                 return 100.0
-            if self.last_metadata.get("camera_connected"):
+            if self.runtime_state["camera"]:
                 return 65.0
             if self.last_metadata.get("camera_count"):
                 return 30.0
@@ -1325,8 +1368,29 @@ class ControlWindow(QMainWindow):
     def _stage_uses_fluidics(self, stage: Stage) -> bool:
         return stage.id in {"fluigent", "corrections", "priming", "runs", "wash"}
 
+    def _refresh_runtime_state(self) -> None:
+        camera = getattr(self.api.engine, "camera", None)
+        hardware = getattr(self.api.engine, "hardware", None)
+        self.runtime_state.update(
+            {
+                "project": self._project_ready(),
+                "camera": self._bool_attr(camera, "connected", "camera_connected"),
+                "camera_live": self._bool_attr(self.api.engine, "camera_live", "camera_live"),
+                "fluidics": self._bool_attr(hardware, "connected", "connected"),
+            }
+        )
+
+    def _bool_attr(self, owner: Any, attr: str, fallback_metadata: str) -> bool:
+        if owner is not None and hasattr(owner, attr):
+            try:
+                return bool(getattr(owner, attr))
+            except Exception:
+                pass
+        return bool(self.last_metadata.get(fallback_metadata))
+
     def _camera_scene_ready(self) -> bool:
-        return bool(self.last_metadata.get("camera_live"))
+        self._refresh_runtime_state()
+        return self.runtime_state["camera_live"]
 
     def _action_requires_camera_live(self, action: str) -> bool:
         return action == "start_recording"
@@ -1359,7 +1423,8 @@ class ControlWindow(QMainWindow):
         }
 
     def _fluigent_ready(self) -> bool:
-        return bool(self.last_metadata.get("connected"))
+        self._refresh_runtime_state()
+        return self.runtime_state["fluidics"]
 
     def _action_result_warning(self, action: str, metadata: dict[str, Any]) -> str:
         if action == "connect_camera" and metadata.get("camera_connect_ok") is False:
@@ -1399,7 +1464,8 @@ class ControlWindow(QMainWindow):
         )
 
     def _schedule_camera_apply(self) -> None:
-        if self._syncing_table or not self.last_metadata.get("camera_connected"):
+        self._refresh_runtime_state()
+        if self._syncing_table or not self.runtime_state["camera"]:
             return
         self._camera_apply_timer.start(180)
 
@@ -1556,6 +1622,85 @@ class ControlWindow(QMainWindow):
                 break
         return {name: self.values.get(name) for name in action_params}
 
+    def _store_recording_artifact(self, recording: Any) -> None:
+        if not isinstance(recording, dict) or self.api.session is None:
+            return
+        video_path = str(recording.get("video_path") or "")
+        if not video_path:
+            return
+        if self.project_path is not None:
+            video_path = str(Path(video_path).resolve())
+            recording = {**recording, "video_path": video_path}
+        metadata = _video_metadata(recording)
+        if self.project_path is not None and not _path_is_relative_to(Path(video_path), self.project_path):
+            metadata["external"] = True
+        files = list(self.api.session.files)
+        file_id = _video_file_id(video_path, files)
+        stored = SessionFile(
+            id=file_id,
+            path=video_path,
+            role="control_video",
+            media_type="video/avi",
+            metadata=metadata,
+        )
+        for index, file in enumerate(files):
+            if file.id == file_id or file.path == video_path or file.metadata.get("video_path") == video_path:
+                files[index] = stored
+                break
+        else:
+            files.append(stored)
+        self.api.session = replace(self.api.session, files=tuple(files))
+        if self.project_path is not None:
+            try:
+                self.project_path = save_session(self.project_path, self.api.session)
+            except Exception as exc:
+                self._append_log(f"project: video metadata save failed: {exc}")
+
+    def _video_rows(self) -> list[dict[str, str]]:
+        rows: dict[str, dict[str, str]] = {}
+        session = self.api.session
+        if session is not None:
+            for file in session.files:
+                if file.role != "control_video" and file.media_type != "video/avi":
+                    continue
+                data = dict(file.metadata)
+                data.setdefault("video_path", file.path)
+                rows[str(data.get("video_path") or file.path)] = _video_row(data)
+
+        for recording in self._recording_metadata_sources():
+            row = _video_row(recording)
+            key = str(recording.get("video_path") or row["video"])
+            rows[key] = row
+        return list(rows.values())
+
+    def _recording_metadata_sources(self) -> list[dict[str, Any]]:
+        recordings: list[dict[str, Any]] = []
+        artifacts = self.last_result.artifacts if self.last_result is not None else {}
+        artifact_recording = artifacts.get("recording") if isinstance(artifacts, dict) else None
+        if isinstance(artifact_recording, dict):
+            recordings.append(artifact_recording)
+
+        for key in ("current_recording", "last_recording"):
+            value = self.last_metadata.get(key)
+            if isinstance(value, dict):
+                recordings.append(value)
+        value = self.last_metadata.get("recordings")
+        if isinstance(value, list):
+            recordings.extend(item for item in value if isinstance(item, dict))
+
+        session = getattr(self.api.engine, "_recording_session", None)
+        if session is not None:
+            current = getattr(session, "current", None)
+            if current is not None:
+                recordings.append(current.to_dict())
+            recordings.extend(
+                item for item in getattr(session, "recordings", []) if isinstance(item, dict)
+            )
+        last_recording = getattr(self.api.engine, "_last_recording", None)
+        if last_recording is not None:
+            recordings.append(last_recording.to_dict())
+        return recordings
+
     def _result_rows(self) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
         if self.last_result is not None:
@@ -1591,6 +1736,36 @@ class ControlWindow(QMainWindow):
         shape = "x".join(str(value) for value in frame_shape) if frame_shape else "no frame"
         return f"Camera {connected}, {live}. {fps:.1f} fps. Frame: {shape}."
 
+    def _show_stage_instruction(self, stage: Stage | None = None) -> None:
+        if stage is None:
+            stage = self.workflow.current_stage(self.workflow_state)
+        self._show_instruction_card(self._stage_instruction(stage))
+
+    def _stage_instruction(self, stage: Stage) -> str:
+        if stage.id == "scene":
+            if not self.runtime_state["project"]:
+                return "Create or select an admet project, then refresh and connect the camera."
+            if not self.runtime_state["camera"]:
+                return "Refresh cameras, choose the camera in Settings, then connect it."
+            if not self.runtime_state["camera_live"]:
+                return "Start Live to preview the connected camera and apply camera settings."
+            return "Camera live preview is active. Adjust camera settings or move to Fluigent."
+        if stage.id == "fluigent":
+            if not self._fluigent_ready():
+                return "Connect Fluigent. Use simulated mode only when no instrument is attached."
+            return "Fluigent is connected. Review channel readings and continue when ready."
+        if stage.id == "corrections":
+            return "Review the correction matrix, then apply all corrections."
+        if stage.id == "priming":
+            return "Start priming, follow each protocol prompt, and press Proceed when the physical step is complete."
+        if stage.id == "runs":
+            if not self._fluigent_ready():
+                return "Connect Fluigent before starting test runs."
+            return "Set run count and volume, then start test runs. Camera recording starts automatically when live preview is active."
+        if stage.id == "wash":
+            return "Start wash and follow each protocol prompt until shutdown is complete."
+        return stage.description or stage.label
+
     def _default_controls(self, stage: Stage) -> tuple[StageControl, ...]:
         if stage.id == "corrections" or stage.id in PIPELINE_STAGE_IDS:
             return ()
@@ -1607,20 +1782,55 @@ class ControlWindow(QMainWindow):
         self.status_kind = kind
 
     def _notify(self, text: str, kind: str = "primary", *, timeout_ms: int = 3500) -> None:
-        self._show_notification(text, kind=kind, timeout_ms=timeout_ms)
+        self._show_notification_card(text, kind=kind, timeout_ms=timeout_ms)
 
     def _confirm(self, text: str, on_confirm: Callable[[], None]) -> None:
-        self._show_notification(text, kind="warning", on_confirm=on_confirm, timeout_ms=0)
+        self._show_notification_card(
+            text,
+            kind="warning",
+            on_confirm=on_confirm,
+            timeout_ms=0,
+        )
 
-    def _dismiss_notification(self) -> None:
+    def _dismiss_notification(self, *, restore_instruction: bool = True) -> None:
         card = self.notification
         if card is None:
+            if restore_instruction:
+                self._show_stage_instruction()
             return
         self.notification = None
+        self._notification_text = ""
+        self._notification_kind = "primary"
+        if self.notification_layout is not None:
+            self.notification_layout.removeWidget(card)
+        card.blockSignals(True)
         card.close()
         card.deleteLater()
+        if restore_instruction:
+            self._show_stage_instruction()
 
-    def _show_notification(
+    def _show_instruction_card(self, text: str) -> None:
+        if self.instruction_card is not None and self._instruction_text == text:
+            return
+        if self.instruction_card is not None:
+            card = self.instruction_card
+            self.instruction_card = None
+            if self.notification_layout is not None:
+                self.notification_layout.removeWidget(card)
+            card.blockSignals(True)
+            card.close()
+            card.deleteLater()
+        parent = self.notification_host or self.centralWidget()
+        if parent is None:
+            return
+        self._instruction_text = text
+        self.instruction_card = NotificationCard(parent, text, "primary")
+        if self.notification_layout is not None:
+            self.notification_layout.insertWidget(0, self.instruction_card)
+        self._position_notification()
+        self.instruction_card.show()
+
+    def _show_notification_card(
         self,
         text: str,
         *,
@@ -1628,16 +1838,24 @@ class ControlWindow(QMainWindow):
         on_confirm: Callable[[], None] | None = None,
         timeout_ms: int = 3500,
     ) -> None:
-        old_card = self.notification
-        if old_card is not None:
-            self.notification = None
-            old_card.close()
-            old_card.deleteLater()
-        parent = self.centralWidget()
+        if (
+            self.notification is not None
+            and self._notification_text == text
+            and self._notification_kind == kind
+            and on_confirm is None
+        ):
+            return
+        if self.notification is not None:
+            self._dismiss_notification(restore_instruction=False)
+        parent = self.notification_host or self.centralWidget()
         if parent is None:
             return
         self.notification = NotificationCard(parent, text, kind, on_confirm=on_confirm)
+        self._notification_text = text
+        self._notification_kind = kind
         self.notification.closed.connect(self._clear_notification)
+        if self.notification_layout is not None:
+            self.notification_layout.addWidget(self.notification)
         self._position_notification()
         self.notification.show()
         self.notification.raise_()
@@ -1645,27 +1863,46 @@ class ControlWindow(QMainWindow):
             card = self.notification
             QTimer.singleShot(
                 timeout_ms,
-                lambda: card.close() if card is self.notification else None,
+                lambda: self._dismiss_notification() if card is self.notification else None,
             )
 
     def _clear_notification(self) -> None:
+        card = self.notification
         self.notification = None
+        self._notification_text = ""
+        self._notification_kind = "primary"
+        if card is not None and self.notification_layout is not None:
+            self.notification_layout.removeWidget(card)
+            card.deleteLater()
 
     def _position_notification(self) -> None:
-        if self.notification is None:
+        if self.instruction_card is None and self.notification is None:
+            return
+        if self.notification_host is not None:
+            available_height = max(120, self.height() - self.notification_host.y() - 18)
+            if self.instruction_card is not None:
+                self.instruction_card.fit_to_parent(
+                    LEFT_RAIL_WIDTH,
+                    available_height,
+                )
+            if self.notification is not None:
+                self.notification.fit_to_parent(LEFT_RAIL_WIDTH, available_height)
             return
         parent = self.centralWidget()
         if parent is None:
             return
+        card = self.notification or self.instruction_card
+        if card is None:
+            return
         margin = 18
-        self.notification.fit_to_parent(
-            max(320, parent.width() - margin * 2),
+        card.fit_to_parent(
+            max(220, parent.width() - margin * 2),
             max(120, parent.height() - margin * 2),
         )
-        size = self.notification.size()
+        size = card.size()
         x = max(margin, parent.width() - size.width() - margin)
         y = max(margin, parent.height() - size.height() - margin)
-        self.notification.move(x, y)
+        card.move(x, y)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -1921,6 +2158,8 @@ def _safe_list_value(values: Any, index: int, *, default: Any = 0.0) -> Any:
 
 
 _MAX_PLOT_SAMPLES = 6000
+_MAX_RENDERED_PLOT_POINTS = 1200
+_PLOT_REFRESH_INTERVAL_S = 0.15
 _VISIBLE_PLOT_WINDOW_S = 60.0
 _PLOT_COLORS = (Theme.ACCENT, Theme.DANGER_HOVER, Theme.SUCCESS_HOVER)
 _PLOT_LABELS = FLUIDIC_CHANNEL_LABELS
@@ -1931,7 +2170,7 @@ class LivePlot(QWidget):
         super().__init__(parent)
         import pyqtgraph as pg
 
-        pg.setConfigOptions(antialias=True, background=Theme.BG_DARK, foreground=Theme.TEXT_MUTED)
+        pg.setConfigOptions(antialias=False, background=Theme.BG_DARK, foreground=Theme.TEXT_MUTED)
         self._pg = pg
         self._times: deque[float] = deque(maxlen=_MAX_PLOT_SAMPLES)
         self._series: list[deque[float]] = [
@@ -1976,10 +2215,12 @@ class LivePlot(QWidget):
     def refresh(self, bin_size: float = 0.0) -> None:
         if not self._times:
             return
-        t_arr = np.array(self._times)
+        t_arr = np.asarray(self._times, dtype=float)
+        t_arr, visible_slice = self._visible_time_slice(t_arr)
         for index, curve in enumerate(self._curves):
-            y_arr = np.array(self._series[index])
+            y_arr = np.asarray(self._series[index], dtype=float)[visible_slice]
             t_out, y_out = _bin_arrays(t_arr, y_arr, bin_size)
+            t_out, y_out = _limit_plot_points(t_out, y_out, _MAX_RENDERED_PLOT_POINTS)
             curve.setData(t_out, y_out)
         if self._auto_scroll:
             self._update_x_range()
@@ -2005,6 +2246,21 @@ class LivePlot(QWidget):
             visible = view_range[0][1] - view_range[0][0]
             self._plot.setXRange(x_max - visible, x_max, padding=0)
 
+    def _visible_time_slice(self, t_arr: np.ndarray) -> tuple[np.ndarray, slice]:
+        if len(t_arr) <= _MAX_RENDERED_PLOT_POINTS:
+            return t_arr, slice(None)
+        if self._auto_scroll:
+            x_max = t_arr[-1]
+            x_min = x_max - _VISIBLE_PLOT_WINDOW_S
+        else:
+            view_range = self._plot.viewRange()
+            x_min, x_max = view_range[0]
+        start = int(np.searchsorted(t_arr, x_min, side="left"))
+        stop = int(np.searchsorted(t_arr, x_max, side="right"))
+        if stop <= start:
+            return t_arr[-_MAX_RENDERED_PLOT_POINTS:], slice(-_MAX_RENDERED_PLOT_POINTS, None)
+        return t_arr[start:stop], slice(start, stop)
+
     def _wheel_event(self, event) -> None:
         self._auto_scroll = False
         self._pg.PlotWidget.wheelEvent(self._plot, event)
@@ -2017,6 +2273,7 @@ class LivePlot(QWidget):
 class PlotPanel(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self._last_refresh_at = 0.0
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(ui.spacing("control"))
@@ -2051,9 +2308,13 @@ class PlotPanel(QWidget):
 
     def update_from_snapshot(self, snapshot) -> None:
         self.ingest_from_snapshot(snapshot)
+        now = time.monotonic()
+        if now - self._last_refresh_at < _PLOT_REFRESH_INTERVAL_S:
+            return
         self.refresh()
 
     def refresh(self) -> None:
+        self._last_refresh_at = time.monotonic()
         bin_size = self._bin_spin.value()
         self._pressure.refresh(bin_size=bin_size)
         self._flow.refresh(bin_size=bin_size)
@@ -2074,6 +2335,13 @@ def _bin_arrays(x: np.ndarray, y: np.ndarray, bin_size: float) -> tuple[np.ndarr
     return x_binned, y_binned
 
 
+def _limit_plot_points(x: np.ndarray, y: np.ndarray, limit: int) -> tuple[np.ndarray, np.ndarray]:
+    if limit <= 0 or len(x) <= limit:
+        return x, y
+    step = max(1, int(np.ceil(len(x) / limit)))
+    return x[::step], y[::step]
+
+
 class NotificationCard(QFrame):
     closed = Signal()
 
@@ -2090,7 +2358,7 @@ class NotificationCard(QFrame):
         self.setObjectName("NotificationCard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
-        self.setMinimumWidth(360)
+        self.setMinimumWidth(220)
         self.setMaximumWidth(580)
 
         layout = QVBoxLayout(self)
@@ -2125,7 +2393,7 @@ class NotificationCard(QFrame):
         self.setStyleSheet(_notification_qss(kind))
 
     def fit_to_parent(self, available_width: int, available_height: int) -> None:
-        width = min(580, max(360, available_width))
+        width = min(580, max(220, available_width))
         self.setFixedWidth(width)
         label_width = max(120, width - 38)
         self.text_label.setFixedWidth(label_width)
@@ -2258,10 +2526,123 @@ def _field_table(rows: list[tuple[str, str]]) -> QTableWidget:
     return table
 
 
+def _video_table(rows: list[dict[str, str]]) -> QTableWidget:
+    columns = (
+        ("video", "Video"),
+        ("acquisition_fps", "Acq FPS"),
+        ("dimensions", "Dimensions"),
+        ("converted_fps", "Converted FPS"),
+        ("frames", "Frames"),
+        ("duration", "Duration"),
+    )
+    table = QTableWidget(len(rows), len(columns))
+    table.setObjectName("RawConfigTable")
+    table.setHorizontalHeaderLabels(tuple(label for _key, label in columns))
+    table.verticalHeader().hide()
+    table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    for column in range(1, len(columns)):
+        table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+    table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
+    table.setShowGrid(True)
+    for row_index, row in enumerate(rows):
+        for column_index, (key, _label) in enumerate(columns):
+            item = QTableWidgetItem(row.get(key, ""))
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            table.setItem(row_index, column_index, item)
+    table.resizeRowsToContents()
+    _fit_table_height(table)
+    return table
+
+
 def _fit_table_height(table: QTableWidget) -> None:
     height = table.horizontalHeader().height() + table.frameWidth() * 2
     height += sum(table.rowHeight(row) for row in range(table.rowCount()))
     table.setFixedHeight(height)
+
+
+def _video_metadata(recording: dict[str, Any]) -> dict[str, Any]:
+    width = int(float(recording.get("width") or 0))
+    height = int(float(recording.get("height") or 0))
+    converted_fps = float(recording.get("converted_fps") or recording.get("fps") or 0.0)
+    acquisition_fps = float(recording.get("acquisition_fps") or 0.0)
+    return {
+        "video_path": str(recording.get("video_path") or ""),
+        "video_prefix": str(recording.get("video_prefix") or ""),
+        "started_at": str(recording.get("started_at") or ""),
+        "stopped_at": str(recording.get("stopped_at") or ""),
+        "duration_s": float(recording.get("duration_s") or 0.0),
+        "frames_recorded": recording.get("frames_recorded"),
+        "frames_written": recording.get("frames_written"),
+        "width": width,
+        "height": height,
+        "dimensions": f"{width}x{height}" if width and height else "",
+        "acquisition_fps": acquisition_fps,
+        "converted_fps": converted_fps,
+        "droplegen_csv": str(recording.get("droplegen_csv") or ""),
+    }
+
+
+def _video_row(recording: dict[str, Any]) -> dict[str, str]:
+    metadata = _video_metadata(recording)
+    video_path = metadata["video_path"]
+    frames = metadata["frames_recorded"]
+    if frames is None:
+        frames = metadata["frames_written"]
+    return {
+        "video": Path(video_path).name if video_path else str(recording.get("video_prefix") or "recording"),
+        "acquisition_fps": _format_number(metadata["acquisition_fps"], digits=2),
+        "dimensions": metadata["dimensions"],
+        "converted_fps": _format_number(metadata["converted_fps"], digits=2),
+        "frames": "" if frames is None else str(frames),
+        "duration": _format_duration(metadata["duration_s"]),
+    }
+
+
+def _video_file_id(video_path: str, files: list[SessionFile]) -> str:
+    for file in files:
+        if file.path == video_path or file.metadata.get("video_path") == video_path:
+            return file.id
+    stem = Path(video_path).stem or "video"
+    base = "video-" + "".join(ch.lower() if ch.isalnum() else "-" for ch in stem).strip("-")
+    existing = {file.id for file in files}
+    candidate = base or "video"
+    index = 2
+    while candidate in existing:
+        candidate = f"{base}-{index}"
+        index += 1
+    return candidate
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    if not path.is_absolute():
+        return True
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _format_number(value: Any, *, digits: int) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if number <= 0:
+        return ""
+    return f"{number:.{digits}f}"
+
+
+def _format_duration(value: Any) -> str:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if seconds <= 0:
+        return ""
+    return f"{seconds:.2f} s"
 
 
 def _short_control_label(label: str) -> str:

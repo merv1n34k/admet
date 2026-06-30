@@ -107,9 +107,13 @@ class RecordingSessionTests(unittest.TestCase):
         self.assertEqual(control.actions[1][0], "stop_recording")
         self.assertEqual(stopped.frames_recorded, 5)
         self.assertEqual(stopped.frames_written, 7)
+        self.assertEqual(stopped.converted_fps, 120.0)
+        self.assertGreater(stopped.acquisition_fps, 0.0)
         self.assertTrue(stopped.video_path.endswith("run1_fake.avi"))
         self.assertEqual(summary["recording_count"], 1)
         self.assertEqual(summary["recordings"][0]["video_prefix"], "run1")
+        self.assertEqual(summary["recordings"][0]["converted_fps"], 120.0)
+        self.assertGreater(summary["recordings"][0]["acquisition_fps"], 0.0)
 
     def test_camera_auto_stop_finalizes_full_session(self):
         with tempfile.TemporaryDirectory() as tmpdir:

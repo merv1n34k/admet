@@ -384,10 +384,12 @@ class FluidicsControlEngine:
             self._restore_camera_preview_after_recording()
             if metadata is not None:
                 self._last_recording = metadata
+                recording = metadata.to_dict()
                 return {
                     "csv_path": metadata.droplegen_csv,
                     "report_dir": str(self._recording_session.report_dir or ""),
                     "video_path": metadata.video_path,
+                    "recording": recording,
                 }
         if not self._recording:
             self._restore_camera_preview_after_recording()
@@ -907,6 +909,12 @@ class FluidicsControlEngine:
             "queued_snapshots": self.data_queue.qsize(),
             "queued_pipeline_events": self.pipeline_queue.qsize(),
         }
+        if self._recording_session is not None:
+            metadata["recordings"] = list(self._recording_session.recordings)
+            if self._recording_session.current is not None:
+                metadata["current_recording"] = self._recording_session.current.to_dict()
+        if self._last_recording is not None:
+            metadata["last_recording"] = self._last_recording.to_dict()
         if extra_metadata:
             metadata.update(extra_metadata)
         stats = (
