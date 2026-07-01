@@ -23,10 +23,12 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QComboBox,
+    QScrollArea,
     QDoubleSpinBox,
     QSizePolicy,
     QLineEdit,
     QSpinBox,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -101,6 +103,59 @@ _VIDEO_TABLE_COLUMNS = (
 )
 
 
+def _panel_box(title: str, object_name: str = "Panel") -> tuple[QFrame, QVBoxLayout]:
+    panel = QFrame()
+    panel.setObjectName(object_name)
+    root = QVBoxLayout(panel)
+    root.setContentsMargins(0, 0, 0, 0)
+    root.setSpacing(6)
+    label = QLabel(title)
+    label.setObjectName("PanelTitle")
+    root.addWidget(label)
+    body = QVBoxLayout()
+    body.setContentsMargins(0, 0, 0, 0)
+    body.setSpacing(8)
+    root.addLayout(body)
+    return panel, body
+
+
+class ControlStagePage(QWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.mounted_signature: tuple[Any, ...] | None = None
+        self.transport_button_refs: list[QPushButton] = []
+        self.protocol_status_label: QLabel | None = None
+        self.protocol_progress_bar: QProgressBar | None = None
+        self.protocol_confirm_label: QLabel | None = None
+        self.param_editors: dict[str, QWidget] = {}
+        self.action_table: QTableWidget | None = None
+        self.channel_panel: ChannelControlPanel | None = None
+        self.video_table: QTableWidget | None = None
+        self.log_label: QLabel | None = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        self.action_box_panel, self.action_box_layout = _panel_box("Action Box")
+        self.action_panel, self.action_layout = _panel_box("Action Panel")
+        self.main_panel, self.main_layout = _panel_box("Main Window", "MainPanel")
+        self.channel_manager_panel, self.channel_manager_layout = _panel_box("Channel Manager")
+        self.results_panel, self.results_layout = _panel_box("Results")
+        self.log_panel, self.log_layout = _panel_box("Action Log")
+
+        for panel in (
+            self.action_box_panel,
+            self.action_panel,
+            self.main_panel,
+            self.channel_manager_panel,
+            self.results_panel,
+            self.log_panel,
+        ):
+            layout.addWidget(panel)
+        layout.addStretch()
+
+
 class ControlWindow(QMainWindow):
     camera_frame_ready = Signal(object)
 
@@ -153,7 +208,20 @@ class ControlWindow(QMainWindow):
         self.notification_host: QWidget | None = None
         self.notification_layout: QVBoxLayout | None = None
         self.action_box_panel: QFrame | None = None
+        self.action_box_layout: QVBoxLayout | None = None
+        self.action_panel: QFrame | None = None
+        self.action_layout: QVBoxLayout | None = None
+        self.main_panel: QFrame | None = None
+        self.main_layout: QVBoxLayout | None = None
         self.channel_manager_panel: QFrame | None = None
+        self.channel_manager_layout: QVBoxLayout | None = None
+        self.results_panel: QFrame | None = None
+        self.results_layout: QVBoxLayout | None = None
+        self.log_panel: QFrame | None = None
+        self.log_layout: QVBoxLayout | None = None
+        self.stage_stack: QStackedWidget | None = None
+        self.stage_pages: dict[str, ControlStagePage] = {}
+        self.current_stage_page: ControlStagePage | None = None
         self.channel_panel: ChannelControlPanel | None = None
         self.monitor_table: FluidicsMonitorTable | None = None
         self.video_table: QTableWidget | None = None
@@ -219,8 +287,6 @@ class ControlWindow(QMainWindow):
         left_layout.addStretch()
         workspace_layout.addWidget(left_rail, 0, Qt.AlignmentFlag.AlignTop)
 
-        from PySide6.QtWidgets import QScrollArea
-
         page_scroll = QScrollArea()
         page_scroll.setObjectName("PageScroll")
         page_scroll.setWidgetResizable(True)
@@ -233,22 +299,9 @@ class ControlWindow(QMainWindow):
         content_layout.setSpacing(12)
         page_scroll.setWidget(content)
 
-        self.action_box_panel, self.action_box_layout = self._box("Action Box")
-        self.action_panel, self.action_layout = self._box("Action Panel")
-        self.main_panel, self.main_layout = self._box("Main Window", "MainPanel")
-        self.channel_manager_panel, self.channel_manager_layout = self._box("Channel Manager")
-        self.results_panel, self.results_layout = self._box("Results")
-        self.log_panel, self.log_layout = self._box("Action Log")
-
-        for panel in (
-            self.action_box_panel,
-            self.action_panel,
-            self.main_panel,
-            self.channel_manager_panel,
-            self.results_panel,
-            self.log_panel,
-        ):
-            content_layout.addWidget(panel)
+        self.stage_stack = QStackedWidget()
+        self.stage_stack.setObjectName("StageStack")
+        content_layout.addWidget(self.stage_stack)
         content_layout.addStretch()
         workspace_layout.addWidget(page_scroll, 1)
         root.addWidget(workspace, 1)
@@ -321,20 +374,57 @@ class ControlWindow(QMainWindow):
         layout.addStretch()
         return panel
 
-    def _box(self, title: str, object_name: str = "Panel") -> tuple[QFrame, QVBoxLayout]:
-        panel = QFrame()
-        panel.setObjectName(object_name)
-        root = QVBoxLayout(panel)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(6)
-        label = QLabel(title)
-        label.setObjectName("PanelTitle")
-        root.addWidget(label)
-        body = QVBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(8)
-        root.addLayout(body)
-        return panel, body
+    def _activate_stage_page(self, stage: Stage) -> ControlStagePage:
+        page = self.stage_pages.get(stage.id)
+        if page is None:
+            page = ControlStagePage()
+            self.stage_pages[stage.id] = page
+            if self.stage_stack is not None:
+                self.stage_stack.addWidget(page)
+        if self.stage_stack is not None and self.stage_stack.currentWidget() is not page:
+            self.stage_stack.setCurrentWidget(page)
+        self.current_stage_page = page
+        self.action_box_panel = page.action_box_panel
+        self.action_box_layout = page.action_box_layout
+        self.action_panel = page.action_panel
+        self.action_layout = page.action_layout
+        self.main_panel = page.main_panel
+        self.main_layout = page.main_layout
+        self.channel_manager_panel = page.channel_manager_panel
+        self.channel_manager_layout = page.channel_manager_layout
+        self.results_panel = page.results_panel
+        self.results_layout = page.results_layout
+        self.log_panel = page.log_panel
+        self.log_layout = page.log_layout
+        self._load_page_refs(page)
+        return page
+
+    def _load_page_refs(self, page: ControlStagePage) -> None:
+        self._mounted_signature = page.mounted_signature
+        self._transport_button_refs = page.transport_button_refs
+        self._protocol_status_label = page.protocol_status_label
+        self._protocol_progress_bar = page.protocol_progress_bar
+        self._protocol_confirm_label = page.protocol_confirm_label
+        self._param_editors = page.param_editors
+        self.action_table = page.action_table
+        self.channel_panel = page.channel_panel
+        self.video_table = page.video_table
+        self.log_label = page.log_label
+
+    def _save_page_refs(self) -> None:
+        page = self.current_stage_page
+        if page is None:
+            return
+        page.mounted_signature = self._mounted_signature
+        page.transport_button_refs = self._transport_button_refs
+        page.protocol_status_label = self._protocol_status_label
+        page.protocol_progress_bar = self._protocol_progress_bar
+        page.protocol_confirm_label = self._protocol_confirm_label
+        page.param_editors = self._param_editors
+        page.action_table = self.action_table
+        page.channel_panel = self.channel_panel
+        page.video_table = self.video_table
+        page.log_label = self.log_label
 
     def _toc_click_handler(self, index: int):
         def handler(event) -> None:
@@ -463,9 +553,19 @@ class ControlWindow(QMainWindow):
         self._refresh_runtime_state()
         if stage.id == "fluigent":
             self._ensure_fluigent_availability()
+        previous_page = self.current_stage_page
+        page = self._activate_stage_page(stage)
+        stage_changed = previous_page is not None and previous_page is not page
         signature = self._structure_signature(stage)
-        if signature != self._mounted_signature:
+        if signature != page.mounted_signature:
             self._mount_stage(stage)
+            page.mounted_signature = signature
+            self._mounted_signature = signature
+            self._save_page_refs()
+        elif stage_changed:
+            self._remount_shared_stage_panels(stage)
+            self._save_page_refs()
+        else:
             self._mounted_signature = signature
         self._sync_stage(stage)
 
@@ -511,6 +611,19 @@ class ControlWindow(QMainWindow):
         self._render_results(stage)
         self._render_action(stage)
         self._render_log()
+
+    def _remount_shared_stage_panels(self, stage: Stage) -> None:
+        self._detach_live_widgets()
+        self._clear_layout(self.main_layout)
+        self._clear_layout(self.channel_manager_layout)
+        self._clear_layout(self.results_layout)
+        self.camera_selector = None
+        self.channel_panel = None
+        self.csv_status = None
+        self.video_table = None
+        self._render_main(stage)
+        self._render_channel_manager(stage)
+        self._render_results(stage)
 
     def _sync_stage(self, stage: Stage) -> None:
         self._sync_action_box(stage)
