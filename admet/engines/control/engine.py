@@ -24,9 +24,10 @@ from admet.engines.control.fluidics import (
 from admet.engines.control.camera import Camera, CameraAcquisitionThread
 from admet.engines.control.fluidics.config import (
     FLUIDIC_CHANNELS,
-    PIPELINES,
     SENSOR_CALIBRATIONS,
     ProtocolStep,
+    build_protocol,
+    expand_protocol_steps,
 )
 from admet.engines.control.pipeline import (
     PipelineEngine,
@@ -47,6 +48,7 @@ from admet.engines.control.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_P
 
 
 log = logging.getLogger(__name__)
+ActionHandler = Callable[[dict[str, Any], EngineContext | None], EngineResult]
 
 CAMERA_CONFIGURATION_PARAMS = (
     "camera_width",
@@ -192,6 +194,91 @@ class FluidicsControlEngine:
         self._last_recording: RecordingMetadata | None = None
         self._video_writer_factory = video_writer_factory
         self._corrected_sensors: set[int] = set()
+        self._action_handlers = self._build_action_handlers()
+        self._validate_action_handlers()
+
+    def _build_action_handlers(self) -> dict[str, ActionHandler]:
+        return {
+            "connect_fluidics": lambda settings, _context: self._connect(settings),
+            "disconnect_fluidics": lambda _settings, _context: self._disconnect("disconnect_fluidics"),
+            "verify_backend": lambda _settings, _context: self._status_result(
+                "verify_backend",
+                extra_metadata=self._backend_preflight(),
+            ),
+            "verify_fluigent": lambda settings, _context: self._verify_fluigent(settings),
+            "refresh_cameras": lambda _settings, _context: self._status_result(
+                "refresh_cameras",
+                extra_metadata=self._camera_preflight(),
+            ),
+            "connect_camera": lambda settings, _context: self._connect_camera(settings),
+            "disconnect_camera": lambda _settings, _context: self._disconnect_camera(),
+            "apply_camera_settings": lambda settings, _context: self._apply_camera_settings(settings),
+            "start_camera_live": lambda _settings, _context: self._camera_live_status_action(
+                "start_camera_live",
+                self.start_camera_live,
+            ),
+            "stop_camera_live": lambda _settings, _context: self._camera_live_status_action(
+                "stop_camera_live",
+                self.stop_camera_live,
+            ),
+            "camera_status": lambda _settings, _context: self._status_result(
+                "camera_status",
+                extra_metadata=self._camera_status_metadata(),
+            ),
+            "start_polling": lambda _settings, _context: self._status_after("start_polling", self.start_polling),
+            "stop_polling": lambda _settings, _context: self._status_after("stop_polling", self.stop_polling),
+            "apply_corrections": lambda settings, _context: self._status_after(
+                "apply_corrections",
+                lambda: self.apply_corrections(settings),
+            ),
+            "set_channel_flow": lambda settings, _context: self._status_after(
+                "set_channel_flow",
+                lambda: self.set_channel_flow(settings["channel_index"], settings["channel_flow_ul_min"]),
+            ),
+            "set_channel_pressure": lambda settings, _context: self._status_after(
+                "set_channel_pressure",
+                lambda: self.set_channel_pressure(settings["channel_index"], settings["channel_pressure_mbar"]),
+            ),
+            "stop_channel": lambda settings, _context: self._status_after(
+                "stop_channel",
+                lambda: self.stop_channel(settings["channel_index"]),
+            ),
+            "set_channel_response": lambda settings, _context: self._status_after(
+                "set_channel_response",
+                lambda: self.set_channel_response(settings["channel_index"], settings["channel_response_s"]),
+            ),
+            "start_recording": lambda settings, context: self._status_result(
+                "start_recording",
+                artifacts=self.start_recording(settings, context),
+            ),
+            "stop_recording": lambda _settings, _context: self._status_result(
+                "stop_recording",
+                artifacts=self.stop_recording(),
+            ),
+            "run_protocol": lambda settings, _context: self._start_protocol_action(
+                "run_protocol",
+                settings["pipeline_name"],
+                settings,
+            ),
+            "pause_protocol": lambda _settings, _context: self._status_after("pause_protocol", self.pause_pipeline),
+            "resume_protocol": lambda _settings, _context: self._status_after("resume_protocol", self.resume_pipeline),
+            "stop_protocol": lambda _settings, _context: self._status_after("stop_protocol", self.stop_pipeline),
+            "confirm_protocol": lambda _settings, _context: self._status_after(
+                "confirm_protocol",
+                self.confirm_pipeline_step,
+            ),
+            "skip_protocol": lambda _settings, _context: self._status_after("skip_protocol", self.skip_pipeline_step),
+            "calibrate": lambda _settings, _context: self._status_after("calibrate", self.hardware.calibrate_all),
+            "wash": lambda settings, _context: self._start_protocol_action("wash", "Wash", settings),
+        }
+
+    def _validate_action_handlers(self) -> None:
+        declared = {action.id for action in self.actions}
+        handled = set(self._action_handlers)
+        missing = sorted(declared - handled)
+        extra = sorted(handled - declared)
+        if missing or extra:
+            raise RuntimeError(f"control action handler mismatch: missing={missing}, extra={extra}")
 
     def run_action(
         self,
@@ -200,84 +287,32 @@ class FluidicsControlEngine:
         context: EngineContext | None = None,
     ) -> EngineResult:
         normalized = validate_action_settings(self.settings, self.actions, action, settings)
-        if action == "connect_fluidics":
-            return self._connect(normalized)
-        if action == "verify_backend":
-            return self._status_result(action, extra_metadata=self._backend_preflight())
-        if action == "verify_fluigent":
-            return self._verify_fluigent(normalized)
-        if action == "refresh_cameras":
-            return self._status_result(action, extra_metadata=self._camera_preflight())
-        if action == "connect_camera":
-            return self._connect_camera(normalized)
-        if action == "disconnect_camera":
-            self.stop_camera_live()
-            self.camera.close()
-            return self._status_result(action, extra_metadata=self._camera_preflight())
-        if action == "apply_camera_settings":
-            return self._apply_camera_settings(normalized)
-        if action == "start_camera_live":
-            self.start_camera_live()
-            return self._status_result(action, extra_metadata=self._camera_status_metadata())
-        if action == "stop_camera_live":
-            self.stop_camera_live()
-            return self._status_result(action, extra_metadata=self._camera_status_metadata())
-        if action == "camera_status":
-            return self._status_result(action, extra_metadata=self._camera_status_metadata())
-        if action == "disconnect_fluidics":
-            return self._disconnect(action)
-        if action == "start_polling":
-            self.start_polling()
-            return self._status_result(action)
-        if action == "stop_polling":
-            self.stop_polling()
-            return self._status_result(action)
-        if action == "apply_corrections":
-            self.apply_corrections(normalized)
-            return self._status_result(action)
-        if action == "set_channel_flow":
-            self.set_channel_flow(normalized["channel_index"], normalized["channel_flow_ul_min"])
-            return self._status_result(action)
-        if action == "set_channel_pressure":
-            self.set_channel_pressure(normalized["channel_index"], normalized["channel_pressure_mbar"])
-            return self._status_result(action)
-        if action == "stop_channel":
-            self.stop_channel(normalized["channel_index"])
-            return self._status_result(action)
-        if action == "set_channel_response":
-            self.set_channel_response(normalized["channel_index"], normalized["channel_response_s"])
-            return self._status_result(action)
-        if action == "start_recording":
-            artifacts = self.start_recording(normalized, context)
-            return self._status_result(action, artifacts=artifacts)
-        if action == "stop_recording":
-            artifacts = self.stop_recording()
-            return self._status_result(action, artifacts=artifacts)
-        if action == "run_protocol":
-            self.start_pipeline(normalized["pipeline_name"], settings=normalized, tick_s=normalized["tick_s"])
-            return self._status_result(action)
-        if action == "pause_protocol":
-            self.pause_pipeline()
-            return self._status_result(action)
-        if action == "resume_protocol":
-            self.resume_pipeline()
-            return self._status_result(action)
-        if action == "stop_protocol":
-            self.stop_pipeline()
-            return self._status_result(action)
-        if action == "confirm_protocol":
-            self.confirm_pipeline_step()
-            return self._status_result(action)
-        if action == "skip_protocol":
-            self.skip_pipeline_step()
-            return self._status_result(action)
-        if action == "calibrate":
-            self.hardware.calibrate_all()
-            return self._status_result(action)
-        if action == "wash":
-            self.start_pipeline("Wash", settings=normalized, tick_s=normalized["tick_s"])
-            return self._status_result(action)
-        raise ValueError(f"unsupported fluidics action: {action}")
+        handler = self._action_handlers.get(action)
+        if handler is None:
+            raise ValueError(f"unsupported fluidics action: {action}")
+        return handler(normalized, context)
+
+    def _status_after(self, action: str, operation: Callable[[], None]) -> EngineResult:
+        operation()
+        return self._status_result(action)
+
+    def _camera_live_status_action(self, action: str, operation: Callable[[], None]) -> EngineResult:
+        operation()
+        return self._status_result(action, extra_metadata=self._camera_status_metadata())
+
+    def _disconnect_camera(self) -> EngineResult:
+        self.stop_camera_live()
+        self.camera.close()
+        return self._status_result("disconnect_camera", extra_metadata=self._camera_preflight())
+
+    def _start_protocol_action(
+        self,
+        action: str,
+        name: str,
+        settings: dict[str, Any],
+    ) -> EngineResult:
+        self.start_pipeline(name, settings=settings, tick_s=settings["tick_s"])
+        return self._status_result(action)
 
     @property
     def polling_active(self) -> bool:
@@ -542,14 +577,7 @@ class FluidicsControlEngine:
     ) -> None:
         if self._pipeline and self._pipeline.is_alive():
             return
-        if name == "Priming" and settings:
-            steps = self.build_pipeline_from_steps(self._priming_protocol(settings))
-        elif name == "Drop-Seq" and settings:
-            steps = self.build_pipeline_from_steps(self._dropseq_run_protocol(settings))
-        elif name == "Wash" and settings:
-            steps = self.build_pipeline_from_steps(self._wash_protocol(settings))
-        else:
-            steps = self.build_pipeline(name)
+        steps = self.build_pipeline_from_steps(build_protocol(name, settings))
         sensor_to_channel = {
             channel.sensor_index: channel_index
             for channel_index, channel in enumerate(self.channel_manager.channels)
@@ -587,10 +615,7 @@ class FluidicsControlEngine:
             self._pipeline.confirm_pending()
 
     def build_pipeline(self, name: str) -> list[PipelineStep]:
-        protocol = PIPELINES.get(name)
-        if protocol is None:
-            raise ValueError(f"Unknown pipeline: {name}")
-        return self.build_pipeline_from_steps(protocol)
+        return self.build_pipeline_from_steps(build_protocol(name))
 
     def build_pipeline_from_steps(self, steps: list[ProtocolStep]) -> list[PipelineStep]:
         return [
@@ -602,109 +627,7 @@ class FluidicsControlEngine:
                 on_complete=step.on_complete,
                 confirm_message=step.confirm_message,
             )
-            for step in _expand_steps(steps)
-        ]
-
-    def _priming_protocol(self, settings: dict[str, Any]) -> list[ProtocolStep]:
-        oil_volume = float(settings["prime_oil_volume_ul"])
-        aqueous_volume = float(settings["prime_aqueous_volume_ul"])
-        return [
-            ProtocolStep(
-                name="Prime Oil L",
-                sensor_setpoints={0: 250.0},
-                trigger_type="volume",
-                trigger_params={"sensor_index": 0, "target_volume_ul": oil_volume},
-                on_complete="zero",
-                confirm_message=f"Prime Oil L at 250 uL/min for {oil_volume:g} uL. Proceed?",
-            ),
-            ProtocolStep(
-                name="Prime Cells M",
-                sensor_setpoints={1: 67.0},
-                trigger_type="volume",
-                trigger_params={"sensor_index": 1, "target_volume_ul": aqueous_volume},
-                on_complete="zero",
-                confirm_message=f"Prime Cells M at 67 uL/min for {aqueous_volume:g} uL. Proceed?",
-            ),
-            ProtocolStep(
-                name="Prime Beads M",
-                sensor_setpoints={2: 67.0},
-                trigger_type="volume",
-                trigger_params={"sensor_index": 2, "target_volume_ul": aqueous_volume},
-                on_complete="zero",
-                confirm_message=f"Prime Beads M at 67 uL/min for {aqueous_volume:g} uL. Proceed?",
-            ),
-        ]
-
-    def _dropseq_run_protocol(self, settings: dict[str, Any]) -> list[ProtocolStep]:
-        steps: list[ProtocolStep] = []
-        set_count = int(settings["set_count"])
-        replicate_count = int(settings["replicate_count"])
-        run_volume_ul = float(settings["run_volume_ul"])
-        aqueous_total = float(settings["run_aqueous_total_flow_ul_min"])
-        aqueous_channel = aqueous_total / 2.0
-        for set_index in range(1, set_count + 1):
-            for replicate_index in range(1, replicate_count + 1):
-                label = f"set{set_index:02d}_rep{replicate_index:02d}"
-                steps.extend(
-                    (
-                        ProtocolStep(
-                            name=f"Run {label}",
-                            sensor_setpoints={0: 300.0, 1: aqueous_channel, 2: aqueous_channel},
-                            trigger_type="volume",
-                            trigger_params={"sensor_index": 0, "target_volume_ul": run_volume_ul},
-                            on_complete="zero",
-                            confirm_message=(
-                                f"Start {label}: Oil L 300 uL/min, "
-                                f"Cells M/Beads M {aqueous_channel:g} uL/min?"
-                            ),
-                        ),
-                        ProtocolStep(
-                            name=f"Confirm {label}",
-                            sensor_setpoints={},
-                            trigger_type="time",
-                            trigger_params={"duration_s": 0.0},
-                            confirm_message=f"{label} complete. Confirm before continuing.",
-                        ),
-                    )
-                )
-        return steps
-
-    def _wash_protocol(self, settings: dict[str, Any]) -> list[ProtocolStep]:
-        oil_flow = float(settings["wash_oil_flow_ul_min"])
-        aqueous_channel = float(settings["wash_aqueous_total_flow_ul_min"]) / 2.0
-        oil_volume = float(settings["wash_oil_volume_ul"])
-        pressure = float(settings["wash_pressure_mbar"])
-        duration_s = float(settings["wash_pressure_duration_s"])
-        return [
-            ProtocolStep(
-                name="Wash flow phase",
-                sensor_setpoints={0: oil_flow, 1: aqueous_channel, 2: aqueous_channel},
-                trigger_type="volume",
-                trigger_params={"sensor_index": 0, "target_volume_ul": oil_volume},
-                on_complete="zero",
-                confirm_message=(
-                    f"Start wash phase 1: {oil_flow:g}/{aqueous_channel:g}/{aqueous_channel:g} "
-                    f"uL/min until Oil L dispenses {oil_volume:g} uL?"
-                ),
-            ),
-            ProtocolStep(
-                name="Wash pressure phase",
-                sensor_setpoints={},
-                pressure_setpoints={0: pressure, 1: pressure, 2: pressure},
-                trigger_type="time",
-                trigger_params={"duration_s": duration_s},
-                on_complete="zero",
-                confirm_message=(
-                    f"Set all pressure channels to {pressure:g} mbar for {duration_s:g} seconds?"
-                ),
-            ),
-            ProtocolStep(
-                name="Confirm wash complete",
-                sensor_setpoints={},
-                trigger_type="time",
-                trigger_params={"duration_s": 0.0},
-                confirm_message="Pressure wash complete. Confirm pipeline close.",
-            ),
+            for step in expand_protocol_steps(steps)
         ]
 
     def _connect(self, settings: dict[str, Any]) -> EngineResult:
@@ -720,11 +643,7 @@ class FluidicsControlEngine:
                     "fluigent_connect_error_type": type(exc).__name__,
                 },
             )
-        pairs = [
-            (sensor.index, pressure.index)
-            for sensor, pressure in zip(state.sensor_channels, state.pressure_channels, strict=False)
-        ]
-        self.channel_manager.configure_channels(pairs)
+        self._configure_channels_from_state(state)
         if settings["simulated"]:
             self._corrected_sensors = {channel.index for channel in state.sensor_channels}
         else:
@@ -746,6 +665,9 @@ class FluidicsControlEngine:
         self.hardware.disconnect()
         self.channel_manager.configure_channels([])
         return self._status_result(action)
+
+    def _configure_channels_from_state(self, state: Any) -> None:
+        self.channel_manager.configure_channels(_pair_channels(state))
 
     def _connect_camera(self, settings: dict[str, Any]) -> EngineResult:
         metadata = self._camera_preflight()
@@ -881,15 +803,7 @@ class FluidicsControlEngine:
 
         try:
             state = self.hardware.connect(simulated=settings["simulated"])
-            pairs = [
-                (sensor.index, pressure.index)
-                for sensor, pressure in zip(
-                    state.sensor_channels,
-                    state.pressure_channels,
-                    strict=False,
-                )
-            ]
-            self.channel_manager.configure_channels(pairs)
+            self._configure_channels_from_state(state)
             metadata.update(
                 {
                     "fluigent_connect_ok": True,
@@ -1117,25 +1031,11 @@ def _snap_camera_offset(value: int) -> int:
     return round(int(value) / 16) * 16
 
 
-def _expand_steps(steps: list[ProtocolStep]) -> list[ProtocolStep]:
-    expanded = []
-    index = 0
-    while index < len(steps):
-        step = steps[index]
-        if step.group:
-            group_steps = []
-            group_repeat = 1
-            while index < len(steps) and steps[index].group == step.group:
-                group_steps.append(steps[index])
-                group_repeat = max(group_repeat, steps[index].repeat)
-                index += 1
-            for _ in range(group_repeat):
-                expanded.extend(group_steps)
-        else:
-            for _ in range(max(1, step.repeat)):
-                expanded.append(step)
-            index += 1
-    return expanded
+def _pair_channels(state: Any) -> list[tuple[int, int]]:
+    return [
+        (sensor.index, pressure.index)
+        for sensor, pressure in zip(state.sensor_channels, state.pressure_channels, strict=False)
+    ]
 
 
 class _CsvRecordingBackend:

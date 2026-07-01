@@ -10,7 +10,12 @@ from admet.engines.control.engine import FluidicsControlEngine
 from admet.engines.control.camera import Camera
 from admet.engines.control.camera.camera import CameraAvailability
 from admet.engines.control.fluidics import PressureChannelInfo, SensorChannelInfo
-from admet.engines.control.fluidics.config import ProtocolStep
+from admet.engines.control.fluidics.config import (
+    ProtocolStep,
+    build_dropseq_protocol,
+    build_priming_protocol,
+    build_wash_protocol,
+)
 
 
 class FakeControlSDK:
@@ -190,6 +195,11 @@ class FakeFrameAcknowledger:
 
 
 class FluidicsControlEngineTests(unittest.TestCase):
+    def test_declared_actions_have_handlers(self):
+        engine = FluidicsControlEngine(FakeControlSDK())
+
+        self.assertEqual({action.id for action in engine.actions}, set(engine._action_handlers))
+
     def test_connect_configures_channels_and_returns_status(self):
         sdk = FakeControlSDK()
         engine = FluidicsControlEngine(sdk)
@@ -378,7 +388,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
         engine = FluidicsControlEngine(FakeControlSDK())
 
         pipeline = engine.build_pipeline_from_steps(
-            engine._priming_protocol(
+            build_priming_protocol(
                 {
                     "prime_oil_volume_ul": 55.0,
                     "prime_aqueous_volume_ul": 8.0,
@@ -391,9 +401,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
         self.assertEqual(getattr(pipeline[2].trigger, "_target_ul"), 8.0)
 
     def test_dropseq_protocol_splits_total_aqueous_flow(self):
-        engine = FluidicsControlEngine(FakeControlSDK())
-
-        steps = engine._dropseq_run_protocol(
+        steps = build_dropseq_protocol(
             {
                 "set_count": 1,
                 "replicate_count": 1,
@@ -409,7 +417,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
         engine = FluidicsControlEngine(FakeControlSDK())
 
         pipeline = engine.build_pipeline_from_steps(
-            engine._wash_protocol(
+            build_wash_protocol(
                 {
                     "wash_oil_flow_ul_min": 260.0,
                     "wash_aqueous_total_flow_ul_min": 180.0,
