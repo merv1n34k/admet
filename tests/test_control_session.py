@@ -168,6 +168,21 @@ class RecordingSessionTests(unittest.TestCase):
         self.assertEqual(completions, [True])
         self.assertFalse(window._completion_pending)
 
+    def test_action_box_refresh_syncs_without_rebuild_when_structure_matches(self):
+        window = ControlWindow.__new__(ControlWindow)
+        stage = SimpleNamespace(id="priming")
+        calls = []
+        window._mounted_signature = ("priming",)
+        window._refresh_runtime_state = lambda: calls.append("runtime")
+        window._structure_signature = lambda refreshed_stage: ("priming",)
+        window._sync_action_box = lambda refreshed_stage: calls.append("sync")
+        window._sync_toc = lambda: calls.append("toc")
+        window._render_current_stage = lambda: calls.append("render")
+
+        window._refresh_action_box(stage)
+
+        self.assertEqual(calls, ["runtime", "sync", "toc"])
+
     def test_start_and_stop_recording_writes_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             report_dir = Path(tmpdir) / "control_20260701_120000"

@@ -151,6 +151,12 @@ class ControlWindow(QMainWindow):
         self._latest_pipeline_event: Any | None = None
         self._pipeline_pending_confirmation = ""
         self._pipeline_confirmation_notice = ""
+        self._mounted_signature: tuple[Any, ...] | None = None
+        self._transport_button_refs: list[QPushButton] = []
+        self._protocol_status_label: QLabel | None = None
+        self._protocol_progress_bar: QProgressBar | None = None
+        self._protocol_confirm_label: QLabel | None = None
+        self.log_label: QLabel | None = None
         self.plot_panel: PlotPanel | None = None
         self.camera_frame_ready.connect(self._show_camera_frame)
         self._subscribe_camera_frames()
@@ -442,6 +448,34 @@ class ControlWindow(QMainWindow):
     def _render_current_stage(self) -> None:
         if self._camera_ack_pending:
             self._acknowledge_camera_frame()
+        stage = self.workflow.current_stage(self.workflow_state)
+        self._refresh_runtime_state()
+        if stage.id == "fluigent":
+            self._ensure_fluigent_availability()
+        signature = self._structure_signature(stage)
+        if signature != self._mounted_signature:
+            self._mount_stage(stage)
+            self._mounted_signature = signature
+        self._sync_stage(stage)
+
+    def _structure_signature(self, stage: Stage) -> tuple[Any, ...]:
+        state = getattr(getattr(self.api.engine, "hardware", None), "state", None)
+        sensor_count = len(getattr(state, "sensor_channels", []) or ())
+        pressure_count = len(getattr(state, "pressure_channels", []) or ())
+        return (
+            stage.id,
+            self._project_ready(),
+            self.runtime_state["camera"],
+            self.runtime_state["fluidics"],
+            int(self.last_metadata.get("camera_count") or 0),
+            sensor_count,
+            pressure_count,
+            self._action_show_all_params,
+            bool(self._pending_pipeline_confirmation()),
+            len(self._video_rows()),
+        )
+
+    def _mount_stage(self, stage: Stage) -> None:
         self._detach_live_widgets()
         self._clear_layout(self.action_box_layout)
         self._clear_layout(self.main_layout)
@@ -451,17 +485,23 @@ class ControlWindow(QMainWindow):
         self._clear_layout(self.log_layout)
         self.channel_panel = None
         self.csv_status = None
+        self.action_table = None
+        self._transport_button_refs = []
+        self._protocol_status_label = None
+        self._protocol_progress_bar = None
+        self._protocol_confirm_label = None
+        self.log_label = None
 
-        stage = self.workflow.current_stage(self.workflow_state)
-        self._refresh_runtime_state()
-        if stage.id == "fluigent":
-            self._ensure_fluigent_availability()
         self._render_action_box(stage)
         self._render_main(stage)
         self._render_channel_manager(stage)
         self._render_results(stage)
         self._render_action(stage)
         self._render_log()
+
+    def _sync_stage(self, stage: Stage) -> None:
+        self._sync_action_box(stage)
+        self._sync_log()
         self._sync_toc()
         self._show_stage_instruction(stage)
 
@@ -484,51 +524,7 @@ class ControlWindow(QMainWindow):
         action_layout.addWidget(command_row)
         self.action_box_layout.addWidget(action_box)
 
-    def _render_main(self, stage: Stage) -> None:
-        display = QWidget()
-        display.setObjectName("MainDisplay")
-        layout = QHBoxLayout(display)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-
-        plot_was_new = self.plot_panel is None
-        if self.plot_panel is None:
-            self.plot_panel = PlotPanel()
-            self.plot_panel.setMinimumWidth(360)
-            self.plot_panel.setMaximumHeight(PREVIEW_MAX_HEIGHT)
-            self.plot_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        layout.addWidget(self.plot_panel, 1)
-
-        preview_column = QWidget()
-        preview_layout = QVBoxLayout(preview_column)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
-        preview_layout.setSpacing(8)
-        if self._stage_uses_camera(stage) and self._project_ready():
-            preview_layout.addWidget(self._camera_selector_row())
-        if self.preview is None:
-            self.preview = PreviewDisplay()
-            self.preview.frame_painted.connect(self._acknowledge_camera_frame)
-            self.preview.setObjectName("CameraPreview")
-            self.preview.setMinimumSize(420, PREVIEW_MIN_HEIGHT)
-            self.preview.setMaximumHeight(PREVIEW_MAX_HEIGHT)
-            self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        preview_layout.addWidget(self.preview)
-        layout.addWidget(preview_column, 1)
-
-        if self._latest_snapshot is not None and plot_was_new:
-            self.plot_panel.update_from_snapshot(self._latest_snapshot)
-        if self._qt_frame is not None:
-            self.preview.set_frame(self._qt_frame)
-
-        self.main_layout.addWidget(display)
-
-    def _transport_buttons(self, stage: Stage) -> QWidget:
-        group = QFrame()
-        group.setObjectName("TransportButtons")
-        layout = QHBoxLayout(group)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
+    def _action_button_specs(self, stage: Stage) -> list[tuple[str, Any, bool, bool, bool]]:
         controls: list[tuple[str, Any, bool, bool, bool]] = []
         if any(surface.kind == "camera" for surface in stage.surfaces):
             project_ready = self.runtime_state["project"]
@@ -578,16 +574,57 @@ class ControlWindow(QMainWindow):
             spec = self._command_spec(stage, control)
             if spec is None:
                 continue
-            controls.append(
-                (
-                    spec[0],
-                    spec[1],
-                    spec[2],
-                    spec[3],
-                    spec[4],
-                )
-            )
+            controls.append((spec[0], spec[1], spec[2], spec[3], spec[4]))
         controls.append(("E-STOP", lambda _checked=False: self._emergency_stop(), True, False, False))
+        return controls
+
+    def _render_main(self, stage: Stage) -> None:
+        display = QWidget()
+        display.setObjectName("MainDisplay")
+        layout = QHBoxLayout(display)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        plot_was_new = self.plot_panel is None
+        if self.plot_panel is None:
+            self.plot_panel = PlotPanel()
+            self.plot_panel.setMinimumWidth(360)
+            self.plot_panel.setMaximumHeight(PREVIEW_MAX_HEIGHT)
+            self.plot_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        layout.addWidget(self.plot_panel, 1)
+
+        preview_column = QWidget()
+        preview_layout = QVBoxLayout(preview_column)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(8)
+        if self._stage_uses_camera(stage) and self._project_ready():
+            preview_layout.addWidget(self._camera_selector_row())
+        if self.preview is None:
+            self.preview = PreviewDisplay()
+            self.preview.frame_painted.connect(self._acknowledge_camera_frame)
+            self.preview.setObjectName("CameraPreview")
+            self.preview.setMinimumSize(420, PREVIEW_MIN_HEIGHT)
+            self.preview.setMaximumHeight(PREVIEW_MAX_HEIGHT)
+            self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        preview_layout.addWidget(self.preview)
+        layout.addWidget(preview_column, 1)
+
+        if self._latest_snapshot is not None and plot_was_new:
+            self.plot_panel.update_from_snapshot(self._latest_snapshot)
+        if self._qt_frame is not None:
+            self.preview.set_frame(self._qt_frame)
+
+        self.main_layout.addWidget(display)
+
+    def _transport_buttons(self, stage: Stage) -> QWidget:
+        group = QFrame()
+        group.setObjectName("TransportButtons")
+        layout = QHBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        controls = self._action_button_specs(stage)
+        self._transport_button_refs = []
 
         for index, (label, callback, enabled, checked, toggle) in enumerate(controls):
             if index:
@@ -605,6 +642,7 @@ class ControlWindow(QMainWindow):
             button.clicked.connect(callback)
             button.setEnabled(enabled)
             layout.addWidget(button, 1)
+            self._transport_button_refs.append(button)
         return group
 
     def _pipeline_status_widget(self, stage: Stage) -> QWidget:
@@ -618,6 +656,7 @@ class ControlWindow(QMainWindow):
         status.setObjectName("ProtocolStatusLabel")
         status.setWordWrap(True)
         layout.addWidget(status)
+        self._protocol_status_label = status
 
         progress = QProgressBar()
         progress.setObjectName("ProtocolProgress")
@@ -630,6 +669,7 @@ class ControlWindow(QMainWindow):
             f"{{ background: {self._pipeline_progress_color()}; }}"
         )
         layout.addWidget(progress)
+        self._protocol_progress_bar = progress
 
         confirmation = self._pending_pipeline_confirmation()
         if confirmation:
@@ -637,7 +677,44 @@ class ControlWindow(QMainWindow):
             confirm.setObjectName("ProtocolConfirmLabel")
             confirm.setWordWrap(True)
             layout.addWidget(confirm)
+            self._protocol_confirm_label = confirm
         return panel
+
+    def _sync_action_box(self, stage: Stage) -> None:
+        if self._protocol_status_label is not None:
+            self._protocol_status_label.setText(self._pipeline_status_text(stage))
+        if self._protocol_progress_bar is not None:
+            self._protocol_progress_bar.setValue(int(self._pipeline_progress_percent() * 10))
+            self._protocol_progress_bar.setFormat(self._pipeline_progress_text(stage))
+            self._protocol_progress_bar.setStyleSheet(
+                "QProgressBar#ProtocolProgress::chunk "
+                f"{{ background: {self._pipeline_progress_color()}; }}"
+            )
+        if self._protocol_confirm_label is not None:
+            self._protocol_confirm_label.setText(self._pending_pipeline_confirmation())
+
+        specs = self._action_button_specs(stage)
+        if len(specs) != len(self._transport_button_refs):
+            return
+        for button, (label, _callback, enabled, checked, toggle) in zip(
+            self._transport_button_refs,
+            specs,
+            strict=True,
+        ):
+            if button.text() != label:
+                button.setText(label)
+            if button.isCheckable() != toggle:
+                button.setCheckable(toggle)
+            if toggle and button.isChecked() != checked:
+                button.setChecked(checked)
+            elif not toggle and button.isChecked():
+                button.setChecked(False)
+            button.setEnabled(enabled)
+            object_name = "TransportButtonWarning" if label == "Proceed" and enabled else "TransportButton"
+            if button.objectName() != object_name:
+                button.setObjectName(object_name)
+                button.style().unpolish(button)
+                button.style().polish(button)
 
     def _pipeline_controls(self, stage: Stage) -> list[tuple[str, Any, bool, bool, bool]]:
         state = str(self.last_metadata.get("pipeline_state") or "idle")
@@ -983,6 +1060,11 @@ class ControlWindow(QMainWindow):
         log.setObjectName("LogText")
         log.setWordWrap(True)
         self.log_layout.addWidget(log)
+        self.log_label = log
+
+    def _sync_log(self) -> None:
+        if self.log_label is not None:
+            self.log_label.setText("\n".join(self.log_entries[-80:]))
 
     def _handle_control(self, stage: Stage, control: StageControl) -> None:
         if control.action is not None:
@@ -1467,8 +1549,12 @@ class ControlWindow(QMainWindow):
             self._runs_completion_confirmed = False
 
     def _refresh_action_box(self, stage: Stage) -> None:
-        self._clear_layout(self.action_box_layout)
-        self._render_action_box(stage)
+        self._refresh_runtime_state()
+        signature = self._structure_signature(stage)
+        if signature != self._mounted_signature:
+            self._render_current_stage()
+            return
+        self._sync_action_box(stage)
         self._sync_toc()
 
     def _poll_fluidics_plots(self) -> None:
