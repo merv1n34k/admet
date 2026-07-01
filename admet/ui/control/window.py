@@ -1935,17 +1935,11 @@ class ControlWindow(QMainWindow):
         if isinstance(value, list):
             recordings.extend(item for item in value if isinstance(item, dict))
 
-        session = getattr(self.api.engine, "_recording_session", None)
-        if session is not None:
-            current = getattr(session, "current", None)
-            if current is not None:
-                recordings.append(current.to_dict())
+        metadata_sources = getattr(self.api.engine, "recording_metadata_sources", None)
+        if callable(metadata_sources):
             recordings.extend(
-                item for item in getattr(session, "recordings", []) if isinstance(item, dict)
+                item for item in metadata_sources() if isinstance(item, dict)
             )
-        last_recording = getattr(self.api.engine, "_last_recording", None)
-        if last_recording is not None:
-            recordings.append(last_recording.to_dict())
         return recordings
 
     def _camera_status_text(self) -> str:

@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import asdict
-from pathlib import Path
 from queue import Queue
 from threading import Lock
 from typing import Any, Callable
@@ -37,12 +36,8 @@ from admet.engines.control.pipeline import (
     create_trigger,
 )
 from admet.engines.control.session import (
-    RecordingMetadata,
-    RecordingSession,
+    RecordingCoordinator,
     WriterFactory,
-    create_recording_id,
-    create_recording_report_dir,
-    write_recording_metadata,
 )
 from admet.engines.control.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES
 
@@ -175,7 +170,6 @@ class FluidicsControlEngine:
         self.channel_manager = ChannelManager(self.sdk)
         self.data_queue: Queue = Queue(maxsize=50)
         self.pipeline_queue: Queue[PipelineEvent] = Queue(maxsize=50)
-        self.csv_logger = CsvLogger()
         self.camera = Camera()
         self._camera_acquisition: CameraAcquisitionThread | None = None
         self._camera_preview_size = (0, 0)
@@ -186,13 +180,12 @@ class FluidicsControlEngine:
         self._camera_lock = Lock()
         self._acquisition: AcquisitionThread | None = None
         self._pipeline: PipelineEngine | None = None
-        self._recording = False
-        self._recording_session: RecordingSession | None = None
-        self._csv_recording: RecordingMetadata | None = None
-        self._csv_recording_report_dir: Path | None = None
-        self._csv_recordings: list[dict[str, Any]] = []
-        self._last_recording: RecordingMetadata | None = None
-        self._video_writer_factory = video_writer_factory
+        self._recordings = RecordingCoordinator(
+            csv_logger=CsvLogger(),
+            hardware_state=lambda: self.hardware.state,
+            acquisition=lambda: self._acquisition,
+            writer_factory=video_writer_factory,
+        )
         self._corrected_sensors: set[int] = set()
         self._action_handlers = self._build_action_handlers()
         self._validate_action_handlers()
@@ -320,7 +313,11 @@ class FluidicsControlEngine:
 
     @property
     def recording_active(self) -> bool:
-        return self._recording
+        return self._recordings.recording_active
+
+    @property
+    def csv_logger(self) -> CsvLogger:
+        return self._recordings.csv_logger
 
     @property
     def pipeline_state(self) -> PipelineState:
@@ -340,7 +337,7 @@ class FluidicsControlEngine:
             pressure_count=len(state.pressure_channels),
             sensor_count=len(state.sensor_channels),
             data_queue=self.data_queue,
-            csv_logger=self.csv_logger if self._recording else None,
+            csv_logger=self.csv_logger if self.recording_active else None,
         )
         self._acquisition.start()
 
@@ -394,159 +391,18 @@ class FluidicsControlEngine:
         settings: dict[str, Any],
         context: EngineContext | None = None,
     ) -> dict[str, Any]:
-        if self._recording:
-            recording = self._active_recording_metadata()
-            return {
-                "csv_path": self.csv_logger.filepath or "",
-                "report_dir": str(self._active_recording_report_dir() or ""),
-                "recording": recording.to_dict() if recording is not None else {},
-            }
         if not self.hardware.connected:
             raise RuntimeError("Fluidics hardware is not connected")
-
-        recording_root_value = str(settings["recording_root"]).strip()
-        if not recording_root_value:
-            raise RuntimeError("Recording root is not configured")
-        report_root = self._resolve_path(recording_root_value, context)
-        recording_label = str(settings["recording_label"])
         camera_recorder = self._camera_acquisition if self.camera_live else None
-        if camera_recorder is not None:
-            session = self._recording_session
-            if session is None or session.report_root != report_root:
-                session = RecordingSession(
-                    report_root,
-                    camera_recorder,
-                    _CsvRecordingBackend(self, context),
-                    writer_factory=self._video_writer_factory,
-                )
-                self._recording_session = session
-            camera_recorder.set_recording_complete_callback(self._on_recording_complete)
-            if settings["camera_preview_off_recording"]:
-                camera_recorder.set_preview_enabled(False)
-
-            width, height = self._recording_frame_size(settings)
-            metadata = session.start_recording(
-                recording_label,
-                width=width,
-                height=height,
-                fps=float(settings["camera_video_fps"]),
-            )
-            self._last_recording = metadata
-            return {
-                "csv_path": metadata.fluidics_csv,
-                "report_dir": str(session.report_dir or ""),
-                "recording": metadata.to_dict(),
-            }
-
-        report_dir = create_recording_report_dir(report_root)
-        fluidics_dir = report_dir / "fluidics"
-        fluidics_dir.mkdir(parents=True, exist_ok=True)
-        if self._csv_recording_report_dir != report_dir:
-            self._csv_recordings = []
-        recording_id = create_recording_id(recording_label)
-        csv_path = self._start_csv_recording(
-            str(fluidics_dir),
-            context,
-            csv_filename=f"{recording_id}.csv",
+        return self._recordings.start_recording(
+            settings,
+            context=context,
+            camera_recorder=camera_recorder,
+            frame_size=self._recording_frame_size(settings),
         )
-        metadata = RecordingMetadata(
-            started_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-            started_monotonic_s=time.monotonic(),
-            recording_id=recording_id,
-            report_dir=str(report_dir),
-            output_dir="",
-            video_prefix=recording_id,
-            width=0,
-            height=0,
-            fps=0.0,
-            fluidics_csv=csv_path,
-        )
-        self._csv_recording = metadata
-        self._csv_recording_report_dir = report_dir
-        self._last_recording = metadata
-        write_recording_metadata(report_dir, self._csv_recordings, current=metadata)
-        return {"csv_path": csv_path, "report_dir": str(report_dir), "recording": metadata.to_dict()}
-
-    def _start_csv_recording(
-        self,
-        fluidics_dir_value: str,
-        context: EngineContext | None = None,
-        *,
-        csv_prefix: str = "fluidics",
-        csv_filename: str = "",
-    ) -> str:
-        fluidics_dir = Path(fluidics_dir_value)
-        if context and context.workdir and not fluidics_dir.is_absolute():
-            fluidics_dir = Path(context.workdir) / fluidics_dir
-        self.csv_logger = CsvLogger(fluidics_dir, prefix=csv_prefix, filename=csv_filename)
-        state = self.hardware.state
-        filepath = self.csv_logger.start(
-            len(state.pressure_channels),
-            len(state.sensor_channels),
-        )
-        self._recording = True
-        if self._acquisition:
-            self._acquisition.set_csv_logger(self.csv_logger)
-        return filepath
 
     def stop_recording(self) -> dict[str, Any]:
-        if self._recording_session is not None and self._recording_session.current is not None:
-            metadata = self._recording_session.stop_recording()
-            self._restore_camera_preview_after_recording()
-            if metadata is not None:
-                self._last_recording = metadata
-                recording = metadata.to_dict()
-                return {
-                    "csv_path": metadata.fluidics_csv,
-                    "report_dir": str(self._recording_session.report_dir or ""),
-                    "video_path": metadata.video_path,
-                    "recording": recording,
-                }
-        if not self._recording:
-            self._restore_camera_preview_after_recording()
-            return {}
-        self._stop_csv_recording()
-        self._restore_camera_preview_after_recording()
-        metadata = self._csv_recording
-        if metadata is None:
-            return {"csv_path": self.csv_logger.filepath or ""}
-        metadata.stopped_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-        metadata.duration_s = max(0.0, time.monotonic() - metadata.started_monotonic_s)
-        self._last_recording = metadata
-        if self._csv_recording_report_dir is not None:
-            self._csv_recordings.append(metadata.to_dict())
-            write_recording_metadata(self._csv_recording_report_dir, self._csv_recordings)
-        self._csv_recording = None
-        report_dir = str(self._csv_recording_report_dir or "")
-        self._csv_recording_report_dir = None
-        return {
-            "csv_path": metadata.fluidics_csv,
-            "report_dir": report_dir,
-            "recording": metadata.to_dict(),
-        }
-
-    def _stop_csv_recording(self) -> None:
-        self._recording = False
-        if self._acquisition:
-            self._acquisition.set_csv_logger(None)
-        self.csv_logger.stop()
-
-    def _on_recording_complete(self) -> None:
-        self.stop_recording()
-
-    def _restore_camera_preview_after_recording(self) -> None:
-        if self._camera_acquisition is not None:
-            self._camera_acquisition.set_preview_enabled(True)
-
-    def _resolve_path(
-        self,
-        value: str,
-        context: EngineContext | None = None,
-    ) -> Path:
-        path = Path(value)
-        if context and context.workdir and not path.is_absolute():
-            return Path(context.workdir) / path
-        return path
+        return self._recordings.stop_recording()
 
     def _recording_frame_size(self, settings: dict[str, Any]) -> tuple[int, int]:
         with self._camera_lock:
@@ -557,16 +413,6 @@ class FluidicsControlEngine:
         if preview_size[0] and preview_size[1]:
             return preview_size
         return int(settings["camera_width"]), int(settings["camera_height"])
-
-    def _active_recording_metadata(self) -> RecordingMetadata | None:
-        if self._recording_session is not None and self._recording_session.current is not None:
-            return self._recording_session.current
-        return self._csv_recording
-
-    def _active_recording_report_dir(self) -> Path | None:
-        if self._recording_session is not None:
-            return self._recording_session.report_dir
-        return self._csv_recording_report_dir
 
     def start_pipeline(
         self,
@@ -973,6 +819,9 @@ class FluidicsControlEngine:
         if self._camera_acquisition:
             self._camera_acquisition.frame_processed()
 
+    def recording_metadata_sources(self) -> list[dict[str, Any]]:
+        return self._recordings.metadata_sources()
+
     def _sdk_preflight(self) -> SDKAvailability:
         if hasattr(self.sdk, "preflight"):
             return self.sdk.preflight()
@@ -1001,16 +850,7 @@ class FluidicsControlEngine:
             "queued_snapshots": self.data_queue.qsize(),
             "queued_pipeline_events": self.pipeline_queue.qsize(),
         }
-        if self._recording_session is not None:
-            metadata["recordings"] = list(self._recording_session.recordings)
-            if self._recording_session.current is not None:
-                metadata["current_recording"] = self._recording_session.current.to_dict()
-        elif self._csv_recordings:
-            metadata["recordings"] = list(self._csv_recordings)
-        if self._csv_recording is not None:
-            metadata["current_recording"] = self._csv_recording.to_dict()
-        if self._last_recording is not None:
-            metadata["last_recording"] = self._last_recording.to_dict()
+        metadata.update(self._recordings.status_metadata())
         if extra_metadata:
             metadata.update(extra_metadata)
         stats = (
@@ -1036,32 +876,3 @@ def _pair_channels(state: Any) -> list[tuple[int, int]]:
         (sensor.index, pressure.index)
         for sensor, pressure in zip(state.sensor_channels, state.pressure_channels, strict=False)
     ]
-
-
-class _CsvRecordingBackend:
-    def __init__(
-        self,
-        engine: FluidicsControlEngine,
-        context: EngineContext | None,
-    ) -> None:
-        self.engine = engine
-        self.context = context
-
-    def run_action(
-        self,
-        action: str,
-        settings: dict[str, Any],
-        context: EngineContext | None = None,
-    ) -> EngineResult:
-        if action == "start_recording":
-            csv_path = self.engine._start_csv_recording(
-                settings["fluidics_dir"],
-                context or self.context,
-                csv_prefix=str(settings.get("csv_prefix") or "fluidics"),
-                csv_filename=str(settings.get("csv_filename") or ""),
-            )
-            return EngineResult(ResultSet(), artifacts={"csv_path": csv_path})
-        if action == "stop_recording":
-            self.engine._stop_csv_recording()
-            return EngineResult(ResultSet())
-        raise ValueError(f"unsupported recording action: {action}")
