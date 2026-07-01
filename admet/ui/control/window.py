@@ -129,6 +129,7 @@ class ControlWindow(QMainWindow):
         self._notification_text = ""
         self._notification_kind = "primary"
         self._runs_completion_confirmed = False
+        self._completion_pending = False
 
         self.setWindowTitle("admet control")
         self.resize(1440, 920)
@@ -1122,11 +1123,13 @@ class ControlWindow(QMainWindow):
             self._run("stop_protocol", refresh=False)
             if stage.id == "runs" and self.last_metadata.get("recording_active"):
                 self._run("stop_recording", refresh=False)
+            self._completion_pending = False
             self._render_current_stage()
             return
 
         if stage.id == "runs":
             self._runs_completion_confirmed = False
+        self._completion_pending = False
         self._run("run_protocol", self._protocol_run_settings(stage), refresh=False)
         self._render_current_stage()
 
@@ -1135,6 +1138,7 @@ class ControlWindow(QMainWindow):
             return
         self._latest_pipeline_event = None
         self._clear_pipeline_confirmation()
+        self._completion_pending = False
         if stage.id == "runs":
             self._control_recording_dir = None
             self._runs_completion_confirmed = False
@@ -1147,6 +1151,7 @@ class ControlWindow(QMainWindow):
         self._run("stop_protocol", refresh=False, notify_success=False)
         self._latest_pipeline_event = None
         self._clear_pipeline_confirmation()
+        self._completion_pending = False
         self._dismiss_notification()
         if self.last_metadata.get("recording_active"):
             self._run("stop_recording", raise_errors=False, refresh=False, notify_success=False)
@@ -1386,7 +1391,7 @@ class ControlWindow(QMainWindow):
                 self._clear_pipeline_confirmation()
             self._refresh_action_box(stage)
         if self._pipeline_event_state(latest) == "completed":
-            self._complete_completed_pipeline_stage()
+            self._schedule_completed_pipeline_stage_finish(stage)
 
     def _sync_run_recording_for_confirmation(self, confirmation: str) -> None:
         if not _run_complete_label(confirmation):
@@ -1395,13 +1400,29 @@ class ControlWindow(QMainWindow):
             return
         self._run("stop_recording", raise_errors=False, refresh=False, notify_success=False)
 
+    def _can_complete_completed_pipeline_stage(self, stage: Stage) -> bool:
+        if stage.id not in PIPELINE_STAGE_IDS:
+            return False
+        if self.workflow_state.statuses.get(stage.id) is not StageStatus.ACTIVE:
+            return False
+        if stage.id == "runs" and not self._runs_completion_confirmed:
+            return False
+        return True
+
+    def _schedule_completed_pipeline_stage_finish(self, stage: Stage) -> None:
+        if self._completion_pending or not self._can_complete_completed_pipeline_stage(stage):
+            return
+        self._completion_pending = True
+        self._refresh_action_box(stage)
+        QTimer.singleShot(500, self._finish_completed_pipeline_stage)
+
+    def _finish_completed_pipeline_stage(self) -> None:
+        self._completion_pending = False
+        self._complete_completed_pipeline_stage()
+
     def _complete_completed_pipeline_stage(self) -> None:
         stage = self.workflow.current_stage(self.workflow_state)
-        if stage.id not in PIPELINE_STAGE_IDS:
-            return
-        if self.workflow_state.statuses.get(stage.id) is not StageStatus.ACTIVE:
-            return
-        if stage.id == "runs" and not self._runs_completion_confirmed:
+        if not self._can_complete_completed_pipeline_stage(stage):
             return
         self._latest_pipeline_event = None
         self._clear_pipeline_confirmation()

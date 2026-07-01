@@ -137,6 +137,37 @@ class RecordingSessionTests(unittest.TestCase):
         self.assertEqual(completions, [True])
         self.assertFalse(window._runs_completion_confirmed)
 
+    def test_completed_pipeline_stage_finish_is_deferred(self):
+        window = ControlWindow.__new__(ControlWindow)
+        stage = SimpleNamespace(id="priming")
+        window.workflow = SimpleNamespace(current_stage=lambda _state: stage)
+        window.workflow_state = SimpleNamespace(statuses={"priming": StageStatus.ACTIVE})
+        window._runs_completion_confirmed = False
+        window._completion_pending = False
+        window._latest_pipeline_event = object()
+        window._clear_pipeline_confirmation = lambda: None
+        window._dismiss_notification = lambda: None
+        completions = []
+        refreshes = []
+        window._refresh_action_box = lambda refreshed_stage: refreshes.append(refreshed_stage.id)
+        window._complete_current_stage = lambda: completions.append(True)
+        callbacks = []
+
+        with patch("admet.ui.control.window.QTimer.singleShot", side_effect=lambda ms, cb: callbacks.append((ms, cb))):
+            window._schedule_completed_pipeline_stage_finish(stage)
+            window._schedule_completed_pipeline_stage_finish(stage)
+
+        self.assertEqual(refreshes, ["priming"])
+        self.assertEqual(completions, [])
+        self.assertTrue(window._completion_pending)
+        self.assertEqual(len(callbacks), 1)
+        self.assertEqual(callbacks[0][0], 500)
+
+        callbacks[0][1]()
+
+        self.assertEqual(completions, [True])
+        self.assertFalse(window._completion_pending)
+
     def test_start_and_stop_recording_writes_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             report_dir = Path(tmpdir) / "control_20260701_120000"
