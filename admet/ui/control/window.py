@@ -128,6 +128,7 @@ class ControlWindow(QMainWindow):
         self._instruction_text = ""
         self._notification_text = ""
         self._notification_kind = "primary"
+        self._runs_completion_confirmed = False
 
         self.setWindowTitle("admet control")
         self.resize(1440, 920)
@@ -206,7 +207,7 @@ class ControlWindow(QMainWindow):
         page_scroll.setObjectName("PageScroll")
         page_scroll.setWidgetResizable(True)
         page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        page_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        page_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
@@ -440,16 +441,14 @@ class ControlWindow(QMainWindow):
     def _render_current_stage(self) -> None:
         if self._camera_ack_pending:
             self._acknowledge_camera_frame()
+        self._detach_live_widgets()
         self._clear_layout(self.action_box_layout)
         self._clear_layout(self.main_layout)
         self._clear_layout(self.channel_manager_layout)
         self._clear_layout(self.results_layout)
         self._clear_layout(self.action_layout)
         self._clear_layout(self.log_layout)
-        self.preview = None
-        self.plot_panel = None
         self.channel_panel = None
-        self.monitor_table = None
         self.csv_status = None
 
         stage = self.workflow.current_stage(self.workflow_state)
@@ -491,10 +490,12 @@ class ControlWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        self.plot_panel = PlotPanel()
-        self.plot_panel.setMinimumWidth(360)
-        self.plot_panel.setMaximumHeight(PREVIEW_MAX_HEIGHT)
-        self.plot_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        plot_was_new = self.plot_panel is None
+        if self.plot_panel is None:
+            self.plot_panel = PlotPanel()
+            self.plot_panel.setMinimumWidth(360)
+            self.plot_panel.setMaximumHeight(PREVIEW_MAX_HEIGHT)
+            self.plot_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         layout.addWidget(self.plot_panel, 1)
 
         preview_column = QWidget()
@@ -503,16 +504,17 @@ class ControlWindow(QMainWindow):
         preview_layout.setSpacing(8)
         if self._stage_uses_camera(stage) and self._project_ready():
             preview_layout.addWidget(self._camera_selector_row())
-        self.preview = PreviewDisplay()
-        self.preview.frame_painted.connect(self._acknowledge_camera_frame)
-        self.preview.setObjectName("CameraPreview")
-        self.preview.setMinimumSize(420, PREVIEW_MIN_HEIGHT)
-        self.preview.setMaximumHeight(PREVIEW_MAX_HEIGHT)
-        self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        if self.preview is None:
+            self.preview = PreviewDisplay()
+            self.preview.frame_painted.connect(self._acknowledge_camera_frame)
+            self.preview.setObjectName("CameraPreview")
+            self.preview.setMinimumSize(420, PREVIEW_MIN_HEIGHT)
+            self.preview.setMaximumHeight(PREVIEW_MAX_HEIGHT)
+            self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         preview_layout.addWidget(self.preview)
         layout.addWidget(preview_column, 1)
 
-        if self._latest_snapshot is not None:
+        if self._latest_snapshot is not None and plot_was_new:
             self.plot_panel.update_from_snapshot(self._latest_snapshot)
         if self._qt_frame is not None:
             self.preview.set_frame(self._qt_frame)
@@ -750,10 +752,7 @@ class ControlWindow(QMainWindow):
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         for column in range(1, 5):
             table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
-        if rows > 3:
-            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        else:
-            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
         table.setShowGrid(True)
@@ -770,7 +769,7 @@ class ControlWindow(QMainWindow):
         self._syncing_table = False
 
         table.resizeRowsToContents()
-        _fit_table_height(table, max_rows=3 if rows > 3 else None)
+        _fit_table_height(table)
         root.addWidget(table)
         return panel
 
@@ -813,7 +812,16 @@ class ControlWindow(QMainWindow):
         names: list[str] = []
         if self._stage_uses_camera(stage):
             names.extend(name for name in CAMERA_MAIN_SETTINGS if name in visible_names)
-        if stage.id == "runs":
+        if stage.id == "priming":
+            names.extend(
+                name
+                for name in (
+                    "prime_oil_volume_ul",
+                    "prime_aqueous_volume_ul",
+                )
+                if name in visible_names and name not in names
+            )
+        elif stage.id == "runs":
             names.extend(
                 name
                 for name in (
@@ -844,8 +852,46 @@ class ControlWindow(QMainWindow):
             )
         return [self._param_by_name(name) for name in names]
 
+    def _collapsed_params(self, stage: Stage, full_params: list[Param]) -> list[Param]:
+        if stage.id == "corrections":
+            return self._correction_primary_params(full_params)
+        params = self._main_settings(stage) or full_params
+        if self._param_row_count(params) > 3:
+            return params[:6]
+        return params
+
+    def _ordered_params(self, stage: Stage, params: list[Param]) -> list[Param]:
+        if stage.id != "corrections":
+            return params
+        primary = self._correction_primary_params(params)
+        secondary = self._correction_secondary_params(params)
+        ordered_names = {param.name for param in (*primary, *secondary)}
+        return [*primary, *secondary, *(param for param in params if param.name not in ordered_names)]
+
+    def _correction_primary_params(self, params: list[Param]) -> list[Param]:
+        by_name = {param.name: param for param in params}
+        return [
+            by_name[name]
+            for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
+            for name in (f"{prefix}_calibration", f"{prefix}_scale")
+            if name in by_name
+        ]
+
+    def _correction_secondary_params(self, params: list[Param]) -> list[Param]:
+        by_name = {param.name: param for param in params}
+        return [
+            by_name[name]
+            for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
+            for name in (f"{prefix}_offset", f"{prefix}_quadratic")
+            if name in by_name
+        ]
+
+    @staticmethod
+    def _param_row_count(params: list[Param]) -> int:
+        return max(1, (len(params) + 1) // 2)
+
     def _param_table(self, params: list[Param]) -> QTableWidget:
-        rows = max(1, (len(params) + 1) // 2)
+        rows = self._param_row_count(params)
         table = QTableWidget(rows, 4)
         table.setObjectName("RawConfigTable")
         table.setHorizontalHeaderLabels(("Parameter", "Value", "Parameter", "Value"))
@@ -854,10 +900,7 @@ class ControlWindow(QMainWindow):
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        if rows > 3:
-            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        else:
-            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
         table.setAlternatingRowColors(False)
@@ -874,15 +917,18 @@ class ControlWindow(QMainWindow):
         self._syncing_table = False
 
         table.resizeRowsToContents()
-        _fit_table_height(table, max_rows=3 if rows > 3 else None)
+        _fit_table_height(table)
         return table
 
     def _render_results(self, stage: Stage) -> None:
         if self._stage_uses_fluidics(stage):
-            self.monitor_table = FluidicsMonitorTable()
+            if self.monitor_table is None:
+                self.monitor_table = FluidicsMonitorTable()
             state = getattr(getattr(self.api.engine, "hardware", None), "state", None)
             if state is not None:
-                self.monitor_table.setup_channels(len(getattr(state, "sensor_channels", [])))
+                channel_count = min(len(getattr(state, "sensor_channels", [])), len(FLUIDIC_CHANNEL_LABELS))
+                if self.monitor_table.table.rowCount() != channel_count:
+                    self.monitor_table.setup_channels(channel_count)
             self._update_csv_status()
             if self._latest_snapshot is not None:
                 self.monitor_table.update_from_snapshot(self._latest_snapshot)
@@ -893,9 +939,10 @@ class ControlWindow(QMainWindow):
             self.results_layout.addWidget(_video_table(video_rows))
 
     def _render_action(self, stage: Stage) -> None:
-        params = self._stage_params(stage) if self._action_show_all_params else self._main_settings(stage)
-        if not params:
-            params = self._stage_params(stage)
+        full_params = self._ordered_params(stage, self._stage_params(stage))
+        collapsed_params = self._collapsed_params(stage, full_params)
+        can_expand = self._param_row_count(full_params) > 3 and len(full_params) > len(collapsed_params)
+        params = full_params if self._action_show_all_params and can_expand else collapsed_params
 
         header = QWidget()
         header_layout = QHBoxLayout(header)
@@ -910,10 +957,11 @@ class ControlWindow(QMainWindow):
             apply_button.clicked.connect(self._apply_all_corrections)
             apply_button.setEnabled(self._fluigent_ready())
             header_layout.addWidget(apply_button)
-        expand = ui.button("basic" if self._action_show_all_params else "advanced", size="large")
-        expand.setMinimumWidth(96)
-        expand.clicked.connect(self._toggle_action_params)
-        header_layout.addWidget(expand)
+        if can_expand:
+            expand = ui.button("collapse" if self._action_show_all_params else "expand", size="large")
+            expand.setMinimumWidth(96)
+            expand.clicked.connect(self._toggle_action_params)
+            header_layout.addWidget(expand)
         self.action_layout.addWidget(header)
 
         if not params:
@@ -983,6 +1031,21 @@ class ControlWindow(QMainWindow):
             self._notify(str(exc), "danger")
         self._render_current_stage()
 
+    def _auto_complete_ready_stage(self, action: str) -> bool:
+        stage = self.workflow.current_stage(self.workflow_state)
+        if stage.id == "scene" and action in {
+            "connect_camera",
+            "start_camera_live",
+            "apply_camera_settings",
+        }:
+            if self.runtime_state["camera_live"]:
+                self._complete_current_stage()
+                return True
+        if stage.id == "fluigent" and action == "connect_fluidics" and self.runtime_state["fluidics"]:
+            self._complete_current_stage()
+            return True
+        return False
+
     def _skip_current_stage(self) -> None:
         try:
             self.workflow_state = self.workflow.skip_current(self.workflow_state)
@@ -1045,6 +1108,8 @@ class ControlWindow(QMainWindow):
             if notify_success:
                 self._notify(f"{action} ok", "success")
             self._append_log(f"{action}: ok")
+        if self._auto_complete_ready_stage(action):
+            return result
         if refresh:
             self._render_current_stage()
         return result
@@ -1060,7 +1125,9 @@ class ControlWindow(QMainWindow):
             self._render_current_stage()
             return
 
-        self._run("run_protocol", refresh=False)
+        if stage.id == "runs":
+            self._runs_completion_confirmed = False
+        self._run("run_protocol", self._protocol_run_settings(stage), refresh=False)
         self._render_current_stage()
 
     def _start_pipeline_stage(self, stage: Stage) -> None:
@@ -1070,6 +1137,7 @@ class ControlWindow(QMainWindow):
         self._clear_pipeline_confirmation()
         if stage.id == "runs":
             self._control_recording_dir = None
+            self._runs_completion_confirmed = False
         if self._run("run_protocol", self._protocol_run_settings(stage), refresh=False) is None:
             self._render_current_stage()
             return
@@ -1094,6 +1162,7 @@ class ControlWindow(QMainWindow):
         if stage is None:
             stage = self.workflow.current_stage(self.workflow_state)
         confirmation = self._pending_pipeline_confirmation()
+        run_complete_label = _run_complete_label(confirmation)
         if stage.id == "runs":
             run_label = _run_start_label(confirmation)
             if run_label and not self.last_metadata.get("recording_active"):
@@ -1105,7 +1174,11 @@ class ControlWindow(QMainWindow):
                 ) is None:
                     self._refresh_action_box(stage)
                     return
-        self._run("confirm_protocol", refresh=False, notify_success=False)
+        if self._run("confirm_protocol", refresh=False, notify_success=False) is None:
+            self._refresh_action_box(stage)
+            return
+        if stage.id == "runs" and run_complete_label:
+            self._runs_completion_confirmed = True
         self._clear_pipeline_confirmation()
         self._dismiss_notification()
         if stage.id in PIPELINE_STAGE_IDS:
@@ -1131,7 +1204,12 @@ class ControlWindow(QMainWindow):
                 "wash_pressure_duration_s": self.values.get("wash_pressure_duration_s"),
                 "tick_s": self.values.get("tick_s"),
             }
-        return {"pipeline_name": "Priming", "tick_s": self.values.get("tick_s")}
+        return {
+            "pipeline_name": "Priming",
+            "prime_oil_volume_ul": self.values.get("prime_oil_volume_ul"),
+            "prime_aqueous_volume_ul": self.values.get("prime_aqueous_volume_ul"),
+            "tick_s": self.values.get("tick_s"),
+        }
 
     def _recording_settings(self, run_label: str) -> dict[str, Any]:
         if self.project_path is None:
@@ -1323,10 +1401,14 @@ class ControlWindow(QMainWindow):
             return
         if self.workflow_state.statuses.get(stage.id) is not StageStatus.ACTIVE:
             return
+        if stage.id == "runs" and not self._runs_completion_confirmed:
+            return
         self._latest_pipeline_event = None
         self._clear_pipeline_confirmation()
         self._dismiss_notification()
         self._complete_current_stage()
+        if stage.id == "runs":
+            self._runs_completion_confirmed = False
 
     def _refresh_action_box(self, stage: Stage) -> None:
         self._clear_layout(self.action_box_layout)
@@ -2055,6 +2137,11 @@ class ControlWindow(QMainWindow):
             print(f"[admet control] {entry}", flush=True)
         except OSError:
             pass
+
+    def _detach_live_widgets(self) -> None:
+        for widget in (self.plot_panel, self.preview, self.monitor_table):
+            if widget is not None and widget.parent() is not None:
+                widget.setParent(None)
 
     def _clear_layout(self, layout) -> None:
         while layout.count():

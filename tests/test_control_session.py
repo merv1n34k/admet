@@ -8,7 +8,9 @@ from unittest.mock import patch
 from admet.core.engine import EngineResult
 from admet.core.schema import ResultSet
 from admet.core.session import load_session, new_session, save_session
+from admet.core.workflow import StageStatus
 from admet.engines.control import RecordingSession
+from admet.engines.control.settings import CAMERA_SETTINGS, CORRECTION_SETTINGS
 from admet.ui.control.window import ControlWindow
 
 
@@ -82,6 +84,59 @@ class FakeControlBackend:
 
 
 class RecordingSessionTests(unittest.TestCase):
+    def test_recording_keeps_preview_on_by_default(self):
+        self.assertFalse(CAMERA_SETTINGS.defaults()["camera_preview_off_recording"])
+
+    def test_correction_action_params_show_calibration_scale_first(self):
+        window = ControlWindow.__new__(ControlWindow)
+        stage = SimpleNamespace(id="corrections")
+
+        ordered = window._ordered_params(stage, list(CORRECTION_SETTINGS.params))
+        collapsed = window._collapsed_params(stage, ordered)
+
+        self.assertEqual(
+            [param.name for param in collapsed],
+            [
+                "oil_l_calibration",
+                "oil_l_scale",
+                "cells_m_calibration",
+                "cells_m_scale",
+                "beads_m_calibration",
+                "beads_m_scale",
+            ],
+        )
+        self.assertEqual(
+            [param.name for param in ordered[6:]],
+            [
+                "oil_l_offset",
+                "oil_l_quadratic",
+                "cells_m_offset",
+                "cells_m_quadratic",
+                "beads_m_offset",
+                "beads_m_quadratic",
+            ],
+        )
+
+    def test_runs_pipeline_completion_waits_for_run_confirmation(self):
+        window = ControlWindow.__new__(ControlWindow)
+        window.workflow = SimpleNamespace(current_stage=lambda _state: SimpleNamespace(id="runs"))
+        window.workflow_state = SimpleNamespace(statuses={"runs": StageStatus.ACTIVE})
+        window._latest_pipeline_event = object()
+        window._runs_completion_confirmed = False
+        window._clear_pipeline_confirmation = lambda: None
+        window._dismiss_notification = lambda: None
+        completions = []
+        window._complete_current_stage = lambda: completions.append(True)
+
+        window._complete_completed_pipeline_stage()
+        self.assertEqual(completions, [])
+
+        window._runs_completion_confirmed = True
+        window._complete_completed_pipeline_stage()
+
+        self.assertEqual(completions, [True])
+        self.assertFalse(window._runs_completion_confirmed)
+
     def test_start_and_stop_recording_writes_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             report_dir = Path(tmpdir) / "control_20260701_120000"

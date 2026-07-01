@@ -120,6 +120,8 @@ CONTROL_ACTIONS = (
         "protocol",
         params=(
             "pipeline_name",
+            "prime_oil_volume_ul",
+            "prime_aqueous_volume_ul",
             "set_count",
             "replicate_count",
             "run_volume_ul",
@@ -540,7 +542,9 @@ class FluidicsControlEngine:
     ) -> None:
         if self._pipeline and self._pipeline.is_alive():
             return
-        if name == "Drop-Seq" and settings:
+        if name == "Priming" and settings:
+            steps = self.build_pipeline_from_steps(self._priming_protocol(settings))
+        elif name == "Drop-Seq" and settings:
             steps = self.build_pipeline_from_steps(self._dropseq_run_protocol(settings))
         elif name == "Wash" and settings:
             steps = self.build_pipeline_from_steps(self._wash_protocol(settings))
@@ -599,6 +603,36 @@ class FluidicsControlEngine:
                 confirm_message=step.confirm_message,
             )
             for step in _expand_steps(steps)
+        ]
+
+    def _priming_protocol(self, settings: dict[str, Any]) -> list[ProtocolStep]:
+        oil_volume = float(settings["prime_oil_volume_ul"])
+        aqueous_volume = float(settings["prime_aqueous_volume_ul"])
+        return [
+            ProtocolStep(
+                name="Prime Oil L",
+                sensor_setpoints={0: 250.0},
+                trigger_type="volume",
+                trigger_params={"sensor_index": 0, "target_volume_ul": oil_volume},
+                on_complete="zero",
+                confirm_message=f"Prime Oil L at 250 uL/min for {oil_volume:g} uL. Proceed?",
+            ),
+            ProtocolStep(
+                name="Prime Cells M",
+                sensor_setpoints={1: 67.0},
+                trigger_type="volume",
+                trigger_params={"sensor_index": 1, "target_volume_ul": aqueous_volume},
+                on_complete="zero",
+                confirm_message=f"Prime Cells M at 67 uL/min for {aqueous_volume:g} uL. Proceed?",
+            ),
+            ProtocolStep(
+                name="Prime Beads M",
+                sensor_setpoints={2: 67.0},
+                trigger_type="volume",
+                trigger_params={"sensor_index": 2, "target_volume_ul": aqueous_volume},
+                on_complete="zero",
+                confirm_message=f"Prime Beads M at 67 uL/min for {aqueous_volume:g} uL. Proceed?",
+            ),
         ]
 
     def _dropseq_run_protocol(self, settings: dict[str, Any]) -> list[ProtocolStep]:

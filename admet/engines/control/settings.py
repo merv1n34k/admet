@@ -93,7 +93,7 @@ CAMERA_SETTINGS = ParamSchema(
         Param("camera_selection_h", "Selection H", ParamKind.INTEGER, default=0, minimum=0),
         Param("camera_image_prefix", "Image Prefix", ParamKind.TEXT, default="img"),
         Param("camera_video_fps", "Video FPS", ParamKind.FLOAT, default=24.0, minimum=1.0),
-        Param("camera_preview_off_recording", "Disable Preview During Recording", ParamKind.BOOLEAN, default=True),
+        Param("camera_preview_off_recording", "Disable Preview During Recording", ParamKind.BOOLEAN, default=False),
     )
 )
 
@@ -142,6 +142,8 @@ CHANNEL_CONTROL_SETTINGS = ParamSchema(
 PROTOCOL_SETTINGS = ParamSchema(
     (
         Param("pipeline_name", "Pipeline", ParamKind.CHOICE, default="Priming", options=_pipeline_options()),
+        Param("prime_oil_volume_ul", "Oil L Volume", ParamKind.FLOAT, default=40.0, minimum=0.1),
+        Param("prime_aqueous_volume_ul", "Cells/Beads Volume", ParamKind.FLOAT, default=5.0, minimum=0.1),
         Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
     )
 )

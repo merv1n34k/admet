@@ -374,6 +374,22 @@ class FluidicsControlEngineTests(unittest.TestCase):
 
         self.assertEqual([step.name for step in pipeline], ["solo", "g1", "g2", "g1", "g2"])
 
+    def test_priming_protocol_uses_configured_dispense_volumes(self):
+        engine = FluidicsControlEngine(FakeControlSDK())
+
+        pipeline = engine.build_pipeline_from_steps(
+            engine._priming_protocol(
+                {
+                    "prime_oil_volume_ul": 55.0,
+                    "prime_aqueous_volume_ul": 8.0,
+                }
+            )
+        )
+
+        self.assertEqual(getattr(pipeline[0].trigger, "_target_ul"), 55.0)
+        self.assertEqual(getattr(pipeline[1].trigger, "_target_ul"), 8.0)
+        self.assertEqual(getattr(pipeline[2].trigger, "_target_ul"), 8.0)
+
     def test_dropseq_protocol_splits_total_aqueous_flow(self):
         engine = FluidicsControlEngine(FakeControlSDK())
 
