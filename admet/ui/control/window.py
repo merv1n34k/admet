@@ -13,6 +13,7 @@ from PySide6.QtCore import QRect, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
+    QApplication,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -90,6 +91,14 @@ FLUIDICS_MAIN_SETTINGS = (
 
 PIPELINE_STAGE_IDS = {"priming", "runs", "wash"}
 LEFT_RAIL_WIDTH = 246
+_VIDEO_TABLE_COLUMNS = (
+    ("video", "Video"),
+    ("acquisition_fps", "Acq FPS"),
+    ("dimensions", "Dimensions"),
+    ("converted_fps", "Converted FPS"),
+    ("frames", "Frames"),
+    ("duration", "Duration"),
+)
 
 
 class ControlWindow(QMainWindow):
@@ -147,6 +156,7 @@ class ControlWindow(QMainWindow):
         self.channel_manager_panel: QFrame | None = None
         self.channel_panel: ChannelControlPanel | None = None
         self.monitor_table: FluidicsMonitorTable | None = None
+        self.video_table: QTableWidget | None = None
         self.csv_status: QLabel | None = None
         self._latest_pipeline_event: Any | None = None
         self._pipeline_pending_confirmation = ""
@@ -156,6 +166,7 @@ class ControlWindow(QMainWindow):
         self._protocol_status_label: QLabel | None = None
         self._protocol_progress_bar: QProgressBar | None = None
         self._protocol_confirm_label: QLabel | None = None
+        self._param_editors: dict[str, QWidget] = {}
         self.log_label: QLabel | None = None
         self.plot_panel: PlotPanel | None = None
         self.camera_frame_ready.connect(self._show_camera_frame)
@@ -486,10 +497,12 @@ class ControlWindow(QMainWindow):
         self.channel_panel = None
         self.csv_status = None
         self.action_table = None
+        self.video_table = None
         self._transport_button_refs = []
         self._protocol_status_label = None
         self._protocol_progress_bar = None
         self._protocol_confirm_label = None
+        self._param_editors = {}
         self.log_label = None
 
         self._render_action_box(stage)
@@ -501,6 +514,8 @@ class ControlWindow(QMainWindow):
 
     def _sync_stage(self, stage: Stage) -> None:
         self._sync_action_box(stage)
+        self._sync_param_editors()
+        self._sync_results()
         self._sync_log()
         self._sync_toc()
         self._show_stage_instruction(stage)
@@ -1014,7 +1029,30 @@ class ControlWindow(QMainWindow):
 
         video_rows = self._video_rows()
         if video_rows:
-            self.results_layout.addWidget(_video_table(video_rows))
+            self.video_table = _video_table(video_rows)
+            self.results_layout.addWidget(self.video_table)
+
+    def _sync_results(self) -> None:
+        self._update_csv_status()
+        if self._latest_snapshot is not None:
+            if self.monitor_table is not None:
+                self.monitor_table.update_from_snapshot(self._latest_snapshot)
+            if self.channel_panel is not None:
+                self.channel_panel.update_modes(self._channel_states())
+                self.channel_panel.update_from_snapshot(self._latest_snapshot)
+        if self.video_table is not None:
+            self._sync_video_table(self._video_rows())
+
+    def _sync_video_table(self, rows: list[dict[str, str]]) -> None:
+        if self.video_table is None or self.video_table.rowCount() != len(rows):
+            return
+        for row_index, row in enumerate(rows):
+            for column_index, (key, _label) in enumerate(_VIDEO_TABLE_COLUMNS):
+                item = self.video_table.item(row_index, column_index)
+                if item is not None and item.text() != row.get(key, ""):
+                    item.setText(row.get(key, ""))
+        self.video_table.resizeRowsToContents()
+        _fit_table_height(self.video_table)
 
     def _render_action(self, stage: Stage) -> None:
         full_params = self._ordered_params(stage, self._stage_params(stage))
@@ -1885,6 +1923,7 @@ class ControlWindow(QMainWindow):
             editor.currentIndexChanged.connect(
                 lambda _index, widget=editor, name=param.name: self._set_value(name, widget.currentData())
             )
+            self._param_editors[param.name] = editor
             return editor
         if param.kind is ParamKind.CHOICE:
             editor = QComboBox()
@@ -1896,6 +1935,7 @@ class ControlWindow(QMainWindow):
             editor.currentIndexChanged.connect(
                 lambda _index, widget=editor, name=param.name: self._set_value(name, widget.currentData())
             )
+            self._param_editors[param.name] = editor
             return editor
         if param.kind is ParamKind.INTEGER:
             editor = QSpinBox()
@@ -1907,6 +1947,7 @@ class ControlWindow(QMainWindow):
                 editor.setSingleStep(max(1, int(param.step)))
             editor.setValue(int(value if value is not None else param.default or 0))
             editor.valueChanged.connect(lambda value, name=param.name: self._set_value(name, value))
+            self._param_editors[param.name] = editor
             return editor
         if param.kind is ParamKind.FLOAT:
             editor = QDoubleSpinBox()
@@ -1919,10 +1960,41 @@ class ControlWindow(QMainWindow):
                 editor.setSingleStep(float(param.step))
             editor.setValue(float(value if value is not None else param.default or 0.0))
             editor.valueChanged.connect(lambda value, name=param.name: self._set_value(name, value))
+            self._param_editors[param.name] = editor
             return editor
         editor = QLineEdit(_display_value(value))
         editor.textChanged.connect(lambda value, name=param.name: self._set_value(name, value))
+        self._param_editors[param.name] = editor
         return editor
+
+    def _sync_param_editors(self) -> None:
+        for name, editor in self._param_editors.items():
+            if _widget_has_focus(editor):
+                continue
+            self._sync_param_editor(name, editor)
+
+    def _sync_param_editor(self, name: str, editor: QWidget) -> None:
+        value = self.values.get(name)
+        was_blocked = editor.blockSignals(True)
+        try:
+            if isinstance(editor, QComboBox):
+                index = editor.findData(value)
+                if index >= 0 and editor.currentIndex() != index:
+                    editor.setCurrentIndex(index)
+            elif isinstance(editor, QSpinBox):
+                next_value = int(value if value is not None else 0)
+                if editor.value() != next_value:
+                    editor.setValue(next_value)
+            elif isinstance(editor, QDoubleSpinBox):
+                next_value = float(value if value is not None else 0.0)
+                if editor.value() != next_value:
+                    editor.setValue(next_value)
+            elif isinstance(editor, QLineEdit):
+                text = _display_value(value)
+                if editor.text() != text:
+                    editor.setText(text)
+        finally:
+            editor.blockSignals(was_blocked)
 
     def _set_value(self, name: str, value: Any) -> None:
         param = self._param_by_name(name)
@@ -2491,6 +2563,11 @@ def _small_double_box(minimum: float, maximum: float, suffix: str) -> QDoubleSpi
     return box
 
 
+def _widget_has_focus(widget: QWidget) -> bool:
+    focus = QApplication.focusWidget()
+    return focus is widget or bool(focus is not None and widget.isAncestorOf(focus))
+
+
 def _safe_list_value(values: Any, index: int, *, default: Any = 0.0) -> Any:
     try:
         return values[index]
@@ -2845,27 +2922,19 @@ class PreviewDisplay(QWidget):
 
 
 def _video_table(rows: list[dict[str, str]]) -> QTableWidget:
-    columns = (
-        ("video", "Video"),
-        ("acquisition_fps", "Acq FPS"),
-        ("dimensions", "Dimensions"),
-        ("converted_fps", "Converted FPS"),
-        ("frames", "Frames"),
-        ("duration", "Duration"),
-    )
-    table = QTableWidget(len(rows), len(columns))
+    table = QTableWidget(len(rows), len(_VIDEO_TABLE_COLUMNS))
     table.setObjectName("RawConfigTable")
-    table.setHorizontalHeaderLabels(tuple(label for _key, label in columns))
+    table.setHorizontalHeaderLabels(tuple(label for _key, label in _VIDEO_TABLE_COLUMNS))
     table.verticalHeader().hide()
     table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-    for column in range(1, len(columns)):
+    for column in range(1, len(_VIDEO_TABLE_COLUMNS)):
         table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
     table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
     table.setShowGrid(True)
     for row_index, row in enumerate(rows):
-        for column_index, (key, _label) in enumerate(columns):
+        for column_index, (key, _label) in enumerate(_VIDEO_TABLE_COLUMNS):
             item = QTableWidgetItem(row.get(key, ""))
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row_index, column_index, item)
