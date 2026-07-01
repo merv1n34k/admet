@@ -185,6 +185,9 @@ class FakeCameraAcquisition:
     def set_preview_enabled(self, enabled):
         self.preview_enabled = enabled
 
+    def frame_processed(self):
+        pass
+
 
 class FakeFrameAcknowledger:
     def __init__(self):
@@ -284,8 +287,8 @@ class FluidicsControlEngineTests(unittest.TestCase):
         sdk = FakeControlSDK()
         engine = FluidicsControlEngine(sdk, video_writer_factory=FakeVideoWriter)
         camera = FakeCameraAcquisition()
-        engine._camera_acquisition = camera
-        engine._camera_last_frame = np.zeros((12, 16), dtype=np.uint8)
+        engine._camera._acquisition = camera
+        engine._camera._on_frame(np.zeros((12, 16), dtype=np.uint8))
         engine.run_action("connect_fluidics", {"simulated": False, "start_polling": False})
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -335,12 +338,12 @@ class FluidicsControlEngineTests(unittest.TestCase):
     def test_camera_frame_delivery_waits_for_ui_acknowledgement(self):
         engine = FluidicsControlEngine(FakeControlSDK())
         acknowledger = FakeFrameAcknowledger()
-        engine._camera_acquisition = acknowledger
+        engine._camera._acquisition = acknowledger
         frames = []
         unsubscribe = engine.subscribe_camera_frames(frames.append)
         source = np.ones((2, 3), dtype=np.uint8)
 
-        engine._on_camera_frame(source)
+        engine._camera._on_frame(source)
 
         self.assertEqual(len(frames), 1)
         self.assertIsNot(frames[0], source)
@@ -350,7 +353,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
 
         self.assertEqual(acknowledger.processed, 1)
         unsubscribe()
-        engine._on_camera_frame(source)
+        engine._camera._on_frame(source)
         self.assertEqual(acknowledger.processed, 2)
 
     def test_build_pipeline_expands_group_repeats(self):
