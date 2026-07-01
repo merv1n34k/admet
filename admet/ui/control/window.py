@@ -1067,6 +1067,26 @@ class ControlWindow(QMainWindow):
         refresh: bool = True,
         notify_success: bool = True,
     ):
+        payload = self._prepare_action_payload(action, settings)
+        if payload is None:
+            return None
+        try:
+            result = self.api.run_action(action, payload)
+        except Exception as exc:
+            self._handle_action_error(action, exc, refresh=refresh, raise_errors=raise_errors)
+            return None
+        return self._handle_action_result(
+            action,
+            result,
+            refresh=refresh,
+            notify_success=notify_success,
+        )
+
+    def _prepare_action_payload(
+        self,
+        action: str,
+        settings: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         if self._action_requires_project(action) and not self._project_ready():
             self._set_status("Project required", "warning")
             self._notify("Create or select a project before camera setup.", "warning", timeout_ms=0)
@@ -1084,16 +1104,31 @@ class ControlWindow(QMainWindow):
         payload = self._action_payload(action)
         if settings:
             payload.update(settings)
-        try:
-            result = self.api.run_action(action, payload)
-        except Exception as exc:
-            self._set_status(f"{action} failed", "danger")
-            self._append_log(f"{action}: {type(exc).__name__}: {exc}")
-            if refresh:
-                self._render_current_stage()
-            if raise_errors:
-                self._notify(f"{action} failed: {exc}", "danger")
-            return None
+        return payload
+
+    def _handle_action_error(
+        self,
+        action: str,
+        exc: Exception,
+        *,
+        refresh: bool,
+        raise_errors: bool,
+    ) -> None:
+        self._set_status(f"{action} failed", "danger")
+        self._append_log(f"{action}: {type(exc).__name__}: {exc}")
+        if refresh:
+            self._render_current_stage()
+        if raise_errors:
+            self._notify(f"{action} failed: {exc}", "danger")
+
+    def _handle_action_result(
+        self,
+        action: str,
+        result: EngineResult,
+        *,
+        refresh: bool,
+        notify_success: bool,
+    ) -> EngineResult:
         self.last_result = result
         self.last_metadata = dict(result.result_set.metadata)
         self._refresh_runtime_state()
