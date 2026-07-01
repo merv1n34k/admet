@@ -185,7 +185,7 @@ class RecordingSessionTests(unittest.TestCase):
 
     def test_start_and_stop_recording_writes_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            report_dir = Path(tmpdir) / "control_20260701_120000"
+            report_dir = Path(tmpdir) / "records"
             camera = FakeCameraRecorder()
             control = FakeControlBackend()
             session = RecordingSession(
@@ -209,7 +209,8 @@ class RecordingSessionTests(unittest.TestCase):
 
         self.assertTrue(started.video_prefix.startswith("set01_rep01_"))
         self.assertEqual(started.fluidics_csv, str(report_dir / "fluidics" / f"{started.video_prefix}.csv"))
-        self.assertEqual(report_dir.name, "control_20260701_120000")
+        self.assertEqual(Path(started.output_dir).name, "camera")
+        self.assertEqual(report_dir.name, "records")
         self.assertEqual(camera.start_args, (10, None))
         self.assertEqual(control.actions[0][0], "start_recording")
         self.assertEqual(Path(control.actions[0][1]["fluidics_dir"]).name, "fluidics")
@@ -226,7 +227,7 @@ class RecordingSessionTests(unittest.TestCase):
 
     def test_camera_auto_stop_finalizes_full_session(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            report_dir = Path(tmpdir) / "control_20260701_120000"
+            report_dir = Path(tmpdir) / "records"
             camera = FakeCameraRecorder()
             control = FakeControlBackend()
             session = RecordingSession(
@@ -255,14 +256,50 @@ class RecordingSessionTests(unittest.TestCase):
         self.assertEqual(metadata["recordings"][0]["frames_recorded"], 5)
         self.assertEqual(metadata["recordings"][0]["frames_written"], 7)
 
+    def test_recording_session_appends_existing_master_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_dir = Path(tmpdir) / "records"
+            report_dir.mkdir()
+            (report_dir / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "recording_count": 1,
+                        "recordings": [
+                            {
+                                "recording_id": "set01_rep01_20260701_120000",
+                                "video_prefix": "set01_rep01_20260701_120000",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            camera = FakeCameraRecorder()
+            control = FakeControlBackend()
+            session = RecordingSession(
+                report_dir,
+                camera,
+                control,
+                writer_factory=FakeWriter,
+            )
+
+            session.start_recording("set01_rep02", width=640, height=240, fps=120.0)
+            session.stop_recording()
+
+            metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(metadata["recording_count"], 2)
+        self.assertEqual(metadata["recordings"][0]["recording_id"], "set01_rep01_20260701_120000")
+        self.assertTrue(metadata["recordings"][1]["recording_id"].startswith("set01_rep02_"))
+
     def test_recording_artifact_registers_video_csv_and_acquisition_item(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project = Path(tmpdir) / "study.admetp"
             session = save_session(project, new_session("study", "combined"))
-            acq_dir = session / "media" / "control" / "control_20260701_120000"
-            video_path = acq_dir / "video" / "set01_rep02_20260701_120000.avi"
+            acq_dir = session / "records"
+            video_path = acq_dir / "camera" / "set01_rep02_20260701_120000.avi"
             csv_path = acq_dir / "fluidics" / "set01_rep02_20260701_120000.csv"
-            second_video_path = acq_dir / "video" / "set01_rep03_20260701_120030.avi"
+            second_video_path = acq_dir / "camera" / "set01_rep03_20260701_120030.avi"
             second_csv_path = acq_dir / "fluidics" / "set01_rep03_20260701_120030.csv"
             video_path.parent.mkdir(parents=True)
             csv_path.parent.mkdir(parents=True)
@@ -312,16 +349,75 @@ class RecordingSessionTests(unittest.TestCase):
         self.assertEqual(len(video_files), 2)
         self.assertEqual(len(csv_files), 2)
         self.assertIn(
-            "media/control/control_20260701_120000/video/set01_rep02_20260701_120000.avi",
+            "records/camera/set01_rep02_20260701_120000.avi",
             {file.path for file in video_files},
         )
         self.assertIn(
-            "media/control/control_20260701_120000/fluidics/set01_rep02_20260701_120000.csv",
+            "records/fluidics/set01_rep02_20260701_120000.csv",
             {file.path for file in csv_files},
         )
         self.assertEqual(len(saved.items), 1)
         self.assertEqual(saved.items[0].project_type, "control_acquisition")
         self.assertEqual(len(saved.items[0].files), 4)
+
+    def test_project_open_loads_existing_recording_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project = Path(tmpdir) / "study.admetp"
+            session = save_session(project, new_session("study", "combined"))
+            acq_dir = session / "records"
+            video_path = acq_dir / "camera" / "set01_rep02_20260701_120000.avi"
+            csv_path = acq_dir / "fluidics" / "set01_rep02_20260701_120000.csv"
+            video_path.parent.mkdir(parents=True)
+            csv_path.parent.mkdir(parents=True)
+            video_path.write_bytes(b"AVI")
+            csv_path.write_text("timestamp,elapsed_s\n", encoding="utf-8")
+            (acq_dir / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "recordings": [
+                            {
+                                "recording_id": "set01_rep02_20260701_120000",
+                                "video_prefix": "set01_rep02_20260701_120000",
+                                "report_dir": "/old/project/records",
+                                "output_dir": "/old/project/records/camera",
+                                "video_path": "/old/project/records/camera/set01_rep02_20260701_120000.avi",
+                                "fluidics_csv": "/old/project/records/fluidics/set01_rep02_20260701_120000.csv",
+                                "width": 640,
+                                "height": 240,
+                                "converted_fps": 120.0,
+                                "acquisition_fps": 118.5,
+                                "frames_recorded": 55,
+                                "duration_s": 0.46,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            window = ControlWindow.__new__(ControlWindow)
+            window.api = SimpleNamespace(
+                session=load_session(session),
+                engine=SimpleNamespace(id="fluidics", recording_metadata_sources=lambda: []),
+                workdir=str(session),
+            )
+            window.project_path = session
+            window.last_result = None
+            window.last_metadata = {}
+            window._append_log = lambda _message: None
+
+            window._load_project_recordings()
+            rows = window._video_rows()
+            saved = load_session(session)
+
+        self.assertEqual(rows[0]["video"], "set01_rep02_20260701_120000.avi")
+        self.assertEqual(rows[0]["acquisition_fps"], "118.50")
+        self.assertEqual(rows[0]["dimensions"], "640x240")
+        self.assertEqual({file.path for file in saved.files}, {
+            "records/camera/set01_rep02_20260701_120000.avi",
+            "records/fluidics/set01_rep02_20260701_120000.csv",
+        })
+        self.assertEqual(len(saved.items), 1)
 
     def test_new_project_uses_selected_path_name_and_saves_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:

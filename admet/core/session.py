@@ -103,7 +103,7 @@ def new_session(
 def save_session(path: str | Path, session: AdmetSession) -> Path:
     target = session_path(path)
     target.mkdir(parents=True, exist_ok=True)
-    (target / "media").mkdir(exist_ok=True)
+    (target / "records").mkdir(exist_ok=True)
     (target / "cache").mkdir(exist_ok=True)
     session = session.touch()
     session = _relativize_session_paths(session, target)

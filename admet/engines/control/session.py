@@ -91,7 +91,8 @@ class RecordingSession:
     def create_report_dir(self) -> Path:
         if self.report_dir is None:
             self.report_dir = create_recording_report_dir(self.report_root)
-            (self.report_dir / "video").mkdir(parents=True, exist_ok=True)
+            self.recordings = read_recording_metadata(self.report_dir)
+            (self.report_dir / "camera").mkdir(parents=True, exist_ok=True)
             (self.report_dir / "fluidics").mkdir(parents=True, exist_ok=True)
             self.write_metadata()
         return self.report_dir
@@ -107,7 +108,7 @@ class RecordingSession:
         max_time: float | None = None,
     ) -> RecordingMetadata:
         report_dir = self.create_report_dir()
-        video_dir = report_dir / "video"
+        video_dir = report_dir / "camera"
         fluidics_dir = report_dir / "fluidics"
         recording_id = create_recording_id(recording_label)
         writer = self.writer_factory(video_dir, recording_id, width, height, fps)
@@ -355,7 +356,7 @@ class RecordingCoordinator:
         fluidics_dir = report_dir / "fluidics"
         fluidics_dir.mkdir(parents=True, exist_ok=True)
         if self._csv_recording_report_dir != report_dir:
-            self._csv_recordings = []
+            self._csv_recordings = read_recording_metadata(report_dir)
         recording_id = create_recording_id(recording_label)
         csv_path = self._start_csv_recording(
             str(fluidics_dir),
@@ -487,6 +488,18 @@ def write_recording_metadata(
     if current is not None:
         metadata["current_recording"] = current.to_dict()
     (report_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+
+def read_recording_metadata(report_dir: str | Path) -> list[dict[str, Any]]:
+    metadata_path = Path(report_dir) / "metadata.json"
+    if not metadata_path.is_file():
+        return []
+    with metadata_path.open("r", encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    recordings = metadata.get("recordings") if isinstance(metadata, dict) else None
+    if not isinstance(recordings, list):
+        return []
+    return [recording for recording in recordings if isinstance(recording, dict)]
 
 
 def _safe_recording_label(value: str) -> str:

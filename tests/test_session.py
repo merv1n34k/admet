@@ -62,7 +62,7 @@ class SessionProjectTests(unittest.TestCase):
             loaded = load_session(project_path)
             self.assertTrue(project_path.is_dir())
             self.assertTrue((project_path / "manifest.json").is_file())
-            self.assertTrue((project_path / "media").is_dir())
+            self.assertTrue((project_path / "records").is_dir())
             self.assertTrue((project_path / "cache").is_dir())
 
         self.assertEqual(project_path.name, "project.admetp")
@@ -101,7 +101,7 @@ class SessionProjectTests(unittest.TestCase):
     def test_save_relativizes_paths_inside_project(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project_root = Path(tmpdir) / "study.admetp"
-            media_path = project_root / "media" / "video.avi"
+            media_path = project_root / "records" / "video.avi"
             cache_path = project_root / "cache" / "opencv"
             session = AdmetSession(
                 project_id="study",
@@ -113,7 +113,7 @@ class SessionProjectTests(unittest.TestCase):
             project_path = save_session(project_root, session)
             loaded = load_session(project_path / "manifest.json")
 
-        self.assertEqual(loaded.files[0].path, "media/video.avi")
+        self.assertEqual(loaded.files[0].path, "records/video.avi")
         self.assertEqual(loaded.caches[0].path, "cache/opencv")
 
     def test_absolute_external_path_requires_metadata(self):

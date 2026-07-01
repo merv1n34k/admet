@@ -268,7 +268,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
             result = engine.run_action(
                 "start_recording",
                 {
-                    "recording_root": "media/control/control_20260701_120000",
+                    "recording_root": "records",
                     "recording_label": "set01_rep01",
                 },
                 EngineContext(workdir=tmpdir),
@@ -278,8 +278,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
             engine.run_action("stop_recording", {})
 
         self.assertEqual(csv_path.parent.name, "fluidics")
-        self.assertEqual(csv_path.parent.parent.parent.name, "control")
-        self.assertEqual(csv_path.parent.parent.name, "control_20260701_120000")
+        self.assertEqual(csv_path.parent.parent.name, "records")
         self.assertTrue(csv_path.name.startswith("set01_rep01_"))
         self.assertFalse(engine.recording_active)
 
@@ -295,7 +294,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
             result = engine.run_action(
                 "start_recording",
                 {
-                    "recording_root": "media/control/control_20260701_120000",
+                    "recording_root": "records",
                     "recording_label": "set01_rep02",
                     "camera_video_fps": 120.0,
                     "camera_preview_off_recording": True,
@@ -306,7 +305,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
             second = engine.run_action(
                 "start_recording",
                 {
-                    "recording_root": "media/control/control_20260701_120000",
+                    "recording_root": "records",
                     "recording_label": "set01_rep03",
                     "camera_video_fps": 120.0,
                     "camera_preview_off_recording": True,
@@ -321,8 +320,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
 
         self.assertTrue(result.artifacts["csv_path"].endswith(".csv"))
         self.assertEqual(second.artifacts["report_dir"], result.artifacts["report_dir"])
-        self.assertEqual(report_dir.parent.name, "control")
-        self.assertEqual(report_dir.name, "control_20260701_120000")
+        self.assertEqual(report_dir.name, "records")
         self.assertTrue(metadata_exists)
         self.assertTrue(Path(stop.artifacts["video_path"]).name.startswith("set01_rep02_"))
         self.assertTrue(Path(second_stop.artifacts["video_path"]).name.startswith("set01_rep03_"))
