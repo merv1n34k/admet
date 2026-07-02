@@ -321,11 +321,12 @@ class DropletPipeline:
     def _prepare_cache_dir(self):
         processing_config = self.config.get("processing", {})
         cache_dir = processing_config.get("cache_dir")
-        if cache_dir:
-            self.cache_dir = Path(cache_dir)
-        else:
-            output_dir = Path(self.config.get("output", {}).get("directory", "output"))
-            self.cache_dir = output_dir / f"analysis_cache_{int(time.time())}"
+        if not cache_dir:
+            self.cache_dir = None
+            self.contour_cache_buffer = []
+            self.contour_chunk_index = 0
+            return
+        self.cache_dir = Path(cache_dir)
 
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         (self.cache_dir / "contours").mkdir(exist_ok=True)

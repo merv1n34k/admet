@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import numpy as np
 
+from admet.core.engine import RunJob
+from admet.core.run import JsonlRunSink
 from admet.engines.analyze.cellpose.cache import Cache
 from admet.engines.analyze.cellpose.config import load_config
 from admet.engines.analyze.cellpose.correction import update_results_with_inclusions
@@ -158,24 +160,43 @@ class CellposeHelperTests(unittest.TestCase):
     def test_cellpose_engine_returns_empty_result_for_empty_input(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             input_dir = Path(tmpdir) / "empty-sample"
-            output_dir = Path(tmpdir) / "output"
             input_dir.mkdir()
 
-            result = create_engine().run_action(
-                "analyze",
-                {
-                    "input_dir": str(input_dir),
-                    "output_dir": str(output_dir),
-                    "write_artifacts": False,
-                },
-            )
+            result = create_engine().run_action("analyze", {"input_dir": str(input_dir)})
 
         stats = {stat.name: stat.value for stat in result.result_set.stats}
         self.assertEqual(result.result_set.records, ())
         self.assertEqual(stats["total_droplets"], 0)
         self.assertEqual(stats["total_inclusions"], 0)
         self.assertEqual(result.result_set.metadata["sample_id"], "empty-sample")
-        self.assertEqual(result.artifacts["output_dir"], str(output_dir))
+        self.assertTrue(result.artifacts["cache_dir"])
+
+    def test_cellpose_engine_writes_raw_rows_to_job_sink(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_dir = Path(tmpdir) / "empty-sample"
+            raw_path = Path(tmpdir) / "analysis" / "raw.jsonl"
+            cache_dir = Path(tmpdir) / "cache" / "cellpose"
+            input_dir.mkdir()
+
+            with JsonlRunSink(raw_path) as sink:
+                result = create_engine().run(
+                    RunJob(
+                        id="job-cellpose",
+                        engine="cellpose",
+                        action="analyze",
+                        inputs={"input_dir": input_dir},
+                        cache_dir=cache_dir,
+                        sink=sink,
+                        metadata={"file_id": "image-dir-1", "item_id": "sample-1"},
+                    )
+                )
+
+            self.assertEqual(result.status, "complete")
+            self.assertEqual(result.metadata["sample_id"], "empty-sample")
+            self.assertEqual(result.metadata["row_count"], 0)
+            self.assertTrue(raw_path.is_file())
+            self.assertEqual(raw_path.read_text(encoding="utf-8"), "")
+            self.assertEqual(Path(result.metadata["cache_dir"]), cache_dir)
 
 
 if __name__ == "__main__":

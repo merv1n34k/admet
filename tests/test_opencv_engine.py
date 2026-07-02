@@ -1,6 +1,10 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
+
+from admet.core.engine import RunJob
+from admet.core.run import JsonlRunSink
 
 try:
     import cv2
@@ -26,19 +30,61 @@ def write_synthetic_video(path: Path, frames=30):
 
 @unittest.skipIf(cv2 is None, "OpenCV is not installed")
 class OpenCVEngineTests(unittest.TestCase):
-    def test_engine_returns_shared_result_set(self):
+    def test_engine_writes_raw_rows_to_job_sink(self):
+        from admet.engines.analyze.opencv import create_engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video_path = Path(tmpdir) / "droplets.avi"
+            raw_path = Path(tmpdir) / "analysis" / "raw.jsonl"
+            cache_dir = Path(tmpdir) / "cache" / "opencv"
+            write_synthetic_video(video_path)
+
+            engine = create_engine()
+            with JsonlRunSink(raw_path) as sink:
+                result = engine.run(
+                    RunJob(
+                        id="job-opencv",
+                        engine="opencv",
+                        action="analyze",
+                        inputs={"video": video_path},
+                        cache_dir=cache_dir,
+                        sink=sink,
+                        metadata={"file_id": "video-1", "item_id": "sample-1"},
+                        settings={
+                            "microns_per_pixel": 1.0,
+                            "fps": 30.0,
+                            "max_frames": 30,
+                        },
+                    )
+                )
+
+            rows = [
+                json.loads(line)
+                for line in raw_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+            self.assertEqual(result.status, "complete")
+            self.assertEqual(result.metadata["sample_id"], "droplets")
+            self.assertGreater(result.metadata["row_count"], 0)
+            self.assertEqual(result.metadata["row_count"], len(rows))
+            self.assertEqual(rows[0]["job_id"], "job-opencv")
+            self.assertEqual(rows[0]["file_id"], "video-1")
+            self.assertEqual(rows[0]["engine"], "opencv")
+            self.assertEqual(rows[0]["kind"], "frame")
+            self.assertTrue(result.metadata["cache_dir"])
+
+    def test_action_returns_shared_result_set(self):
         from admet.engines.analyze.opencv import create_engine
 
         with tempfile.TemporaryDirectory() as tmpdir:
             video_path = Path(tmpdir) / "droplets.avi"
             write_synthetic_video(video_path)
 
-            engine = create_engine()
-            result = engine.run_action(
+            result = create_engine().run_action(
                 "analyze",
                 {
                     "video_path": str(video_path),
-                    "output_dir": str(Path(tmpdir) / "output"),
                     "microns_per_pixel": 1.0,
                     "fps": 30.0,
                     "max_frames": 30,
@@ -49,7 +95,7 @@ class OpenCVEngineTests(unittest.TestCase):
             self.assertGreater(stats["total_detections"], 0)
             self.assertGreaterEqual(stats["frames_processed"], 1)
             self.assertEqual(result.result_set.metadata["sample_id"], "droplets")
-            self.assertTrue(result.artifacts["cache_dir"])
+            self.assertIsNone(result.artifacts["cache_dir"])
 
 
 if __name__ == "__main__":

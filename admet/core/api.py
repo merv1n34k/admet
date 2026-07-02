@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from admet.core.engine import Engine, EngineContext, EngineResult
+from admet.core.engine import Engine, EngineContext, EngineResult, RunJob, RunResult
 from admet.core.schema import ParamSchema
 from admet.core.session import AdmetSession
 
@@ -57,3 +57,8 @@ class AdmetAPI:
                 session=context.session,
             )
         return self.engine.run_action(action, settings, context)
+
+    def run(self, job: RunJob) -> RunResult:
+        if job.engine != self.engine.id:
+            raise ValueError(f"job engine {job.engine!r} does not match {self.engine.id!r}")
+        return self.engine.run(job)

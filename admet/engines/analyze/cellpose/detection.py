@@ -27,6 +27,7 @@ class CellposeDetection:
         store_visualizations: bool = False,
         use_cache: bool = True,
         detect_inclusions: bool = True,
+        cache_dir: str | Path | None = None,
         model_factory: Callable[[], Any] | None = None,
     ):
         self.config = config if config else load_config()
@@ -34,7 +35,7 @@ class CellposeDetection:
         self.store_visualizations = store_visualizations
         self.visualization_data = {} if store_visualizations else None
         self.use_cache = use_cache
-        self.cache = Cache(self.config) if use_cache else None
+        self.cache = Cache(self.config, cache_dir=cache_dir) if use_cache else None
         self.detect_inclusions = detect_inclusions
         self._cellpose_model = None
         self._model_factory = model_factory
@@ -313,13 +314,15 @@ class CellposeDetection:
     def run(
         self,
         input_dir: str | Path,
-        output_dir: str | Path,
+        output_dir: str | Path | None = None,
         *,
         frame_limit: int | None = None,
         write_artifacts: bool = True,
     ) -> list[dict[str, Any]]:
-        output_path = Path(output_dir)
+        output_path = Path(output_dir) if output_dir is not None else None
         if write_artifacts:
+            if output_path is None:
+                raise ValueError("output_dir is required when write_artifacts=True")
             output_path.mkdir(parents=True, exist_ok=True)
             self._frame_output = output_path
 
@@ -353,6 +356,7 @@ class CellposeDetection:
             self.process_frame(frame_idx, min_projection, droplet_coords)
 
         if write_artifacts:
+            assert output_path is not None
             self._write_layout(input_dir, output_path, frame_indices)
             if self.results_data:
                 self._write_results_csv(output_path / "data.csv")

@@ -76,11 +76,13 @@ class RecordingSession:
         control: ControlBackend,
         *,
         writer_factory: WriterFactory | None = None,
+        write_metadata: bool = True,
     ):
         self.report_root = Path(report_root)
         self.camera = camera
         self.control = control
         self.writer_factory = writer_factory or _default_writer_factory
+        self._write_metadata_enabled = write_metadata
         self.report_dir: Path | None = None
         self.recordings: list[dict[str, Any]] = []
         self.current: RecordingMetadata | None = None
@@ -106,11 +108,25 @@ class RecordingSession:
         fps: float,
         max_frames: int | None = None,
         max_time: float | None = None,
+        video_path: str | Path | None = None,
+        fluidics_csv_path: str | Path | None = None,
     ) -> RecordingMetadata:
-        report_dir = self.create_report_dir()
-        video_dir = report_dir / "camera"
-        fluidics_dir = report_dir / "fluidics"
-        recording_id = create_recording_id(recording_label)
+        if video_path is not None and fluidics_csv_path is not None:
+            video_file = Path(video_path)
+            csv_file = Path(fluidics_csv_path)
+            report_dir = video_file.parent.parent
+            video_dir = video_file.parent
+            fluidics_dir = csv_file.parent
+            recording_id = video_file.stem
+            video_dir.mkdir(parents=True, exist_ok=True)
+            fluidics_dir.mkdir(parents=True, exist_ok=True)
+            self.report_dir = report_dir
+        else:
+            report_dir = self.create_report_dir()
+            video_dir = report_dir / "camera"
+            fluidics_dir = report_dir / "fluidics"
+            recording_id = create_recording_id(recording_label)
+            csv_file = fluidics_dir / f"{recording_id}.csv"
         writer = self.writer_factory(video_dir, recording_id, width, height, fps)
         if not self.camera.start_recording(writer, max_frames=max_frames, max_time=max_time):
             raise RuntimeError("Failed to start camera recording")
@@ -119,7 +135,7 @@ class RecordingSession:
             "start_recording",
             {
                 "fluidics_dir": str(fluidics_dir),
-                "csv_filename": f"{recording_id}.csv",
+                "csv_filename": csv_file.name,
             },
         )
         self.current = RecordingMetadata(
@@ -176,7 +192,7 @@ class RecordingSession:
         return completed
 
     def write_metadata(self) -> None:
-        if self.report_dir is None:
+        if self.report_dir is None or not self._write_metadata_enabled:
             return
         write_recording_metadata(self.report_dir, self.recordings, current=self.current)
 
@@ -232,7 +248,7 @@ class RecordingCoordinator:
                 recording_label,
                 frame_size,
             )
-        return self._start_csv_only_recording(context, report_root, recording_label)
+        return self._start_csv_only_recording(settings, context, report_root, recording_label)
 
     def stop_recording(self) -> dict[str, Any]:
         if self._recording_session is not None and self._recording_session.current is not None:
@@ -324,6 +340,7 @@ class RecordingCoordinator:
                 camera_recorder,
                 _CsvRecordingBackend(self, context),
                 writer_factory=self._writer_factory,
+                write_metadata=not _has_explicit_recording_paths(settings),
             )
             self._recording_session = session
         camera_recorder.set_recording_complete_callback(self.stop_recording)
@@ -338,6 +355,8 @@ class RecordingCoordinator:
             width=width,
             height=height,
             fps=float(settings["camera_video_fps"]),
+            video_path=settings.get("video_path"),
+            fluidics_csv_path=settings.get("fluidics_csv_path"),
         )
         self._last_recording = metadata
         return {
@@ -348,6 +367,7 @@ class RecordingCoordinator:
 
     def _start_csv_only_recording(
         self,
+        settings: dict[str, Any],
         context: Any | None,
         report_root: Path,
         recording_label: str,
@@ -358,11 +378,14 @@ class RecordingCoordinator:
         if self._csv_recording_report_dir != report_dir:
             self._csv_recordings = read_recording_metadata(report_dir)
         recording_id = create_recording_id(recording_label)
-        csv_path = self._start_csv_recording(
-            str(fluidics_dir),
-            context,
-            csv_filename=f"{recording_id}.csv",
-        )
+        explicit_csv = settings.get("fluidics_csv_path")
+        if explicit_csv:
+            csv_file = Path(str(explicit_csv))
+            fluidics_dir = csv_file.parent
+            csv_filename = csv_file.name
+        else:
+            csv_filename = f"{recording_id}.csv"
+        csv_path = self._start_csv_recording(str(fluidics_dir), context, csv_filename=csv_filename)
         metadata = RecordingMetadata(
             started_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
             started_monotonic_s=time.monotonic(),
@@ -378,7 +401,8 @@ class RecordingCoordinator:
         self._csv_recording = metadata
         self._csv_recording_report_dir = report_dir
         self._last_recording = metadata
-        write_recording_metadata(report_dir, self._csv_recordings, current=metadata)
+        if not explicit_csv:
+            write_recording_metadata(report_dir, self._csv_recordings, current=metadata)
         return {"csv_path": csv_path, "report_dir": str(report_dir), "recording": metadata.to_dict()}
 
     def _start_csv_recording(
@@ -419,6 +443,10 @@ class RecordingCoordinator:
                 preview_setter(True)
 
     def _recording_root(self, settings: dict[str, Any], context: Any | None) -> Path:
+        if settings.get("video_path"):
+            return Path(str(settings["video_path"])).parent.parent
+        if settings.get("fluidics_csv_path"):
+            return Path(str(settings["fluidics_csv_path"])).parent.parent
         recording_root_value = str(settings["recording_root"]).strip()
         if not recording_root_value:
             raise RuntimeError("Recording root is not configured")
@@ -465,6 +493,10 @@ def create_recording_report_dir(report_root: str | Path) -> Path:
     root = Path(report_root)
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _has_explicit_recording_paths(settings: dict[str, Any]) -> bool:
+    return bool(settings.get("video_path") and settings.get("fluidics_csv_path"))
 
 
 def create_recording_id(recording_label: str) -> str:

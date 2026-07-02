@@ -4,7 +4,7 @@ from dataclasses import asdict
 from queue import Queue
 from typing import Any, Callable
 
-from admet.core.engine import ActionSpec, EngineContext, EngineResult, validate_action_settings
+from admet.core.engine import ActionSpec, EngineContext, EngineResult, RunJob, RunResult, validate_action_settings
 from admet.core.schema import ResultSet, SummaryStat
 from admet.engines.control.camera import CameraController
 from admet.engines.control.fluidics import (
@@ -279,6 +279,44 @@ class FluidicsControlEngine:
         if handler is None:
             raise ValueError(f"unsupported fluidics action: {action}")
         return handler(normalized, context)
+
+    def run(self, job: RunJob) -> RunResult:
+        if job.action == "start_recording":
+            settings = dict(job.settings)
+            if "video" in job.outputs:
+                settings["video_path"] = str(job.outputs["video"])
+            if "fluidics_csv" in job.outputs:
+                settings["fluidics_csv_path"] = str(job.outputs["fluidics_csv"])
+            settings.setdefault("recording_label", job.metadata.get("recording_label", job.id))
+            settings.setdefault("camera_width", 640)
+            settings.setdefault("camera_height", 480)
+            width, height = self._camera.recording_frame_size(settings)
+            settings["camera_width"] = width
+            settings["camera_height"] = height
+            settings.setdefault("camera_video_fps", 24.0)
+            settings.setdefault("camera_preview_off_recording", False)
+            artifacts = self.start_recording(settings, None)
+            return RunResult(
+                job_id=job.id,
+                engine=self.id,
+                action=job.action,
+                metadata=artifacts.get("recording", {}),
+            )
+        if job.action == "stop_recording":
+            artifacts = self.stop_recording()
+            return RunResult(
+                job_id=job.id,
+                engine=self.id,
+                action=job.action,
+                metadata=artifacts.get("recording", {}),
+            )
+        result = self.run_action(job.action, job.settings)
+        return RunResult(
+            job_id=job.id,
+            engine=self.id,
+            action=job.action,
+            metadata=dict(result.result_set.metadata),
+        )
 
     def _status_after(self, action: str, operation: Callable[[], None]) -> EngineResult:
         operation()

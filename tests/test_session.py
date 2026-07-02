@@ -1,8 +1,12 @@
+import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from admet.core.engine import EngineContext
+from admet.core.project import ProjectStore
+from admet.core.run import JsonlRunSink
 from admet.core.session import (
     AdmetSession,
     SessionCache,
@@ -188,6 +192,77 @@ class SessionProjectTests(unittest.TestCase):
 
         self.assertEqual(key_a, key_b)
         self.assertNotEqual(key_a, key_c)
+
+    def test_project_store_registers_control_recordings_under_records(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ProjectStore.create(Path(tmpdir) / "study", "study")
+            target = store.control_recording_target("set01_rep02")
+            target.video_path.parent.mkdir(parents=True)
+            target.fluidics_csv_path.parent.mkdir(parents=True)
+            target.video_path.write_bytes(b"avi")
+            target.fluidics_csv_path.write_text("time,pressure\n0,1\n", encoding="utf-8")
+
+            store.append_control_recording(
+                {
+                    "recording_id": target.recording_id,
+                    "video_path": str(target.video_path),
+                    "fluidics_csv": str(target.fluidics_csv_path),
+                    "width": 640,
+                    "height": 480,
+                    "acquisition_fps": 29.8,
+                    "converted_fps": 30.0,
+                }
+            )
+
+            loaded = load_session(store.path)
+            records = json.loads(
+                (store.path / "records" / "metadata.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(records["recording_count"], 1)
+        self.assertEqual(records["recordings"][0]["video_path"], f"records/camera/{target.recording_id}.avi")
+        self.assertEqual(records["recordings"][0]["fluidics_csv"], f"records/fluidics/{target.recording_id}.csv")
+        self.assertEqual(len(loaded.files), 2)
+        self.assertEqual(loaded.files[0].path, f"records/camera/{target.recording_id}.avi")
+        self.assertEqual(loaded.files[1].path, f"records/fluidics/{target.recording_id}.csv")
+        self.assertEqual(loaded.items[0].id, "acq-records")
+        self.assertEqual(loaded.items[0].metadata["recording_count"], 1)
+
+    def test_project_store_registers_analysis_run_raw_sink(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ProjectStore.create(Path(tmpdir) / "study", "study")
+            store.session = replace(
+                store.session,
+                files=(
+                    SessionFile(
+                        "video-1",
+                        "records/camera/video_01.avi",
+                        "control_video",
+                    ),
+                ),
+            )
+            target = store.analysis_run_target("screen")
+            with JsonlRunSink(target.raw_path) as sink:
+                sink.write({"job_id": "job-1", "engine": "opencv", "values": {"count": 3}})
+            store.finish_analysis_run(
+                target,
+                files=("video-1",),
+                settings={"matrix": [{"file_id": "video-1", "engine": "opencv"}]},
+                metadata={"row_count": 1},
+            )
+
+            loaded = load_session(store.path)
+            analysis = json.loads(
+                (store.path / "analysis" / "metadata.json").read_text(encoding="utf-8")
+            )
+            run_metadata = json.loads(target.run_metadata_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(analysis["run_count"], 1)
+        self.assertEqual(run_metadata["raw_path"], f"analysis/runs/{target.run_id}/raw.jsonl")
+        self.assertEqual(loaded.caches[0].path, f"analysis/runs/{target.run_id}")
+        self.assertEqual(loaded.caches[0].engine, "analyze")
+        self.assertEqual(loaded.items[0].id, target.run_id)
+        self.assertEqual(loaded.items[0].caches, (target.run_id,))
 
     def test_engine_context_can_carry_session(self):
         session = new_session("project-1", "analysis")
