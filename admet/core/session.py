@@ -21,22 +21,12 @@ class SessionFile:
 
 
 @dataclass(frozen=True)
-class SessionCache:
-    id: str
-    path: str
-    engine: str
-    file_id: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class SessionItem:
     id: str
     project_type: str
     engine: str
     settings: dict[str, Any] = field(default_factory=dict)
     files: tuple[str, ...] = ()
-    caches: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -45,7 +35,6 @@ class AdmetSession:
     project_id: str
     project_type: str
     files: tuple[SessionFile, ...] = ()
-    caches: tuple[SessionCache, ...] = ()
     items: tuple[SessionItem, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
@@ -62,10 +51,6 @@ class AdmetSession:
             files=tuple(
                 _session_file_from_dict(item, index)
                 for index, item in enumerate(data.get("files", ()), start=1)
-            ),
-            caches=tuple(
-                _session_cache_from_dict(item, index)
-                for index, item in enumerate(data.get("caches", ()), start=1)
             ),
             items=tuple(
                 _session_item_from_dict(item, index)
@@ -104,7 +89,6 @@ def save_session(path: str | Path, session: AdmetSession) -> Path:
     target = session_path(path)
     target.mkdir(parents=True, exist_ok=True)
     (target / "records").mkdir(exist_ok=True)
-    (target / "cache").mkdir(exist_ok=True)
     session = session.touch()
     session = _relativize_session_paths(session, target)
     validate_session(session)
@@ -171,20 +155,12 @@ def validate_session(session: AdmetSession) -> None:
         raise ValueError("project_type is required")
 
     file_ids = _unique_ids("files", (item.id for item in session.files))
-    cache_ids = _unique_ids("caches", (item.id for item in session.caches))
     _unique_ids("items", (item.id for item in session.items))
-
-    for cache in session.caches:
-        if cache.file_id and cache.file_id not in file_ids:
-            raise ValueError(f"cache {cache.id!r} references unknown file {cache.file_id!r}")
 
     for item in session.items:
         missing_files = set(item.files) - file_ids
         if missing_files:
             raise ValueError(f"item {item.id!r} references unknown files: {sorted(missing_files)!r}")
-        missing_caches = set(item.caches) - cache_ids
-        if missing_caches:
-            raise ValueError(f"item {item.id!r} references unknown caches: {sorted(missing_caches)!r}")
 
 
 def _manifest_path(path: str | Path) -> Path:
@@ -201,16 +177,6 @@ def _session_file_from_dict(data: dict[str, Any], index: int) -> SessionFile:
     )
 
 
-def _session_cache_from_dict(data: dict[str, Any], index: int) -> SessionCache:
-    return SessionCache(
-        id=str(data.get("id") or f"cache-{index}"),
-        path=str(data.get("path") or ""),
-        engine=str(data.get("engine") or ""),
-        file_id=str(data.get("file_id") or ""),
-        metadata=dict(data.get("metadata", {})),
-    )
-
-
 def _session_item_from_dict(data: dict[str, Any], index: int) -> SessionItem:
     return SessionItem(
         id=str(data.get("id") or f"item-{index}"),
@@ -218,7 +184,6 @@ def _session_item_from_dict(data: dict[str, Any], index: int) -> SessionItem:
         engine=str(data.get("engine") or ""),
         settings=dict(data.get("settings", {})),
         files=tuple(data.get("files", ())),
-        caches=tuple(data.get("caches", ())),
         metadata=dict(data.get("metadata", {})),
     )
 
@@ -230,10 +195,6 @@ def _relativize_session_paths(session: AdmetSession, root: Path) -> AdmetSession
         files=tuple(
             replace(file, path=_relativize_path(file.path, root, metadata=file.metadata))
             for file in session.files
-        ),
-        caches=tuple(
-            replace(cache, path=_relativize_path(cache.path, root, metadata=cache.metadata))
-            for cache in session.caches
         ),
     )
 

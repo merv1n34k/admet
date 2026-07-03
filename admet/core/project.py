@@ -8,7 +8,6 @@ from typing import Any
 
 from .session import (
     AdmetSession,
-    SessionCache,
     SessionFile,
     SessionItem,
     load_session,
@@ -128,28 +127,21 @@ class ProjectStore:
             }
         )
         _write_metadata(analysis_metadata_path, analysis_metadata)
-        cache = SessionCache(
-            id=target.run_id,
-            path=self._stored_path(target.run_dir),
-            engine="analyze",
-            metadata={
-                "run_id": target.run_id,
-                "raw_path": self._stored_path(target.raw_path),
-                **metadata,
-            },
-        )
-        caches = _upsert_cache(list(self.session.caches), cache)
         item = SessionItem(
             id=target.run_id,
             project_type="analysis_run",
             engine="analyze",
             settings=settings,
             files=files,
-            caches=(cache.id,),
-            metadata={"run_id": target.run_id, **metadata},
+            metadata={
+                "run_id": target.run_id,
+                "run_path": self._stored_path(target.run_dir),
+                "raw_path": self._stored_path(target.raw_path),
+                **metadata,
+            },
         )
         items = _upsert_item(list(self.session.items), item)
-        self.session = replace(self.session, caches=tuple(caches), items=tuple(items))
+        self.session = replace(self.session, items=tuple(items))
         self.save()
 
     def _normalize_control_recording(self, recording: dict[str, Any]) -> dict[str, Any]:
@@ -286,15 +278,6 @@ def _upsert_file(files: list[SessionFile], stored: SessionFile) -> list[SessionF
             return files
     files.append(stored)
     return files
-
-
-def _upsert_cache(caches: list[SessionCache], stored: SessionCache) -> list[SessionCache]:
-    for index, existing in enumerate(caches):
-        if existing.id == stored.id:
-            caches[index] = stored
-            return caches
-    caches.append(stored)
-    return caches
 
 
 def _upsert_item(items: list[SessionItem], stored: SessionItem) -> list[SessionItem]:

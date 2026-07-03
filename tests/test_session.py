@@ -8,7 +8,6 @@ from admet.core.project import ProjectStore
 from admet.core.run import JsonlRunSink
 from admet.core.session import (
     AdmetSession,
-    SessionCache,
     SessionFile,
     SessionItem,
     content_cache_key,
@@ -39,14 +38,6 @@ class SessionProjectTests(unittest.TestCase):
                     media_type="video/avi",
                 ),
             ),
-            caches=(
-                SessionCache(
-                    id="opencv-cache",
-                    path="cache/opencv",
-                    engine="opencv",
-                    file_id="video-1",
-                ),
-            ),
             items=(
                 SessionItem(
                     id="sample-1",
@@ -54,7 +45,6 @@ class SessionProjectTests(unittest.TestCase):
                     engine="opencv",
                     settings={"video_path": "data/video.avi"},
                     files=("video-1",),
-                    caches=("opencv-cache",),
                 ),
             ),
             metadata={"operator": "admet"},
@@ -66,12 +56,11 @@ class SessionProjectTests(unittest.TestCase):
             self.assertTrue(project_path.is_dir())
             self.assertTrue((project_path / "manifest.json").is_file())
             self.assertTrue((project_path / "records").is_dir())
-            self.assertTrue((project_path / "cache").is_dir())
+            self.assertFalse((project_path / "cache").exists())
 
         self.assertEqual(project_path.name, "project.admetp")
         self.assertEqual(loaded.project_id, "project-1")
         self.assertEqual(loaded.files[0].path, "data/video.avi")
-        self.assertEqual(loaded.caches[0].file_id, "video-1")
         self.assertEqual(loaded.items[0].settings["video_path"], "data/video.avi")
         self.assertTrue(loaded.created_at)
         self.assertTrue(loaded.updated_at)
@@ -88,9 +77,9 @@ class SessionProjectTests(unittest.TestCase):
             validate_session(broken)
 
     def test_resolve_session_path_uses_project_directory(self):
-        resolved = resolve_session_path("/tmp/project.admetp", "cache/opencv")
+        resolved = resolve_session_path("/tmp/project.admetp", "analysis/runs/run-1/raw.jsonl")
 
-        self.assertEqual(resolved, Path("/tmp/project.admetp/cache/opencv"))
+        self.assertEqual(resolved, Path("/tmp/project.admetp/analysis/runs/run-1/raw.jsonl"))
 
     def test_resolve_session_path_can_use_media_root(self):
         resolved = resolve_session_path(
@@ -105,19 +94,16 @@ class SessionProjectTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             project_root = Path(tmpdir) / "study.admetp"
             media_path = project_root / "records" / "video.avi"
-            cache_path = project_root / "cache" / "opencv"
             session = AdmetSession(
                 project_id="study",
                 project_type="combined",
                 files=(SessionFile("video-1", str(media_path), "input"),),
-                caches=(SessionCache("cache-1", str(cache_path), "opencv", "video-1"),),
             )
 
             project_path = save_session(project_root, session)
             loaded = load_session(project_path / "manifest.json")
 
         self.assertEqual(loaded.files[0].path, "records/video.avi")
-        self.assertEqual(loaded.caches[0].path, "cache/opencv")
 
     def test_absolute_external_path_requires_metadata(self):
         session = AdmetSession(
@@ -258,10 +244,10 @@ class SessionProjectTests(unittest.TestCase):
 
         self.assertEqual(analysis["run_count"], 1)
         self.assertEqual(run_metadata["raw_path"], f"analysis/runs/{target.run_id}/raw.jsonl")
-        self.assertEqual(loaded.caches[0].path, f"analysis/runs/{target.run_id}")
-        self.assertEqual(loaded.caches[0].engine, "analyze")
         self.assertEqual(loaded.items[0].id, target.run_id)
-        self.assertEqual(loaded.items[0].caches, (target.run_id,))
+        self.assertEqual(loaded.items[0].files, ("video-1",))
+        self.assertEqual(loaded.items[0].metadata["run_path"], f"analysis/runs/{target.run_id}")
+        self.assertEqual(loaded.items[0].metadata["raw_path"], f"analysis/runs/{target.run_id}/raw.jsonl")
 
 if __name__ == "__main__":
     unittest.main()

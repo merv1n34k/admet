@@ -77,6 +77,11 @@ class CellposeHelperTests(unittest.TestCase):
             changed["min_inclusion_area"] = 9
             self.assertNotEqual(cache.get_config_hash(), Cache(changed).get_config_hash())
 
+    def test_cache_default_dir_is_external_to_project(self):
+        cache = Cache({"cache": {"enabled": True}})
+
+        self.assertEqual(cache.cache_dir, Path.home() / ".admet-cache" / "cellpose")
+
     def test_field_cells_supports_serpentine_vertical_layout(self):
         cells = field_cells(6, cols=2, rows=3, pattern="SerpentineVertical")
 

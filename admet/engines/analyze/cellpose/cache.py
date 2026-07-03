@@ -16,7 +16,11 @@ class Cache:
         self.enabled = cache_cfg.get("enabled", True)
         self.max_frames = cache_cfg.get("max_frames", 100)
         configured_dir = cache_dir or cache_cfg.get("dir")
-        self.cache_dir = Path(configured_dir) if configured_dir else Path.cwd() / ".admet-cache"
+        self.cache_dir = (
+            Path(configured_dir)
+            if configured_dir
+            else Path.home() / ".admet-cache" / "cellpose"
+        )
         self.metadata_path = self.cache_dir / "metadata.json"
         self.metadata = self._load_metadata()
         self.config = config
