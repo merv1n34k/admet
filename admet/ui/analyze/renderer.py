@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import csv
 import json
+import math
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
+from statistics import mean, pstdev
 from typing import Any
 
 from admet.analyze import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
@@ -31,6 +34,36 @@ class MatrixRow:
     sample_id: str
     cache_policy: str = "use"
     active: bool = True
+
+
+@dataclass(frozen=True)
+class StoredRun:
+    project_path: Path
+    run_id: str
+    raw_path: Path
+    jobs: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class RawSummary:
+    project: str
+    run_id: str
+    sample_id: str
+    engine: str
+    rows: int
+    frames: int
+    droplets: int
+    mean_diameter: float
+    cv_percent: float
+    inclusions: int
+
+
+@dataclass(frozen=True)
+class FluidicsRun:
+    project: str
+    recording_id: str
+    rows: tuple[dict[str, float], ...]
+    metadata: dict[str, Any]
 
 
 def render_workflow(
@@ -325,10 +358,13 @@ class AnalyzeWorkflowView:
             ui.label("Main Window").classes("control-box-title")
             if self._stage_id() == "import":
                 self._render_matrix()
+                self._render_import_inventory()
             elif self._stage_id() == "video":
-                self._render_engine_matrix("opencv")
+                self._render_video_stage()
             elif self._stage_id() == "imaging":
-                self._render_engine_matrix("cellpose")
+                self._render_imaging_stage()
+            elif self._stage_id() == "view":
+                self._render_view_results()
             else:
                 self._render_analysis_runs()
 
@@ -337,14 +373,116 @@ class AnalyzeWorkflowView:
 
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("Batch matrix").classes("section-title")
-            table = ui.table(
-                columns=_matrix_columns(),
-                rows=[self._matrix_row(row) for row in self.matrix],
-                row_key="uid",
-            ).classes("slim-table w-full").props("dense flat hide-bottom")
-            table.on("rowClick", self._select_row_event)
+            self._render_matrix_table(self.matrix)
             if not self.matrix:
                 ui.label("No targets. Add a source path in the Action Panel.").classes("muted text-xs")
+
+    def _render_matrix_table(self, rows: list[MatrixRow]) -> None:
+        from nicegui import ui
+
+        table = ui.table(
+            columns=_matrix_columns(),
+            rows=[self._matrix_row(row) for row in rows],
+            row_key="uid",
+        ).classes("slim-table target-table w-full").props("dense flat hide-bottom")
+        self._wire_matrix_table(table)
+        table.on("rowClick", self._select_row_event)
+
+    def _wire_matrix_table(self, table: Any) -> None:
+        table.add_slot(
+            "body-cell-project",
+            """
+            <q-td :props="props">
+              <q-input dense outlined v-model="props.row.project_path"
+                @blur="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'project_path', value: props.row.project_path})"
+                @keyup.enter="$event.target.blur()" />
+            </q-td>
+            """,
+        )
+        table.add_slot(
+            "body-cell-source",
+            """
+            <q-td :props="props">
+              <q-input dense outlined v-model="props.row.source_path"
+                @blur="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'source_path', value: props.row.source_path})"
+                @keyup.enter="$event.target.blur()" />
+            </q-td>
+            """,
+        )
+        table.add_slot(
+            "body-cell-engine",
+            """
+            <q-td :props="props">
+              <q-select dense outlined emit-value map-options :options="[
+                {label: 'OpenCV', value: 'opencv'},
+                {label: 'Cellpose', value: 'cellpose'}
+              ]" v-model="props.row.engine"
+                @update:model-value="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'engine', value: props.row.engine})" />
+            </q-td>
+            """,
+        )
+        table.add_slot(
+            "body-cell-sample_id",
+            """
+            <q-td :props="props">
+              <q-input dense outlined v-model="props.row.sample_id"
+                @blur="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'sample_id', value: props.row.sample_id})"
+                @keyup.enter="$event.target.blur()" />
+            </q-td>
+            """,
+        )
+        table.add_slot(
+            "body-cell-cache",
+            """
+            <q-td :props="props">
+              <q-select dense outlined emit-value map-options :options="[
+                {label: 'Use', value: 'use'},
+                {label: 'Discard', value: 'discard'},
+                {label: 'Skip', value: 'skip'}
+              ]" v-model="props.row.cache"
+                @update:model-value="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'cache_policy', value: props.row.cache})" />
+            </q-td>
+            """,
+        )
+        table.add_slot(
+            "body-cell-active",
+            """
+            <q-td :props="props">
+              <q-checkbox dense :model-value="props.row.active"
+                @update:model-value="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'active', value: $event})" />
+            </q-td>
+            """,
+        )
+        table.on("matrix-change", self._handle_matrix_change)
+
+    def _render_import_inventory(self) -> None:
+        from nicegui import ui
+
+        with ui.column().classes("panel w-full gap-2 p-3"):
+            ui.label("Project inventory").classes("section-title")
+            with ui.element("div").classes("comparison-grid w-full"):
+                with ui.column().classes("plot-card"):
+                    ui.label("Analysis files").classes("text-sm font-semibold px-2 pt-1")
+                    ui.table(
+                        columns=[
+                            {"name": "project", "label": "Project", "field": "project", "align": "left"},
+                            {"name": "role", "label": "Role", "field": "role", "align": "left"},
+                            {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
+                            {"name": "path", "label": "Path", "field": "path", "align": "left"},
+                        ],
+                        rows=self._project_file_rows(),
+                    ).classes("w-full").props("dense flat hide-bottom")
+                with ui.column().classes("plot-card"):
+                    ui.label("Recording inventory").classes("text-sm font-semibold px-2 pt-1")
+                    ui.table(
+                        columns=[
+                            {"name": "project", "label": "Project", "field": "project", "align": "left"},
+                            {"name": "recordings", "label": "Recordings", "field": "recordings", "align": "right"},
+                            {"name": "csv_rows", "label": "CSV rows", "field": "csv_rows", "align": "right"},
+                            {"name": "duration_s", "label": "Duration (s)", "field": "duration_s", "align": "right"},
+                        ],
+                        rows=self._recording_inventory_rows(),
+                    ).classes("w-full").props("dense flat hide-bottom")
 
     def _render_engine_matrix(self, engine: str) -> None:
         from nicegui import ui
@@ -356,7 +494,8 @@ class AnalyzeWorkflowView:
                 columns=_matrix_columns(),
                 rows=[self._matrix_row(row) for row in rows],
                 row_key="uid",
-            ).classes("slim-table w-full").props("dense flat hide-bottom")
+            ).classes("slim-table target-table w-full").props("dense flat hide-bottom")
+            self._wire_matrix_table(table)
             table.on("rowClick", self._select_row_event)
             if not rows:
                 ui.label(f"No active {engine} targets.").classes("muted text-xs")
@@ -369,6 +508,127 @@ class AnalyzeWorkflowView:
                     {"name": "output", "label": "Output", "field": "output", "align": "left"},
                 ],
                 rows=_run_plan_rows(engine),
+            ).classes("w-full").props("dense flat hide-bottom")
+
+    def _render_video_stage(self) -> None:
+        self._render_engine_matrix("opencv")
+        self._render_opencv_editor()
+        self._render_engine_plots("opencv")
+
+    def _render_imaging_stage(self) -> None:
+        self._render_engine_matrix("cellpose")
+        self._render_cellpose_editor()
+        self._render_engine_plots("cellpose")
+
+    def _render_view_results(self) -> None:
+        from nicegui import ui
+
+        summaries = self._raw_summaries()
+        with ui.column().classes("panel w-full gap-2 p-3"):
+            ui.label("1. Analysis targets").classes("section-title")
+            self._render_matrix_table(self.matrix)
+        with ui.column().classes("panel w-full gap-2 p-3"):
+            ui.label("2. Summary plots").classes("section-title")
+            with ui.element("div").classes("comparison-grid w-full"):
+                _plot_card(_diameter_chart(summaries))
+                _plot_card(_cv_chart(summaries))
+        with ui.column().classes("panel w-full gap-2 p-3"):
+            ui.label("3. Fluidics summary").classes("section-title")
+            fluidics = self._fluidics_runs()
+            with ui.element("div").classes("comparison-grid w-full"):
+                _plot_card(_fluidics_chart(fluidics, "pressure"))
+                _plot_card(_fluidics_chart(fluidics, "flow"))
+            ui.table(
+                columns=[
+                    {"name": "project", "label": "Project", "field": "project", "align": "left"},
+                    {"name": "recording", "label": "Recording", "field": "recording", "align": "left"},
+                    {"name": "rows", "label": "Rows", "field": "rows", "align": "right"},
+                    {"name": "duration_s", "label": "Duration (s)", "field": "duration_s", "align": "right"},
+                    {"name": "mean_pressure", "label": "Mean pressure", "field": "mean_pressure", "align": "right"},
+                    {"name": "mean_flow", "label": "Mean flow", "field": "mean_flow", "align": "right"},
+                ],
+                rows=_fluidics_rows(fluidics),
+            ).classes("w-full").props("dense flat hide-bottom")
+
+    def _render_opencv_editor(self) -> None:
+        from nicegui import ui
+
+        target = self._selected_row_for_engine("opencv")
+        with ui.column().classes("panel w-full gap-2 p-3"):
+            ui.label("Video preview / crop and frame limits").classes("section-title")
+            if target is None:
+                ui.label("Select an OpenCV target.").classes("muted text-xs")
+                return
+            with ui.element("div").classes("mock-editor-grid w-full"):
+                with ui.column().classes("gap-2"):
+                    ui.html(_mock_video_preview_html(target)).classes("w-full")
+                with ui.column().classes("gap-2"):
+                    ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
+                    ui.table(
+                        columns=[
+                            {"name": "setting", "label": "Setting", "field": "setting", "align": "left"},
+                            {"name": "value", "label": "Value", "field": "value", "align": "left"},
+                        ],
+                        rows=[
+                            {"setting": "Source", "value": target.source_path},
+                            {"setting": "Microns / px", "value": self.settings["opencv_microns_per_pixel"]},
+                            {"setting": "FPS", "value": self.settings["opencv_fps"]},
+                            {"setting": "Max frames", "value": self.settings["opencv_max_frames"] or "all"},
+                            {"setting": "Cache policy", "value": target.cache_policy},
+                        ],
+                    ).classes("w-full").props("dense flat hide-bottom")
+
+    def _render_cellpose_editor(self) -> None:
+        from nicegui import ui
+
+        target = self._selected_row_for_engine("cellpose")
+        with ui.column().classes("panel w-full gap-2 p-3"):
+            ui.label("Post-run correction editor").classes("section-title")
+            if target is None:
+                ui.label("Select a Cellpose target.").classes("muted text-xs")
+                return
+            with ui.element("div").classes("mock-editor-grid w-full"):
+                with ui.column().classes("gap-2"):
+                    ui.html(_mock_cellpose_preview_html(target)).classes("w-full")
+                with ui.column().classes("gap-2"):
+                    ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
+                    ui.table(
+                        columns=[
+                            {"name": "setting", "label": "Setting", "field": "setting", "align": "left"},
+                            {"name": "value", "label": "Value", "field": "value", "align": "left"},
+                        ],
+                        rows=[
+                            {"setting": "Image directory", "value": target.source_path},
+                            {"setting": "px to um", "value": self.settings["cellpose_px_to_um"]},
+                            {"setting": "Frame limit", "value": self.settings["cellpose_frame_limit"] or "all"},
+                            {"setting": "Detect inclusions", "value": "yes" if self.settings["cellpose_detect_inclusions"] else "no"},
+                            {"setting": "Cache policy", "value": target.cache_policy},
+                        ],
+                    ).classes("w-full").props("dense flat hide-bottom")
+                    ui.label("Correction edits will apply to raw droplet rows in View Results.").classes(
+                        "mock-editor-note"
+                    )
+
+    def _render_engine_plots(self, engine: str) -> None:
+        from nicegui import ui
+
+        summaries = [summary for summary in self._raw_summaries() if summary.engine == engine]
+        with ui.column().classes("panel w-full gap-2 p-3"):
+            ui.label("Analysis plots").classes("section-title")
+            with ui.element("div").classes("plot-grid w-full"):
+                _plot_card(_diameter_chart(summaries))
+                _plot_card(_count_chart(summaries))
+                _plot_card(_cv_chart(summaries))
+            ui.table(
+                columns=[
+                    {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
+                    {"name": "rows", "label": "Rows", "field": "rows", "align": "right"},
+                    {"name": "frames", "label": "Frames", "field": "frames", "align": "right"},
+                    {"name": "droplets", "label": "Droplets", "field": "droplets", "align": "right"},
+                    {"name": "mean_diameter", "label": "Mean diameter", "field": "mean_diameter", "align": "right"},
+                    {"name": "cv_percent", "label": "CV %", "field": "cv_percent", "align": "right"},
+                ],
+                rows=_summary_table_rows(summaries),
             ).classes("w-full").props("dense flat hide-bottom")
 
     def _render_analysis_runs(self) -> None:
@@ -417,6 +677,71 @@ class AnalyzeWorkflowView:
         with ui.column().classes("control-box w-full"):
             ui.label("Action Log").classes("control-box-title")
             ui.html("<br>".join(self.action_log[-80:])).classes("log-text w-full")
+
+    def _project_file_rows(self) -> list[dict[str, str]]:
+        rows = []
+        for project_path in self._project_paths():
+            manifest = project_path / "manifest.json"
+            if not manifest.is_file():
+                continue
+            try:
+                store = ProjectStore(project_path)
+            except Exception:
+                continue
+            for file in store.session.files:
+                if file.role not in {"control_video", "analysis_video", "analysis_image_dir"}:
+                    continue
+                rows.append(
+                    {
+                        "project": project_path.name,
+                        "role": file.role,
+                        "engine": str(file.metadata.get("engine") or ""),
+                        "path": file.path,
+                    }
+                )
+        return rows
+
+    def _recording_inventory_rows(self) -> list[dict[str, Any]]:
+        grouped: dict[str, dict[str, Any]] = {}
+        for run in self._fluidics_runs():
+            row = grouped.setdefault(
+                run.project,
+                {"project": run.project, "recordings": 0, "csv_rows": 0, "duration_s": 0.0},
+            )
+            row["recordings"] += 1
+            row["csv_rows"] += len(run.rows)
+            row["duration_s"] += _fluidics_duration(run)
+        return [
+            {
+                **row,
+                "duration_s": f"{float(row['duration_s']):.1f}",
+            }
+            for row in grouped.values()
+        ]
+
+    def _stored_runs(self) -> list[StoredRun]:
+        return _load_stored_runs(self._project_paths())
+
+    def _raw_summaries(self) -> list[RawSummary]:
+        summaries = []
+        for run in self._stored_runs():
+            rows = read_raw_rows(run.project_path, run.raw_path)
+            summaries.extend(summarize_raw_rows(run, rows))
+        return summaries
+
+    def _fluidics_runs(self) -> list[FluidicsRun]:
+        return _load_fluidics_runs(self._project_paths())
+
+    def _project_paths(self) -> list[Path]:
+        paths = {session_path(self.project_path)}
+        paths.update(session_path(row.project_path) for row in self.matrix)
+        return sorted(paths)
+
+    def _selected_row_for_engine(self, engine: str) -> MatrixRow | None:
+        selected = self._selected_row()
+        if selected is not None and selected.engine == engine:
+            return selected
+        return next((row for row in self.matrix if row.active and row.engine == engine), None)
 
     def _action_specs(self, stage_id: str) -> list[dict[str, Any]]:
         if stage_id == "import":
@@ -634,11 +959,13 @@ class AnalyzeWorkflowView:
         return {
             "uid": row.uid,
             "project": Path(row.project_path).name,
+            "project_path": row.project_path,
             "source": Path(row.source_path).name or row.source_path,
+            "source_path": row.source_path,
             "engine": row.engine,
             "sample_id": row.sample_id,
             "cache": row.cache_policy,
-            "active": "yes" if row.active else "no",
+            "active": row.active,
         }
 
     def _targets(self, engine: str | None = None) -> list[MatrixRow]:
@@ -669,6 +996,30 @@ class AnalyzeWorkflowView:
                 self.source_path = selected.source_path
                 self.project_path = selected.project_path
             self._refresh()
+
+    def _handle_matrix_change(self, event: Any) -> None:
+        payload = getattr(event, "args", {})
+        if not isinstance(payload, dict):
+            return
+        uid = str(payload.get("uid") or "")
+        field = str(payload.get("field") or "")
+        value = payload.get("value")
+        row = next((item for item in self.matrix if item.uid == uid), None)
+        if row is None or field not in {"project_path", "source_path", "engine", "sample_id", "cache_policy", "active"}:
+            return
+        if field == "project_path":
+            value = str(session_path(str(value or self.project_path)))
+        elif field == "engine":
+            value = str(value or "opencv")
+        elif field == "cache_policy":
+            value = str(value or "use")
+        elif field == "active":
+            value = bool(value)
+        else:
+            value = str(value or "")
+        setattr(row, field, value)
+        self.selected_uid = uid
+        self._refresh()
 
     def _set_selected_field(self, field: str, value: Any) -> None:
         row = self._selected_row()
@@ -767,6 +1118,335 @@ def _run_plan_rows(engine: str) -> list[dict[str, str]]:
     ]
 
 
+def _load_stored_runs(project_paths: list[Path]) -> list[StoredRun]:
+    runs = []
+    for project_path in project_paths:
+        metadata_path = project_path / "analysis" / "metadata.json"
+        if not metadata_path.is_file():
+            continue
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for run in metadata.get("runs", []):
+            if not isinstance(run, dict):
+                continue
+            raw_path = _resolve_project_path(project_path, str(run.get("raw_path") or ""))
+            run_metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+            jobs = tuple(job for job in run_metadata.get("jobs", ()) if isinstance(job, dict))
+            runs.append(
+                StoredRun(
+                    project_path=project_path,
+                    run_id=str(run.get("run_id") or raw_path.parent.name),
+                    raw_path=raw_path,
+                    jobs=jobs,
+                )
+            )
+    return runs
+
+
+def read_raw_rows(project_path: Path, raw_path: Path, *, limit: int = 50_000) -> list[dict[str, Any]]:
+    path = raw_path if raw_path.is_absolute() else project_path / raw_path
+    if not path.is_file():
+        return []
+    rows = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if len(rows) >= limit:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                rows.append(value)
+    return rows
+
+
+def summarize_raw_rows(run: StoredRun, rows: list[dict[str, Any]]) -> list[RawSummary]:
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        engine = str(row.get("engine") or "")
+        sample_id = str(row.get("item_id") or row.get("sample_id") or row.get("file_id") or "sample")
+        groups.setdefault((engine, sample_id), []).append(row)
+
+    summaries = []
+    for (engine, sample_id), group_rows in sorted(groups.items()):
+        frames = {
+            int(float(values.get("frame")))
+            for values in (_row_values(row) for row in group_rows)
+            if _is_number(values.get("frame"))
+        }
+        diameters = [
+            _numeric(values.get("diameter_um") or values.get("diameter"))
+            for values in (_row_values(row) for row in group_rows)
+        ]
+        diameters = [value for value in diameters if value is not None and math.isfinite(value)]
+        droplets = sum(1 for row in group_rows if row.get("kind") in {"detection", "droplet", "track"})
+        inclusions = sum(
+            int(_numeric(_row_values(row).get("inclusions")) or 0)
+            for row in group_rows
+            if row.get("kind") == "droplet"
+        )
+        avg = mean(diameters) if diameters else 0.0
+        cv = (pstdev(diameters) / avg * 100.0) if len(diameters) > 1 and avg else 0.0
+        summaries.append(
+            RawSummary(
+                project=run.project_path.name,
+                run_id=run.run_id,
+                sample_id=sample_id,
+                engine=engine,
+                rows=len(group_rows),
+                frames=len(frames),
+                droplets=droplets,
+                mean_diameter=avg,
+                cv_percent=cv,
+                inclusions=inclusions,
+            )
+        )
+    for job in run.jobs:
+        if any(summary.sample_id == str(job.get("sample_id")) and summary.engine == str(job.get("engine")) for summary in summaries):
+            continue
+        metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+        summaries.append(
+            RawSummary(
+                project=run.project_path.name,
+                run_id=run.run_id,
+                sample_id=str(job.get("sample_id") or "sample"),
+                engine=str(job.get("engine") or ""),
+                rows=int(_numeric(metadata.get("row_count")) or 0),
+                frames=int(_numeric(metadata.get("frames_processed")) or 0),
+                droplets=int(_numeric(metadata.get("total_droplets") or metadata.get("total_detections")) or 0),
+                mean_diameter=float(_numeric(metadata.get("mean_diameter_um")) or 0.0),
+                cv_percent=0.0,
+                inclusions=0,
+            )
+        )
+    return summaries
+
+
+def _load_fluidics_runs(project_paths: list[Path]) -> list[FluidicsRun]:
+    runs = []
+    for project_path in project_paths:
+        metadata_path = project_path / "records" / "metadata.json"
+        if not metadata_path.is_file():
+            continue
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for recording in metadata.get("recordings", []):
+            if not isinstance(recording, dict):
+                continue
+            csv_path = _resolve_project_path(project_path, str(recording.get("fluidics_csv") or ""))
+            rows = tuple(_read_fluidics_csv(csv_path))
+            runs.append(
+                FluidicsRun(
+                    project=project_path.name,
+                    recording_id=str(recording.get("recording_id") or recording.get("video_prefix") or csv_path.stem),
+                    rows=rows,
+                    metadata=recording,
+                )
+            )
+    return runs
+
+
+def _read_fluidics_csv(csv_path: Path, *, limit: int = 25_000) -> list[dict[str, float]]:
+    if not csv_path.is_file():
+        return []
+    rows = []
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if len(rows) >= limit:
+                break
+            rows.append(
+                {
+                    "elapsed_s": float_or_zero(row.get("elapsed_s")),
+                    "pressure": _mean_columns(row, "pressure_"),
+                    "flow": _mean_columns(row, "flow_"),
+                }
+            )
+    return rows
+
+
+def _summary_table_rows(summaries: list[RawSummary]) -> list[dict[str, Any]]:
+    return [
+        {
+            "sample": summary.sample_id,
+            "rows": summary.rows,
+            "frames": summary.frames,
+            "droplets": summary.droplets,
+            "mean_diameter": f"{summary.mean_diameter:.2f}" if summary.mean_diameter else "",
+            "cv_percent": f"{summary.cv_percent:.2f}" if summary.cv_percent else "",
+        }
+        for summary in summaries
+    ]
+
+
+def _fluidics_rows(runs: list[FluidicsRun]) -> list[dict[str, Any]]:
+    rows = []
+    for run in runs:
+        pressures = [row["pressure"] for row in run.rows if math.isfinite(row["pressure"])]
+        flows = [row["flow"] for row in run.rows if math.isfinite(row["flow"])]
+        rows.append(
+            {
+                "project": run.project,
+                "recording": run.recording_id,
+                "rows": len(run.rows),
+                "duration_s": f"{_fluidics_duration(run):.1f}",
+                "mean_pressure": f"{mean(pressures):.2f}" if pressures else "",
+                "mean_flow": f"{mean(flows):.2f}" if flows else "",
+            }
+        )
+    return rows
+
+
+def _diameter_chart(summaries: list[RawSummary]) -> dict[str, Any]:
+    return _bar_chart(
+        "Mean diameter",
+        [summary.sample_id for summary in summaries],
+        [round(summary.mean_diameter, 3) for summary in summaries],
+        "#225d82",
+    )
+
+
+def _count_chart(summaries: list[RawSummary]) -> dict[str, Any]:
+    return _bar_chart(
+        "Droplet rows",
+        [summary.sample_id for summary in summaries],
+        [summary.droplets for summary in summaries],
+        "#185e49",
+    )
+
+
+def _cv_chart(summaries: list[RawSummary]) -> dict[str, Any]:
+    return _bar_chart(
+        "CV %",
+        [summary.sample_id for summary in summaries],
+        [round(summary.cv_percent, 3) for summary in summaries],
+        "#742323",
+    )
+
+
+def _fluidics_chart(runs: list[FluidicsRun], field: str) -> dict[str, Any]:
+    series = []
+    for run in runs[:8]:
+        points = [
+            [round(row["elapsed_s"], 3), round(row[field], 3)]
+            for row in run.rows
+            if math.isfinite(row["elapsed_s"]) and math.isfinite(row[field])
+        ]
+        if len(points) > 600:
+            step = max(1, len(points) // 600)
+            points = points[::step]
+        series.append({"name": run.recording_id, "type": "line", "showSymbol": False, "data": points})
+    return {
+        "title": {"text": field.title(), "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
+        "tooltip": {"trigger": "axis"},
+        "grid": {"left": 44, "right": 12, "top": 36, "bottom": 34},
+        "xAxis": {"type": "value", "name": "s"},
+        "yAxis": {"type": "value"},
+        "series": series,
+    }
+
+
+def _bar_chart(title: str, labels: list[str], values: list[float | int], color: str) -> dict[str, Any]:
+    return {
+        "title": {"text": title, "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
+        "tooltip": {},
+        "grid": {"left": 48, "right": 12, "top": 36, "bottom": 54},
+        "xAxis": {"type": "category", "data": labels, "axisLabel": {"rotate": 25}},
+        "yAxis": {"type": "value"},
+        "series": [{"type": "bar", "data": values, "itemStyle": {"color": color}}],
+    }
+
+
+def _plot_card(options: dict[str, Any]) -> None:
+    from nicegui import ui
+
+    with ui.column().classes("plot-card"):
+        ui.echart(options).classes("w-full h-64")
+
+
+def _mock_video_preview_html(target: MatrixRow) -> str:
+    label = target.sample_id or Path(target.source_path).stem
+    return f"""
+    <div class="mock-viewer">
+      <div class="mock-roi" style="left:12%; top:20%; width:66%; height:48%;"></div>
+      <div class="mock-playhead">{_escape(label)} · OpenCV target</div>
+    </div>
+    """
+
+
+def _mock_cellpose_preview_html(target: MatrixRow) -> str:
+    label = target.sample_id or Path(target.source_path).stem
+    return f"""
+    <div class="mock-viewer mock-viewer-cellpose">
+      <div class="mock-droplet" style="left:22%; top:28%;"></div>
+      <div class="mock-droplet" style="left:52%; top:44%; width:92px; height:92px;"></div>
+      <div class="mock-droplet mock-droplet-disabled" style="left:70%; top:20%; width:64px; height:64px;"></div>
+      <div class="mock-inclusion" style="left:59%; top:54%;"></div>
+      <div class="mock-inclusion" style="left:77%; top:29%;"></div>
+      <div class="mock-playhead">{_escape(label)} · Cellpose correction</div>
+    </div>
+    """
+
+
+def _resolve_project_path(project_path: Path, stored_path: str) -> Path:
+    path = Path(stored_path)
+    return path if path.is_absolute() else project_path / path
+
+
+def _row_values(row: dict[str, Any]) -> dict[str, Any]:
+    values = row.get("values")
+    return values if isinstance(values, dict) else {}
+
+
+def _numeric(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_number(value: Any) -> bool:
+    number = _numeric(value)
+    return number is not None and math.isfinite(number)
+
+
+def float_or_zero(value: Any) -> float:
+    number = _numeric(value)
+    return number if number is not None and math.isfinite(number) else 0.0
+
+
+def _mean_columns(row: dict[str, Any], prefix: str) -> float:
+    values = [
+        float_or_zero(value)
+        for key, value in row.items()
+        if key.startswith(prefix) and value not in {None, ""}
+    ]
+    return mean(values) if values else 0.0
+
+
+def _fluidics_duration(run: FluidicsRun) -> float:
+    if run.rows:
+        return max(row["elapsed_s"] for row in run.rows)
+    return float_or_zero(run.metadata.get("duration_s"))
+
+
+def _escape(value: str) -> str:
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
 def _event_row(event: Any) -> dict[str, Any]:
     args = getattr(event, "args", {})
     if isinstance(args, list) and len(args) >= 2 and isinstance(args[1], dict):
@@ -844,6 +1524,106 @@ def _style() -> str:
     .toc-dot-done { background: #185e49; border-color: #185e49; }
     .toc-dot-skipped { background: #9aa7b2; border-color: #9aa7b2; }
     .project-input { min-width: 360px; }
+    .plot-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    @media (max-width: 1100px) {
+      .plot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 760px) {
+      .plot-grid, .comparison-grid { grid-template-columns: 1fr; }
+    }
+    .plot-card {
+      border: 1px solid #d7e2ea;
+      border-radius: 8px;
+      background: #ffffff;
+      min-height: 260px;
+      padding: 4px;
+    }
+    .mock-editor-grid {
+      display: grid;
+      grid-template-columns: minmax(360px, 1.2fr) minmax(280px, 0.8fr);
+      gap: 10px;
+    }
+    @media (max-width: 980px) {
+      .mock-editor-grid { grid-template-columns: 1fr; }
+    }
+    .mock-viewer {
+      position: relative;
+      min-height: 300px;
+      border: 1px solid #d7e2ea;
+      border-radius: 8px;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(34, 93, 130, 0.14) 0 1px, transparent 1px 64px),
+        linear-gradient(0deg, rgba(34, 93, 130, 0.10) 0 1px, transparent 1px 48px),
+        radial-gradient(circle at 18% 55%, rgba(22, 33, 43, 0.28) 0 22px, transparent 24px),
+        radial-gradient(circle at 42% 48%, rgba(22, 33, 43, 0.24) 0 18px, transparent 20px),
+        radial-gradient(circle at 67% 52%, rgba(22, 33, 43, 0.30) 0 24px, transparent 26px),
+        #edf4f8;
+    }
+    .mock-viewer-cellpose {
+      background:
+        radial-gradient(circle at 28% 42%, rgba(24, 94, 73, 0.42) 0 34px, transparent 36px),
+        radial-gradient(circle at 58% 56%, rgba(24, 94, 73, 0.34) 0 42px, transparent 44px),
+        radial-gradient(circle at 74% 34%, rgba(24, 94, 73, 0.30) 0 28px, transparent 30px),
+        #f2f7f5;
+    }
+    .mock-roi {
+      position: absolute;
+      border: 2px solid #b7791f;
+      box-shadow: 0 0 0 999px rgba(22, 33, 43, 0.18);
+      background: rgba(183, 121, 31, 0.07);
+    }
+    .mock-playhead {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 34px;
+      background: rgba(255, 255, 255, 0.88);
+      border-top: 1px solid #d7e2ea;
+      padding: 8px 10px;
+      color: #52677a;
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .mock-droplet {
+      position: absolute;
+      width: 78px;
+      height: 78px;
+      border: 2px solid #185e49;
+      border-radius: 999px;
+      background: rgba(24, 94, 73, 0.08);
+    }
+    .mock-droplet-disabled {
+      border-color: #742323;
+      background: rgba(116, 35, 35, 0.08);
+    }
+    .mock-inclusion {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #742323;
+    }
+    .mock-editor-note {
+      border: 1px solid #d7e2ea;
+      border-left: 4px solid #225d82;
+      border-radius: 4px;
+      padding: 8px 10px;
+      color: #52677a;
+      background: #f7fafc;
+      font-size: 12px;
+      font-weight: 600;
+    }
     .log-text {
       background: #f0f5f8;
       border: 1px solid #d7e2ea;
@@ -860,6 +1640,9 @@ def _style() -> str:
       white-space: normal;
       overflow-wrap: anywhere;
     }
+    .target-table .q-table td { height: 42px; }
+    .target-table .q-field__control { min-height: 28px; }
+    .target-table .q-checkbox__inner { font-size: 28px; }
     .muted { color: #52677a; }
     .section-title { color: #52677a; font-size: 12px; text-transform: uppercase; font-weight: 700; }
     .q-field__control { min-height: 34px; border-radius: 8px; }

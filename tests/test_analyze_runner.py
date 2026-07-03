@@ -8,7 +8,7 @@ from admet.core.engine import ActionSpec, EngineRegistry, RunJob, RunResult
 from admet.core.project import ProjectStore
 from admet.core.schema import Param, ParamKind, ParamSchema
 from admet.core.session import load_session
-from admet.ui.analyze.renderer import AnalyzeWorkflowView
+from admet.ui.analyze.renderer import AnalyzeWorkflowView, StoredRun, read_raw_rows, summarize_raw_rows
 from admet.workflows import create_analyze_workflow
 
 
@@ -132,6 +132,57 @@ class AnalyzeWorkflowViewTests(unittest.TestCase):
         self.assertEqual(view.notice_kind, "success")
         self.assertEqual(len(view.matrix), 1)
         self.assertEqual(view.matrix[0].sample_id, "set01")
+
+    def test_raw_rows_are_summarized_for_view_plots(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project = Path(tmpdir) / "study.admetp"
+            run = StoredRun(project, "run01", project / "analysis" / "runs" / "run01" / "raw.jsonl", ())
+            rows = [
+                {
+                    "engine": "cellpose",
+                    "item_id": "set01",
+                    "kind": "droplet",
+                    "values": {"frame": 1, "diameter_um": 10.0, "inclusions": 2},
+                },
+                {
+                    "engine": "cellpose",
+                    "item_id": "set01",
+                    "kind": "droplet",
+                    "values": {"frame": 2, "diameter_um": 14.0, "inclusions": 1},
+                },
+            ]
+
+            summaries = summarize_raw_rows(run, rows)
+
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].project, "study.admetp")
+        self.assertEqual(summaries[0].sample_id, "set01")
+        self.assertEqual(summaries[0].frames, 2)
+        self.assertEqual(summaries[0].droplets, 2)
+        self.assertEqual(summaries[0].inclusions, 3)
+        self.assertEqual(summaries[0].mean_diameter, 12.0)
+        self.assertGreater(summaries[0].cv_percent, 0)
+
+    def test_raw_row_reader_ignores_invalid_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project = Path(tmpdir) / "study.admetp"
+            raw_path = project / "analysis" / "runs" / "run01" / "raw.jsonl"
+            raw_path.parent.mkdir(parents=True)
+            raw_path.write_text(
+                "\n".join(
+                    (
+                        json.dumps({"engine": "opencv", "values": {"frame": 1}}),
+                        "not json",
+                        "",
+                        json.dumps({"engine": "opencv", "values": {"frame": 2}}),
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            rows = read_raw_rows(project, raw_path)
+
+        self.assertEqual([row["values"]["frame"] for row in rows], [1, 2])
 
 
 class FakeAnalyzeEngine:
