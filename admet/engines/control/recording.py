@@ -68,7 +68,7 @@ class RecordingMetadata:
         return data
 
 
-class RecordingSession:
+class RecordingRun:
     def __init__(
         self,
         report_root: str | Path,
@@ -210,7 +210,7 @@ class RecordingCoordinator:
         self._acquisition = acquisition
         self._writer_factory = writer_factory
         self._recording = False
-        self._recording_session: RecordingSession | None = None
+        self._recording_run: RecordingRun | None = None
         self._csv_recording: RecordingMetadata | None = None
         self._csv_recording_report_dir: Path | None = None
         self._csv_recordings: list[dict[str, Any]] = []
@@ -248,15 +248,15 @@ class RecordingCoordinator:
         return self._start_csv_only_recording(settings, report_root, recording_label)
 
     def stop_recording(self) -> dict[str, Any]:
-        if self._recording_session is not None and self._recording_session.current is not None:
-            metadata = self._recording_session.stop_recording()
+        if self._recording_run is not None and self._recording_run.current is not None:
+            metadata = self._recording_run.stop_recording()
             self._restore_camera_preview_after_recording()
             if metadata is not None:
                 self._last_recording = metadata
                 recording = metadata.to_dict()
                 return {
                     "csv_path": metadata.fluidics_csv,
-                    "report_dir": str(self._recording_session.report_dir or ""),
+                    "report_dir": str(self._recording_run.report_dir or ""),
                     "video_path": metadata.video_path,
                     "recording": recording,
                 }
@@ -285,10 +285,10 @@ class RecordingCoordinator:
 
     def status_metadata(self) -> dict[str, Any]:
         metadata: dict[str, Any] = {}
-        if self._recording_session is not None:
-            metadata["recordings"] = list(self._recording_session.recordings)
-            if self._recording_session.current is not None:
-                metadata["current_recording"] = self._recording_session.current.to_dict()
+        if self._recording_run is not None:
+            metadata["recordings"] = list(self._recording_run.recordings)
+            if self._recording_run.current is not None:
+                metadata["current_recording"] = self._recording_run.current.to_dict()
         elif self._csv_recordings:
             metadata["recordings"] = list(self._csv_recordings)
         if self._csv_recording is not None:
@@ -299,10 +299,10 @@ class RecordingCoordinator:
 
     def metadata_sources(self) -> list[dict[str, Any]]:
         recordings: list[dict[str, Any]] = []
-        if self._recording_session is not None:
-            if self._recording_session.current is not None:
-                recordings.append(self._recording_session.current.to_dict())
-            recordings.extend(self._recording_session.recordings)
+        if self._recording_run is not None:
+            if self._recording_run.current is not None:
+                recordings.append(self._recording_run.current.to_dict())
+            recordings.extend(self._recording_run.recordings)
         elif self._csv_recordings:
             recordings.extend(self._csv_recordings)
         if self._csv_recording is not None:
@@ -312,13 +312,13 @@ class RecordingCoordinator:
         return recordings
 
     def active_recording_metadata(self) -> RecordingMetadata | None:
-        if self._recording_session is not None and self._recording_session.current is not None:
-            return self._recording_session.current
+        if self._recording_run is not None and self._recording_run.current is not None:
+            return self._recording_run.current
         return self._csv_recording
 
     def active_recording_report_dir(self) -> Path | None:
-        if self._recording_session is not None:
-            return self._recording_session.report_dir
+        if self._recording_run is not None:
+            return self._recording_run.report_dir
         return self._csv_recording_report_dir
 
     def _start_camera_recording(
@@ -329,16 +329,16 @@ class RecordingCoordinator:
         recording_label: str,
         frame_size: tuple[int, int],
     ) -> dict[str, Any]:
-        session = self._recording_session
-        if session is None or session.report_root != report_root or session.camera is not camera_recorder:
-            session = RecordingSession(
+        recording_run = self._recording_run
+        if recording_run is None or recording_run.report_root != report_root or recording_run.camera is not camera_recorder:
+            recording_run = RecordingRun(
                 report_root,
                 camera_recorder,
                 _CsvRecordingBackend(self),
                 writer_factory=self._writer_factory,
                 write_metadata=not _has_explicit_recording_paths(settings),
             )
-            self._recording_session = session
+            self._recording_run = recording_run
         camera_recorder.set_recording_complete_callback(self.stop_recording)
         if settings["camera_preview_off_recording"]:
             preview_setter = getattr(camera_recorder, "set_preview_enabled", None)
@@ -346,7 +346,7 @@ class RecordingCoordinator:
                 preview_setter(False)
 
         width, height = frame_size
-        metadata = session.start_recording(
+        metadata = recording_run.start_recording(
             recording_label,
             width=width,
             height=height,
@@ -357,7 +357,7 @@ class RecordingCoordinator:
         self._last_recording = metadata
         return {
             "csv_path": metadata.fluidics_csv,
-            "report_dir": str(session.report_dir or ""),
+            "report_dir": str(recording_run.report_dir or ""),
             "recording": metadata.to_dict(),
         }
 
@@ -428,8 +428,8 @@ class RecordingCoordinator:
         self.csv_logger.stop()
 
     def _restore_camera_preview_after_recording(self) -> None:
-        if self._recording_session is not None:
-            camera = getattr(self._recording_session, "camera", None)
+        if self._recording_run is not None:
+            camera = getattr(self._recording_run, "camera", None)
             preview_setter = getattr(camera, "set_preview_enabled", None)
             if callable(preview_setter):
                 preview_setter(True)

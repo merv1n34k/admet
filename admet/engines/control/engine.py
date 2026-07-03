@@ -29,7 +29,7 @@ from admet.engines.control.pipeline import (
     PipelineStep,
     create_trigger,
 )
-from admet.engines.control.session import (
+from admet.engines.control.recording import (
     RecordingCoordinator,
     WriterFactory,
 )

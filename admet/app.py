@@ -52,13 +52,15 @@ def _main(argv: list[str] | None = None) -> None:
 def run_analyze_ui(port: int, *, native: bool = False) -> None:
     from nicegui import ui
 
+    from admet.engines.analyze import create_analyze_registry
+
     workflow = create_analyze_workflow()
-    api = create_engine_api("opencv")
+    registry = create_analyze_registry()
 
     from admet.ui.analyze import render_workflow
 
     def root() -> None:
-        render_workflow(workflow, workflow.initial_state(), api.settings, api=api)
+        render_workflow(workflow, workflow.initial_state(), registry=registry)
 
     ui.run(
         root=root,

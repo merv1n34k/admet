@@ -9,70 +9,65 @@ def create_analyze_workflow() -> Workflow:
         stages=(
             Stage(
                 "import",
-                "1. Import data",
-                description="Select videos, image folders, or batch manifests for analysis.",
+                "1. Import & Batch",
+                description="Create or open projects and build the file-to-engine matrix.",
                 instructions=(
-                    "Choose a video for OpenCV analysis or an image directory for Cellpose analysis.",
-                    "Use the batch area to collect files before running a multi-sample pass.",
+                    "Add videos or imaging folders.",
+                    "Each row declares its project, sample id, engine, and cache policy.",
                 ),
                 settings=ParamSchema(
                     (
-                        Param("video_path", "Video Path", ParamKind.PATH, default=""),
-                        Param("input_dir", "Image Directory", ParamKind.PATH, default=""),
-                        Param("batch_dir", "Batch Directory", ParamKind.PATH, default=""),
+                        Param("project_path", "Project Path", ParamKind.PATH, default=""),
+                        Param("source_path", "Source Path", ParamKind.PATH, default=""),
                     )
                 ),
-                controls=(StageControl("Import Ready", completes=True, variant="success"),),
+                controls=(StageControl("Add Target", completes=True, variant="success"),),
             ),
             Stage(
-                "matrix",
-                "2. Batch matrix",
-                description="Review sample identifiers and per-sample settings before execution.",
-                instructions=(
-                    "Confirm one row per sample.",
-                    "Keep file-to-engine assignments stable before starting analysis.",
-                ),
-                settings=ParamSchema(
-                    (
-                        Param("sample_id", "Sample ID", ParamKind.TEXT, default="demo"),
-                        Param("config_path", "Config Path", ParamKind.PATH, default=""),
-                    )
-                ),
-                controls=(StageControl("Matrix Ready", completes=True, variant="success"),),
-            ),
-            Stage(
-                "analyze",
-                "3. Analyze",
+                "video",
+                "2. Video Analysis",
                 action="analyze",
-                description="Run the selected engine and stream results into the table and plots.",
+                description="Run OpenCV on active video matrix rows.",
                 settings=ParamSchema(
                     (
                         Param("microns_per_pixel", "Microns Per Pixel", ParamKind.FLOAT, default=1.0),
-                        Param("px_to_um", "Pixels To Microns", ParamKind.FLOAT, default=1.14),
                         Param("fps", "FPS", ParamKind.FLOAT, default=0.0, minimum=0.0),
                         Param("max_frames", "Max Frames", ParamKind.INTEGER, default=None),
+                    )
+                ),
+                controls=(StageControl("Run OpenCV", "analyze", completes=True),),
+            ),
+            Stage(
+                "imaging",
+                "3. Imaging Analysis",
+                action="analyze",
+                description="Run Cellpose on active imaging matrix rows.",
+                settings=ParamSchema(
+                    (
+                        Param("config_path", "Config Path", ParamKind.PATH, default=""),
+                        Param("px_to_um", "Pixels To Microns", ParamKind.FLOAT, default=1.14, minimum=0.0),
                         Param("frame_limit", "Frame Limit", ParamKind.INTEGER, default=None),
                         Param("use_cache", "Use Cache", ParamKind.BOOLEAN, default=True),
                         Param("detect_inclusions", "Detect Inclusions", ParamKind.BOOLEAN, default=True),
                     )
                 ),
-                controls=(StageControl("Run Analysis", "analyze", completes=True),),
+                controls=(StageControl("Run Cellpose", "analyze", completes=True),),
             ),
             Stage(
                 "view",
-                "4. View",
-                description="Inspect stored raw analysis data through project views.",
+                "4. View Results",
+                description="Inspect stored raw analysis runs and execution summaries.",
                 instructions=(
-                    "Use the project raw data to build tables and plots.",
-                    "Rerun only files whose cache policy asks for fresh results.",
+                    "Views use raw JSONL and project run metadata.",
+                    "Skipped rows remain available through prior stored project runs.",
                 ),
-                controls=(StageControl("Review Done", completes=True, variant="success"),),
+                controls=(StageControl("Refresh View", completes=True, variant="success"),),
             ),
             Stage(
                 "export",
                 "5. Export",
                 skippable=True,
-                description="Export figures or derived tables from stored raw analysis data.",
+                description="Export figures and derived tables from stored raw data.",
                 settings=ParamSchema(
                     (
                         Param("export_dir", "Export Directory", ParamKind.PATH, default="exports"),

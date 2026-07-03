@@ -98,6 +98,42 @@ class ProjectStore:
             run_metadata_path=run_dir / "run.json",
         )
 
+    def register_analysis_file(
+        self,
+        source_path: str | Path,
+        *,
+        engine: str,
+        sample_id: str = "",
+    ) -> SessionFile:
+        resolved = Path(source_path).resolve()
+        stored_path = self._stored_path(resolved)
+        for file in self.session.files:
+            if file.path == stored_path:
+                return file
+
+        metadata: dict[str, Any] = {
+            "engine": engine,
+            "sample_id": sample_id or resolved.stem,
+            "source_path": stored_path,
+        }
+        if Path(stored_path).is_absolute():
+            metadata["external"] = True
+
+        file_id = _unique_file_id(
+            f"analysis-{engine}-{_safe_id(resolved.stem)}",
+            self.session.files,
+        )
+        file = SessionFile(
+            id=file_id,
+            path=stored_path,
+            role="analysis_video" if engine == "opencv" else "analysis_image_dir",
+            media_type=_analysis_media_type(resolved, engine),
+            metadata=metadata,
+        )
+        files = _upsert_file(list(self.session.files), file)
+        self.session = replace(self.session, files=tuple(files))
+        return file
+
     def finish_analysis_run(
         self,
         target: AnalysisRunTarget,
@@ -278,6 +314,24 @@ def _upsert_file(files: list[SessionFile], stored: SessionFile) -> list[SessionF
             return files
     files.append(stored)
     return files
+
+
+def _unique_file_id(base: str, files: tuple[SessionFile, ...]) -> str:
+    existing = {file.id for file in files}
+    candidate = base
+    index = 2
+    while candidate in existing:
+        candidate = f"{base}-{index}"
+        index += 1
+    return candidate
+
+
+def _analysis_media_type(path: Path, engine: str) -> str:
+    if engine == "cellpose" or path.is_dir():
+        return "inode/directory"
+    if path.suffix.lower() == ".avi":
+        return "video/avi"
+    return "video"
 
 
 def _upsert_item(items: list[SessionItem], stored: SessionItem) -> list[SessionItem]:

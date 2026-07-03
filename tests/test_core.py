@@ -10,7 +10,7 @@ from admet.core.engine import (
 )
 from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema
 from admet.core.workflow import Stage, StageControl, StageStatus, Workflow, WorkflowRunner
-from admet.workflows import create_control_workflow
+from admet.workflows import create_analyze_workflow, create_control_workflow
 
 
 class ParamSchemaTests(unittest.TestCase):
@@ -65,6 +65,12 @@ class ActionSpecTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_analyze_workflow_declares_split_engine_stages(self):
+        workflow = create_analyze_workflow()
+        stage_ids = [stage.id for stage in workflow.stages]
+
+        self.assertEqual(stage_ids, ["import", "video", "imaging", "view", "export"])
+
     def test_control_workflow_declares_runtime_contract(self):
         workflow = create_control_workflow()
         stage_ids = [stage.id for stage in workflow.stages]

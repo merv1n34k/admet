@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from admet.core.session import AdmetSession, SessionFile, load_session, new_session, save_session
 from admet.core.workflow import StageStatus
-from admet.engines.control import RecordingSession
+from admet.engines.control import RecordingRun
 from admet.engines.control.settings import CAMERA_SETTINGS, CORRECTION_SETTINGS
 from admet.ui.control.window import ControlWindow
 
@@ -81,7 +81,7 @@ class FakeControlBackend:
         self.actions.append(("stop_recording", {}))
 
 
-class RecordingSessionTests(unittest.TestCase):
+class RecordingRunTests(unittest.TestCase):
     def test_recording_keeps_preview_on_by_default(self):
         self.assertFalse(CAMERA_SETTINGS.defaults()["camera_preview_off_recording"])
 
@@ -186,23 +186,23 @@ class RecordingSessionTests(unittest.TestCase):
             report_dir = Path(tmpdir) / "records"
             camera = FakeCameraRecorder()
             control = FakeControlBackend()
-            session = RecordingSession(
+            recording_run = RecordingRun(
                 report_dir,
                 camera,
                 control,
                 writer_factory=FakeWriter,
             )
 
-            started = session.start_recording(
+            started = recording_run.start_recording(
                 "set01_rep01",
                 width=640,
                 height=240,
                 fps=120.0,
                 max_frames=10,
             )
-            stopped = session.stop_recording()
+            stopped = recording_run.stop_recording()
 
-            report_dir = session.report_dir
+            report_dir = recording_run.report_dir
             metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
 
         self.assertTrue(started.video_prefix.startswith("set01_rep01_"))
@@ -228,14 +228,14 @@ class RecordingSessionTests(unittest.TestCase):
             report_dir = Path(tmpdir) / "records"
             camera = FakeCameraRecorder()
             control = FakeControlBackend()
-            session = RecordingSession(
+            recording_run = RecordingRun(
                 report_dir,
                 camera,
                 control,
                 writer_factory=FakeWriter,
             )
 
-            session.start_recording(
+            recording_run.start_recording(
                 "set01_rep01",
                 width=640,
                 height=240,
@@ -244,17 +244,17 @@ class RecordingSessionTests(unittest.TestCase):
             )
             camera.complete_from_camera_limit()
 
-            report_dir = session.report_dir
+            report_dir = recording_run.report_dir
             metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
 
-        self.assertIsNone(session.current)
+        self.assertIsNone(recording_run.current)
         self.assertEqual(control.actions[0][0], "start_recording")
         self.assertEqual(control.actions[1][0], "stop_recording")
         self.assertEqual(metadata["recording_count"], 1)
         self.assertEqual(metadata["recordings"][0]["frames_recorded"], 5)
         self.assertEqual(metadata["recordings"][0]["frames_written"], 7)
 
-    def test_recording_session_appends_existing_master_metadata(self):
+    def test_recording_run_appends_existing_master_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             report_dir = Path(tmpdir) / "records"
             report_dir.mkdir()
@@ -274,15 +274,15 @@ class RecordingSessionTests(unittest.TestCase):
             )
             camera = FakeCameraRecorder()
             control = FakeControlBackend()
-            session = RecordingSession(
+            recording_run = RecordingRun(
                 report_dir,
                 camera,
                 control,
                 writer_factory=FakeWriter,
             )
 
-            session.start_recording("set01_rep02", width=640, height=240, fps=120.0)
-            session.stop_recording()
+            recording_run.start_recording("set01_rep02", width=640, height=240, fps=120.0)
+            recording_run.stop_recording()
 
             metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
 
