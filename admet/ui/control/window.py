@@ -2293,12 +2293,14 @@ class ControlWindow(QMainWindow):
                     continue
                 data = dict(file.metadata)
                 data.setdefault("video_path", file.path)
-                rows[str(data.get("video_path") or file.path)] = _video_row(data)
+                row = _video_row(data)
+                rows[_recording_video_key(data, row)] = row
 
         for recording in self._recording_metadata_sources():
             row = _video_row(recording)
-            key = str(recording.get("video_path") or row["video"])
-            rows[key] = row
+            key = _recording_video_key(recording, row)
+            if _prefer_video_row(rows.get(key), row):
+                rows[key] = row
         return list(rows.values())
 
     def _recording_metadata_sources(self) -> list[dict[str, Any]]:
@@ -3275,6 +3277,29 @@ def _video_row(recording: dict[str, Any]) -> dict[str, str]:
         "frames": "" if frames is None else str(frames),
         "duration": _format_duration(metadata["duration_s"]),
     }
+
+
+def _recording_video_key(recording: dict[str, Any], row: dict[str, str]) -> str:
+    for value in (
+        recording.get("recording_id"),
+        recording.get("video_prefix"),
+        Path(str(recording.get("video_path") or "")).stem,
+        Path(str(row.get("video") or "")).stem,
+        row.get("video"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            stem = Path(text).stem
+            return stem or text
+    return "recording"
+
+
+def _prefer_video_row(existing: dict[str, str] | None, candidate: dict[str, str]) -> bool:
+    if existing is None:
+        return True
+    return bool(Path(str(candidate.get("video") or "")).suffix) and not bool(
+        Path(str(existing.get("video") or "")).suffix
+    )
 
 
 def _video_file_id(video_path: str, files: list[SessionFile]) -> str:

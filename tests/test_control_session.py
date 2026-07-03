@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from admet.core.session import load_session, new_session, save_session
+from admet.core.session import AdmetSession, SessionFile, load_session, new_session, save_session
 from admet.core.workflow import StageStatus
 from admet.engines.control import RecordingSession
 from admet.engines.control.settings import CAMERA_SETTINGS, CORRECTION_SETTINGS
@@ -416,6 +416,48 @@ class RecordingSessionTests(unittest.TestCase):
             "records/fluidics/set01_rep02_20260701_120000.csv",
         })
         self.assertEqual(len(saved.items), 1)
+
+    def test_video_rows_dedupe_session_file_and_recording_metadata(self):
+        recording_id = "set01_rep02_20260701_120000"
+        window = ControlWindow.__new__(ControlWindow)
+        window.api = SimpleNamespace(
+            session=AdmetSession(
+                project_id="study",
+                project_type="combined",
+                files=(
+                    SessionFile(
+                        id="video-set01",
+                        path=f"records/camera/{recording_id}.avi",
+                        role="control_video",
+                        media_type="video/avi",
+                        metadata={
+                            "recording_id": recording_id,
+                            "video_prefix": recording_id,
+                            "video_path": f"records/camera/{recording_id}.avi",
+                            "width": 640,
+                            "height": 240,
+                        },
+                    ),
+                ),
+            ),
+            engine=SimpleNamespace(
+                recording_metadata_sources=lambda: [
+                    {
+                        "recording_id": recording_id,
+                        "video_prefix": recording_id,
+                        "width": 640,
+                        "height": 240,
+                    }
+                ]
+            ),
+        )
+        window.last_result = None
+        window.last_metadata = {}
+
+        rows = window._video_rows()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["video"], f"{recording_id}.avi")
 
     def test_new_project_uses_selected_path_name_and_saves_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:
