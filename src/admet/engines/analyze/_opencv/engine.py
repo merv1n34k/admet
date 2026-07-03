@@ -57,15 +57,7 @@ class OpenCVAnalysisEngine:
                 "cache_dir": data.get("cache_dir"),
                 "frames_processed": data.get("frames_processed", 0),
                 "total_detections": data.get("total_detections", 0),
-                "total_droplets": data.get("total_droplets", 0),
-                "mean_diameter_um": data.get("mean_diameter_um", 0.0),
-                "std_diameter_um": data.get("std_diameter_um", 0.0),
-                "mean_speed_mm_s": data.get("mean_speed_mm_s", 0.0),
-                "frequency_hz": data.get("frequency_hz", 0.0),
                 "threshold": data.get("threshold"),
-                "trajectory": data.get("trajectory", {}),
-                "true_stats": data.get("true_stats", {}),
-                "droplet_geometry": data.get("droplet_geometry", {}),
             },
         )
 
@@ -181,6 +173,29 @@ class OpenCVAnalysisEngine:
                 }
             )
             row_count += 1
+        job.sink.write(
+            {
+                "job_id": job.id,
+                "item_id": job.metadata.get("item_id", job.id),
+                "file_id": job.metadata.get("file_id", ""),
+                "engine": self.id,
+                "kind": "run_context",
+                "values": _opencv_context(result),
+            }
+        )
+        row_count += 1
+        for droplet_id, geometry in result.get("droplet_geometry", {}).items():
+            job.sink.write(
+                {
+                    "job_id": job.id,
+                    "item_id": job.metadata.get("item_id", job.id),
+                    "file_id": job.metadata.get("file_id", ""),
+                    "engine": self.id,
+                    "kind": "droplet_geometry",
+                    "values": {"droplet_id": int(droplet_id), **geometry},
+                }
+            )
+            row_count += 1
         return row_count
 
 def create_engine() -> OpenCVAnalysisEngine:
@@ -210,3 +225,13 @@ def _video_dimensions(path: Path) -> tuple[int, int]:
         )
     finally:
         capture.release()
+
+
+def _opencv_context(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "analysis": result.get("analysis", {}),
+        "threshold": result.get("threshold"),
+        "threshold_groups": result.get("threshold_groups", []),
+        "trajectory": result.get("trajectory", {}),
+        "true_stats": result.get("true_stats", {}),
+    }

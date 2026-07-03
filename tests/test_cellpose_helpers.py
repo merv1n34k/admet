@@ -41,7 +41,7 @@ class CellposeHelperTests(unittest.TestCase):
 
     def test_cache_uses_configurable_dir_and_inclusion_hash_inputs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            cache_dir = Path(tmpdir) / "dropdrop-cache"
+            cache_dir = Path(tmpdir) / "cellpose-cache"
             config = {
                 "cellpose_flow_threshold": 0.4,
                 "cellpose_cellprob_threshold": 0.0,
@@ -194,9 +194,17 @@ class CellposeHelperTests(unittest.TestCase):
 
             self.assertEqual(result.status, "complete")
             self.assertEqual(result.metadata["sample_id"], "empty-sample")
-            self.assertEqual(result.metadata["row_count"], 0)
+            self.assertEqual(result.metadata["droplet_count"], 0)
+            self.assertEqual(result.metadata["row_count"], 1)
+            self.assertEqual(result.metadata["analysis_context"]["bead_count"], 6.5e5)
             self.assertTrue(raw_path.is_file())
-            self.assertEqual(raw_path.read_text(encoding="utf-8"), "")
+            rows = [
+                json.loads(line)
+                for line in raw_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(rows[0]["kind"], "run_context")
+            self.assertEqual(rows[0]["values"]["dilution"], 500)
             self.assertEqual(Path(result.metadata["cache_dir"]), cache_dir)
 
 

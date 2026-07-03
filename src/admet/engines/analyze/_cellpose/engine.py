@@ -5,7 +5,6 @@ from typing import Any
 
 from admet.core.engine import ActionSpec, Param, ParamKind, ParamSchema, validate_action_settings
 from admet.core.run import RunJob, RunResult
-from admet.engines.analyze.stats import compute_sample_stats
 
 from .config import load_config
 from .detection import CellposeDetection
@@ -46,25 +45,20 @@ class CellposeAnalysisEngine:
             cache_dir=job.cache_dir,
             job=job,
         )
-        stats = compute_sample_stats(
-            Path(input_dir).name,
-            rows,
-            bead_count=config["settings"]["count"],
-            dilution=config["settings"]["dilution"],
-        )
         return RunResult(
             job_id=job.id,
             engine=self.id,
             action=job.action,
             metadata={
                 "row_count": row_count,
+                "droplet_count": len(rows),
                 "sample_id": Path(input_dir).name,
                 "frames_processed": len({row["frame"] for row in rows}),
                 "detect_inclusions": detector.detect_inclusions,
                 "px_to_um": config["px_to_um"],
+                "analysis_context": _analysis_context(config, detector),
                 "cache_dir": str(detector.cache.cache_dir) if detector.cache else None,
                 "cache_hits": getattr(detector, "cache_hits", 0),
-                **stats,
             },
         )
 
@@ -87,7 +81,7 @@ class CellposeAnalysisEngine:
             input_dir,
             frame_limit=settings["frame_limit"],
         )
-        row_count = self._write_raw_rows(job, rows) if job is not None else 0
+        row_count = self._write_raw_rows(job, rows, config=config, detector=detector) if job is not None else 0
         return rows, config, detector, row_count
 
     def _config_from_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -96,9 +90,28 @@ class CellposeAnalysisEngine:
         config.setdefault("cache", {})["enabled"] = settings["use_cache"]
         return config
 
-    def _write_raw_rows(self, job: RunJob | None, rows: list[dict[str, Any]]) -> int:
+    def _write_raw_rows(
+        self,
+        job: RunJob | None,
+        rows: list[dict[str, Any]],
+        *,
+        config: dict[str, Any],
+        detector: CellposeDetection,
+    ) -> int:
         if job is None or job.sink is None:
             return 0
+        row_count = 0
+        job.sink.write(
+            {
+                "job_id": job.id,
+                "item_id": job.metadata.get("item_id", job.id),
+                "file_id": job.metadata.get("file_id", ""),
+                "engine": self.id,
+                "kind": "run_context",
+                "values": _analysis_context(config, detector),
+            }
+        )
+        row_count += 1
         for row in rows:
             job.sink.write(
                 {
@@ -110,7 +123,8 @@ class CellposeAnalysisEngine:
                     "values": row,
                 }
             )
-        return len(rows)
+            row_count += 1
+        return row_count
 
 
 def create_engine() -> CellposeAnalysisEngine:
@@ -123,3 +137,15 @@ def _job_input(job: RunJob, key: str, setting_key: str) -> Path:
     if setting_key in job.settings:
         return Path(str(job.settings[setting_key]))
     raise ValueError(f"{job.id} requires input {key!r} or setting {setting_key!r}")
+
+
+def _analysis_context(config: dict[str, Any], detector: CellposeDetection) -> dict[str, Any]:
+    settings = config.get("settings", {})
+    return {
+        "px_to_um": config.get("px_to_um"),
+        "detect_inclusions": detector.detect_inclusions,
+        "use_inclusions": bool(settings.get("inclusions", True)),
+        "use_poisson": bool(settings.get("poisson", True)),
+        "bead_count": float(settings.get("count", 0.0) or 0.0),
+        "dilution": int(settings.get("dilution", 0) or 0),
+    }

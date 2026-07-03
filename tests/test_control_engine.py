@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -331,15 +330,13 @@ class FluidicsControlEngineTests(unittest.TestCase):
             report_dir = Path(result.metadata["report_dir"])
             metadata_path = report_dir / "metadata.json"
             metadata_exists = metadata_path.exists()
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
         self.assertTrue(result.metadata["csv_path"].endswith(".csv"))
         self.assertEqual(second.metadata["report_dir"], result.metadata["report_dir"])
         self.assertEqual(report_dir.name, "records")
-        self.assertTrue(metadata_exists)
+        self.assertFalse(metadata_exists)
         self.assertTrue(Path(stop.metadata["video_path"]).name.startswith("set01_rep02_"))
         self.assertTrue(Path(second_stop.metadata["video_path"]).name.startswith("set01_rep03_"))
-        self.assertEqual(metadata["recording_count"], 2)
         self.assertEqual(Path(stop.metadata["recording"]["fluidics_csv"]).parent.name, "fluidics")
         self.assertEqual(stop.metadata["recording"]["width"], 16)
         self.assertEqual(stop.metadata["recording"]["height"], 12)

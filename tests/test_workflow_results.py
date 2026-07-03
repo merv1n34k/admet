@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from admet.engines.analyze.stats import (
+from admet.workflows.results import (
     calculate_poisson,
     chi_squared,
     compute_sample_stats,
@@ -12,8 +12,8 @@ from admet.engines.analyze.stats import (
 )
 
 
-class DropDropStatsTests(unittest.TestCase):
-    def test_compute_sample_stats_matches_dropdrop_formulas(self):
+class WorkflowResultStatsTests(unittest.TestCase):
+    def test_compute_sample_stats_matches_ported_formulas(self):
         rows = [
             {"diameter_um": 10.0, "inclusions": 0},
             {"diameter_um": 12.0, "inclusions": 1},

@@ -181,7 +181,7 @@ class RecordingRunTests(unittest.TestCase):
 
         self.assertEqual(calls, ["runtime", "sync", "toc"])
 
-    def test_start_and_stop_recording_writes_metadata(self):
+    def test_start_and_stop_recording_tracks_runtime_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             report_dir = Path(tmpdir) / "records"
             camera = FakeCameraRecorder()
@@ -201,9 +201,7 @@ class RecordingRunTests(unittest.TestCase):
                 max_frames=10,
             )
             stopped = recording_run.stop_recording()
-
             report_dir = recording_run.report_dir
-            metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
 
         self.assertTrue(started.video_prefix.startswith("set01_rep01_"))
         self.assertEqual(started.fluidics_csv, str(report_dir / "fluidics" / f"{started.video_prefix}.csv"))
@@ -218,10 +216,11 @@ class RecordingRunTests(unittest.TestCase):
         self.assertEqual(stopped.converted_fps, 120.0)
         self.assertGreater(stopped.acquisition_fps, 0.0)
         self.assertEqual(Path(stopped.video_path).name, f"{started.video_prefix}.avi")
-        self.assertEqual(metadata["recording_count"], 1)
-        self.assertEqual(metadata["recordings"][0]["video_prefix"], started.video_prefix)
-        self.assertEqual(metadata["recordings"][0]["converted_fps"], 120.0)
-        self.assertGreater(metadata["recordings"][0]["acquisition_fps"], 0.0)
+        self.assertFalse((report_dir / "metadata.json").exists())
+        self.assertEqual(len(recording_run.recordings), 1)
+        self.assertEqual(recording_run.recordings[0]["video_prefix"], started.video_prefix)
+        self.assertEqual(recording_run.recordings[0]["converted_fps"], 120.0)
+        self.assertGreater(recording_run.recordings[0]["acquisition_fps"], 0.0)
 
     def test_camera_auto_stop_finalizes_full_session(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -243,33 +242,31 @@ class RecordingRunTests(unittest.TestCase):
                 max_frames=10,
             )
             camera.complete_from_camera_limit()
-
             report_dir = recording_run.report_dir
-            metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
 
         self.assertIsNone(recording_run.current)
         self.assertEqual(control.actions[0][0], "start_recording")
         self.assertEqual(control.actions[1][0], "stop_recording")
-        self.assertEqual(metadata["recording_count"], 1)
-        self.assertEqual(metadata["recordings"][0]["frames_recorded"], 5)
-        self.assertEqual(metadata["recordings"][0]["frames_written"], 7)
+        self.assertFalse((report_dir / "metadata.json").exists())
+        self.assertEqual(len(recording_run.recordings), 1)
+        self.assertEqual(recording_run.recordings[0]["frames_recorded"], 5)
+        self.assertEqual(recording_run.recordings[0]["frames_written"], 7)
 
-    def test_recording_run_appends_existing_master_metadata(self):
+    def test_recording_run_does_not_modify_project_metadata_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             report_dir = Path(tmpdir) / "records"
             report_dir.mkdir()
-            (report_dir / "metadata.json").write_text(
-                json.dumps(
+            original_metadata = {
+                "recording_count": 1,
+                "recordings": [
                     {
-                        "recording_count": 1,
-                        "recordings": [
-                            {
-                                "recording_id": "set01_rep01_20260701_120000",
-                                "video_prefix": "set01_rep01_20260701_120000",
-                            }
-                        ],
+                        "recording_id": "set01_rep01_20260701_120000",
+                        "video_prefix": "set01_rep01_20260701_120000",
                     }
-                ),
+                ],
+            }
+            (report_dir / "metadata.json").write_text(
+                json.dumps(original_metadata),
                 encoding="utf-8",
             )
             camera = FakeCameraRecorder()
@@ -286,9 +283,10 @@ class RecordingRunTests(unittest.TestCase):
 
             metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(metadata["recording_count"], 2)
+        self.assertEqual(metadata, original_metadata)
+        self.assertEqual(len(recording_run.recordings), 1)
         self.assertEqual(metadata["recordings"][0]["recording_id"], "set01_rep01_20260701_120000")
-        self.assertTrue(metadata["recordings"][1]["recording_id"].startswith("set01_rep02_"))
+        self.assertTrue(recording_run.recordings[0]["recording_id"].startswith("set01_rep02_"))
 
     def test_recording_artifact_registers_video_csv_and_acquisition_item(self):
         with tempfile.TemporaryDirectory() as tmpdir:

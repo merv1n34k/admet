@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -76,13 +75,11 @@ class RecordingRun:
         control: ControlBackend,
         *,
         writer_factory: WriterFactory | None = None,
-        write_metadata: bool = True,
     ):
         self.report_root = Path(report_root)
         self.camera = camera
         self.control = control
         self.writer_factory = writer_factory or _default_writer_factory
-        self._write_metadata_enabled = write_metadata
         self.report_dir: Path | None = None
         self.recordings: list[dict[str, Any]] = []
         self.current: RecordingMetadata | None = None
@@ -93,10 +90,8 @@ class RecordingRun:
     def create_report_dir(self) -> Path:
         if self.report_dir is None:
             self.report_dir = create_recording_report_dir(self.report_root)
-            self.recordings = read_recording_metadata(self.report_dir)
             (self.report_dir / "camera").mkdir(parents=True, exist_ok=True)
             (self.report_dir / "fluidics").mkdir(parents=True, exist_ok=True)
-            self.write_metadata()
         return self.report_dir
 
     def start_recording(
@@ -150,7 +145,6 @@ class RecordingRun:
             converted_fps=fps,
             fluidics_csv=str(csv_path),
         )
-        self.write_metadata()
         return self.current
 
     def stop_recording(self) -> RecordingMetadata | None:
@@ -187,13 +181,7 @@ class RecordingRun:
         completed = self.current
         self.recordings.append(completed.to_dict())
         self.current = None
-        self.write_metadata()
         return completed
-
-    def write_metadata(self) -> None:
-        if self.report_dir is None or not self._write_metadata_enabled:
-            return
-        write_recording_metadata(self.report_dir, self.recordings, current=self.current)
 
 
 class RecordingCoordinator:
@@ -273,7 +261,6 @@ class RecordingCoordinator:
         self._last_recording = metadata
         if self._csv_recording_report_dir is not None:
             self._csv_recordings.append(metadata.to_dict())
-            write_recording_metadata(self._csv_recording_report_dir, self._csv_recordings)
         self._csv_recording = None
         report_dir = str(self._csv_recording_report_dir or "")
         self._csv_recording_report_dir = None
@@ -336,7 +323,6 @@ class RecordingCoordinator:
                 camera_recorder,
                 _CsvRecordingBackend(self),
                 writer_factory=self._writer_factory,
-                write_metadata=not _has_explicit_recording_paths(settings),
             )
             self._recording_run = recording_run
         camera_recorder.set_recording_complete_callback(self.stop_recording)
@@ -370,8 +356,6 @@ class RecordingCoordinator:
         report_dir = create_recording_report_dir(report_root)
         fluidics_dir = report_dir / "fluidics"
         fluidics_dir.mkdir(parents=True, exist_ok=True)
-        if self._csv_recording_report_dir != report_dir:
-            self._csv_recordings = read_recording_metadata(report_dir)
         recording_id = create_recording_id(recording_label)
         explicit_csv = settings.get("fluidics_csv_path")
         if explicit_csv:
@@ -396,8 +380,6 @@ class RecordingCoordinator:
         self._csv_recording = metadata
         self._csv_recording_report_dir = report_dir
         self._last_recording = metadata
-        if not explicit_csv:
-            write_recording_metadata(report_dir, self._csv_recordings, current=metadata)
         return {"csv_path": csv_path, "report_dir": str(report_dir), "recording": metadata.to_dict()}
 
     def _start_csv_recording(
@@ -474,43 +456,9 @@ def create_recording_report_dir(report_root: str | Path) -> Path:
     return root
 
 
-def _has_explicit_recording_paths(settings: dict[str, Any]) -> bool:
-    return bool(settings.get("video_path") and settings.get("fluidics_csv_path"))
-
-
 def create_recording_id(recording_label: str) -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{_safe_recording_label(recording_label)}_{stamp}"
-
-
-def write_recording_metadata(
-    report_dir: str | Path,
-    recordings: list[dict[str, Any]],
-    *,
-    current: RecordingMetadata | None = None,
-) -> None:
-    report_dir = Path(report_dir)
-    metadata = {
-        "updated": datetime.now().isoformat(timespec="seconds"),
-        "report_dir": str(report_dir),
-        "recording_count": len(recordings),
-        "recordings": recordings,
-    }
-    if current is not None:
-        metadata["current_recording"] = current.to_dict()
-    (report_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-
-
-def read_recording_metadata(report_dir: str | Path) -> list[dict[str, Any]]:
-    metadata_path = Path(report_dir) / "metadata.json"
-    if not metadata_path.is_file():
-        return []
-    with metadata_path.open("r", encoding="utf-8") as handle:
-        metadata = json.load(handle)
-    recordings = metadata.get("recordings") if isinstance(metadata, dict) else None
-    if not isinstance(recordings, list):
-        return []
-    return [recording for recording in recordings if isinstance(recording, dict)]
 
 
 def _safe_recording_label(value: str) -> str:
