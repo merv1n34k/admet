@@ -12,12 +12,12 @@ from pathlib import Path
 from statistics import mean, pstdev
 from typing import Any
 
-from admet.analyze import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 from admet.core.discovery import ProjectRef, discover_projects, projects_root
 from admet.core.engine import EngineRegistry
 from admet.core.project import ProjectStore
 from admet.core.session import session_path
-from admet.core.workflow import StageStatus, Workflow, WorkflowState
+from admet.workflows import StageStatus, Workflow, WorkflowState
+from admet.workflows.analyze import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 
 
 WORKFLOW_STAGES = (

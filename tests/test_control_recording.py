@@ -6,10 +6,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from admet.core.session import AdmetSession, SessionFile, load_session, new_session, save_session
-from admet.core.workflow import StageStatus
 from admet.engines.control import RecordingRun
 from admet.engines.control.settings import CAMERA_SETTINGS, CORRECTION_SETTINGS
 from admet.ui.control.window import ControlWindow
+from admet.workflows import StageStatus
 
 
 class FakeWriter:

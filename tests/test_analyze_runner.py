@@ -5,7 +5,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from admet.analyze import AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 from admet.core.discovery import ENV_ROOT
 from admet.core.engine import ActionSpec, EngineRegistry, Param, ParamKind, ParamSchema
 from admet.core.project import ProjectStore
@@ -19,6 +18,7 @@ from admet.ui.analyze.renderer import (
     summarize_raw_rows,
 )
 from admet.workflows import create_analyze_workflow
+from admet.workflows.analyze import AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 
 
 class AnalyzeBatchRunnerTests(unittest.TestCase):

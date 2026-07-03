@@ -1,4 +1,3 @@
-from admet.core.workflow import Stage, StageControl, StageSurface, Workflow
 from admet.engines.control.settings import (
     CAMERA_SETTINGS,
     CORRECTION_SETTINGS,
@@ -7,6 +6,8 @@ from admet.engines.control.settings import (
     RUN_SETTINGS,
     WASH_SETTINGS,
 )
+
+from .model import Stage, StageControl, StageSurface, Workflow
 
 
 CAMERA_SURFACE_OPTIONS = {
