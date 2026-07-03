@@ -1,8 +1,8 @@
 import unittest
 
 from admet.core.api import AdmetAPI
-from admet.core.engine import ActionSpec, EngineContext, EngineResult, RunJob, RunResult
-from admet.core.schema import Param, ParamKind, ParamSchema, ResultSet
+from admet.core.engine import ActionSpec, RunJob, RunResult
+from admet.core.schema import Param, ParamKind, ParamSchema
 from admet.core.session import new_session
 
 
@@ -13,21 +13,11 @@ class CapturingEngine:
     actions = (ActionSpec("run", "Run", "diagnostics", params=("value",)),)
 
     def __init__(self):
-        self.contexts = []
         self.jobs = []
-
-    def run_action(
-        self,
-        action: str,
-        settings: dict,
-        context: EngineContext | None = None,
-    ) -> EngineResult:
-        self.contexts.append(context)
-        return EngineResult(ResultSet(metadata={"action": action, "settings": settings}))
 
     def run(self, job: RunJob) -> RunResult:
         self.jobs.append(job)
-        return RunResult(job_id=job.id, engine=self.id, action=job.action)
+        return RunResult(job_id=job.id, engine=self.id, action=job.action, metadata=dict(job.metadata))
 
 
 class AdmetAPITests(unittest.TestCase):
@@ -41,16 +31,23 @@ class AdmetAPITests(unittest.TestCase):
         self.assertEqual(description["actions"][0]["id"], "run")
         self.assertEqual(description["session"], "project-1")
 
-    def test_run_action_injects_session_and_workdir(self):
+    def test_run_injects_session_and_workdir_metadata(self):
         engine = CapturingEngine()
         api = AdmetAPI(engine, session=new_session("project-1", "analysis"), workdir="/tmp/work")
 
-        api.run_action("run", {"value": 2}, EngineContext(metadata={"source": "test"}))
+        result = api.run(
+            RunJob(
+                id="job-1",
+                engine="capture",
+                action="run",
+                settings={"value": 2},
+                metadata={"source": "test"},
+            )
+        )
 
-        context = engine.contexts[0]
-        self.assertEqual(context.session.project_id, "project-1")
-        self.assertEqual(context.workdir, "/tmp/work")
-        self.assertEqual(context.metadata, {"source": "test"})
+        self.assertEqual(result.metadata["source"], "test")
+        self.assertEqual(result.metadata["session_id"], "project-1")
+        self.assertEqual(result.metadata["workdir"], "/tmp/work")
 
     def test_run_dispatches_run_job(self):
         engine = CapturingEngine()

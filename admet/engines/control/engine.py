@@ -4,8 +4,7 @@ from dataclasses import asdict
 from queue import Queue
 from typing import Any, Callable
 
-from admet.core.engine import ActionSpec, EngineContext, EngineResult, RunJob, RunResult, validate_action_settings
-from admet.core.schema import ResultSet, SummaryStat
+from admet.core.engine import ActionSpec, RunJob, RunResult, validate_action_settings
 from admet.engines.control.camera import CameraController
 from admet.engines.control.fluidics import (
     AcquisitionThread,
@@ -37,7 +36,7 @@ from admet.engines.control.session import (
 from admet.engines.control.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES
 
 
-ActionHandler = Callable[[dict[str, Any], EngineContext | None], EngineResult]
+ActionHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
 CAMERA_CONFIGURATION_PARAMS = (
     "camera_width",
@@ -187,77 +186,77 @@ class FluidicsControlEngine:
 
     def _build_action_handlers(self) -> dict[str, ActionHandler]:
         return {
-            "connect_fluidics": lambda settings, _context: self._connect(settings),
-            "disconnect_fluidics": lambda _settings, _context: self._disconnect("disconnect_fluidics"),
-            "verify_backend": lambda _settings, _context: self._status_result(
+            "connect_fluidics": lambda settings: self._connect(settings),
+            "disconnect_fluidics": lambda _settings: self._disconnect("disconnect_fluidics"),
+            "verify_backend": lambda _settings: self._status_result(
                 "verify_backend",
                 extra_metadata=self._backend_preflight(),
             ),
-            "verify_fluigent": lambda settings, _context: self._verify_fluigent(settings),
-            "refresh_cameras": lambda _settings, _context: self._status_result(
+            "verify_fluigent": lambda settings: self._verify_fluigent(settings),
+            "refresh_cameras": lambda _settings: self._status_result(
                 "refresh_cameras",
                 extra_metadata=self._camera_preflight(),
             ),
-            "connect_camera": lambda settings, _context: self._connect_camera(settings),
-            "disconnect_camera": lambda _settings, _context: self._disconnect_camera(),
-            "apply_camera_settings": lambda settings, _context: self._apply_camera_settings(settings),
-            "start_camera_live": lambda _settings, _context: self._camera_live_status_action(
+            "connect_camera": lambda settings: self._connect_camera(settings),
+            "disconnect_camera": lambda _settings: self._disconnect_camera(),
+            "apply_camera_settings": lambda settings: self._apply_camera_settings(settings),
+            "start_camera_live": lambda _settings: self._camera_live_status_action(
                 "start_camera_live",
                 self.start_camera_live,
             ),
-            "stop_camera_live": lambda _settings, _context: self._camera_live_status_action(
+            "stop_camera_live": lambda _settings: self._camera_live_status_action(
                 "stop_camera_live",
                 self.stop_camera_live,
             ),
-            "camera_status": lambda _settings, _context: self._status_result(
+            "camera_status": lambda _settings: self._status_result(
                 "camera_status",
                 extra_metadata=self._camera_status_metadata(),
             ),
-            "start_polling": lambda _settings, _context: self._status_after("start_polling", self.start_polling),
-            "stop_polling": lambda _settings, _context: self._status_after("stop_polling", self.stop_polling),
-            "apply_corrections": lambda settings, _context: self._status_after(
+            "start_polling": lambda _settings: self._status_after("start_polling", self.start_polling),
+            "stop_polling": lambda _settings: self._status_after("stop_polling", self.stop_polling),
+            "apply_corrections": lambda settings: self._status_after(
                 "apply_corrections",
                 lambda: self.apply_corrections(settings),
             ),
-            "set_channel_flow": lambda settings, _context: self._status_after(
+            "set_channel_flow": lambda settings: self._status_after(
                 "set_channel_flow",
                 lambda: self.set_channel_flow(settings["channel_index"], settings["channel_flow_ul_min"]),
             ),
-            "set_channel_pressure": lambda settings, _context: self._status_after(
+            "set_channel_pressure": lambda settings: self._status_after(
                 "set_channel_pressure",
                 lambda: self.set_channel_pressure(settings["channel_index"], settings["channel_pressure_mbar"]),
             ),
-            "stop_channel": lambda settings, _context: self._status_after(
+            "stop_channel": lambda settings: self._status_after(
                 "stop_channel",
                 lambda: self.stop_channel(settings["channel_index"]),
             ),
-            "set_channel_response": lambda settings, _context: self._status_after(
+            "set_channel_response": lambda settings: self._status_after(
                 "set_channel_response",
                 lambda: self.set_channel_response(settings["channel_index"], settings["channel_response_s"]),
             ),
-            "start_recording": lambda settings, context: self._status_result(
+            "start_recording": lambda settings: self._status_result(
                 "start_recording",
-                artifacts=self.start_recording(settings, context),
+                extra_metadata=self.start_recording(settings),
             ),
-            "stop_recording": lambda _settings, _context: self._status_result(
+            "stop_recording": lambda _settings: self._status_result(
                 "stop_recording",
-                artifacts=self.stop_recording(),
+                extra_metadata=self.stop_recording(),
             ),
-            "run_protocol": lambda settings, _context: self._start_protocol_action(
+            "run_protocol": lambda settings: self._start_protocol_action(
                 "run_protocol",
                 settings["pipeline_name"],
                 settings,
             ),
-            "pause_protocol": lambda _settings, _context: self._status_after("pause_protocol", self.pause_pipeline),
-            "resume_protocol": lambda _settings, _context: self._status_after("resume_protocol", self.resume_pipeline),
-            "stop_protocol": lambda _settings, _context: self._status_after("stop_protocol", self.stop_pipeline),
-            "confirm_protocol": lambda _settings, _context: self._status_after(
+            "pause_protocol": lambda _settings: self._status_after("pause_protocol", self.pause_pipeline),
+            "resume_protocol": lambda _settings: self._status_after("resume_protocol", self.resume_pipeline),
+            "stop_protocol": lambda _settings: self._status_after("stop_protocol", self.stop_pipeline),
+            "confirm_protocol": lambda _settings: self._status_after(
                 "confirm_protocol",
                 self.confirm_pipeline_step,
             ),
-            "skip_protocol": lambda _settings, _context: self._status_after("skip_protocol", self.skip_pipeline_step),
-            "calibrate": lambda _settings, _context: self._status_after("calibrate", self.hardware.calibrate_all),
-            "wash": lambda settings, _context: self._start_protocol_action("wash", "Wash", settings),
+            "skip_protocol": lambda _settings: self._status_after("skip_protocol", self.skip_pipeline_step),
+            "calibrate": lambda _settings: self._status_after("calibrate", self.hardware.calibrate_all),
+            "wash": lambda settings: self._start_protocol_action("wash", "Wash", settings),
         }
 
     def _validate_action_handlers(self) -> None:
@@ -268,25 +267,14 @@ class FluidicsControlEngine:
         if missing or extra:
             raise RuntimeError(f"control action handler mismatch: missing={missing}, extra={extra}")
 
-    def run_action(
-        self,
-        action: str,
-        settings: dict[str, Any],
-        context: EngineContext | None = None,
-    ) -> EngineResult:
-        normalized = validate_action_settings(self.settings, self.actions, action, settings)
-        handler = self._action_handlers.get(action)
-        if handler is None:
-            raise ValueError(f"unsupported fluidics action: {action}")
-        return handler(normalized, context)
-
     def run(self, job: RunJob) -> RunResult:
+        settings = dict(job.settings)
+        private_settings: dict[str, Any] = {}
         if job.action == "start_recording":
-            settings = dict(job.settings)
             if "video" in job.outputs:
-                settings["video_path"] = str(job.outputs["video"])
+                private_settings["video_path"] = str(job.outputs["video"])
             if "fluidics_csv" in job.outputs:
-                settings["fluidics_csv_path"] = str(job.outputs["fluidics_csv"])
+                private_settings["fluidics_csv_path"] = str(job.outputs["fluidics_csv"])
             settings.setdefault("recording_label", job.metadata.get("recording_label", job.id))
             settings.setdefault("camera_width", 640)
             settings.setdefault("camera_height", 480)
@@ -295,38 +283,30 @@ class FluidicsControlEngine:
             settings["camera_height"] = height
             settings.setdefault("camera_video_fps", 24.0)
             settings.setdefault("camera_preview_off_recording", False)
-            artifacts = self.start_recording(settings, None)
-            return RunResult(
-                job_id=job.id,
-                engine=self.id,
-                action=job.action,
-                metadata=artifacts.get("recording", {}),
-            )
-        if job.action == "stop_recording":
-            artifacts = self.stop_recording()
-            return RunResult(
-                job_id=job.id,
-                engine=self.id,
-                action=job.action,
-                metadata=artifacts.get("recording", {}),
-            )
-        result = self.run_action(job.action, job.settings)
+
+        normalized = validate_action_settings(self.settings, self.actions, job.action, settings)
+        if job.action == "start_recording":
+            normalized.update(private_settings)
+        handler = self._action_handlers.get(job.action)
+        if handler is None:
+            raise ValueError(f"unsupported fluidics action: {job.action}")
+        metadata = handler(normalized)
         return RunResult(
             job_id=job.id,
             engine=self.id,
             action=job.action,
-            metadata=dict(result.result_set.metadata),
+            metadata=metadata,
         )
 
-    def _status_after(self, action: str, operation: Callable[[], None]) -> EngineResult:
+    def _status_after(self, action: str, operation: Callable[[], None]) -> dict[str, Any]:
         operation()
         return self._status_result(action)
 
-    def _camera_live_status_action(self, action: str, operation: Callable[[], None]) -> EngineResult:
+    def _camera_live_status_action(self, action: str, operation: Callable[[], None]) -> dict[str, Any]:
         operation()
         return self._status_result(action, extra_metadata=self._camera_status_metadata())
 
-    def _disconnect_camera(self) -> EngineResult:
+    def _disconnect_camera(self) -> dict[str, Any]:
         return self._status_result("disconnect_camera", extra_metadata=self._camera.disconnect())
 
     def _start_protocol_action(
@@ -334,7 +314,7 @@ class FluidicsControlEngine:
         action: str,
         name: str,
         settings: dict[str, Any],
-    ) -> EngineResult:
+    ) -> dict[str, Any]:
         self.start_pipeline(name, settings=settings, tick_s=settings["tick_s"])
         return self._status_result(action)
 
@@ -420,14 +400,12 @@ class FluidicsControlEngine:
     def start_recording(
         self,
         settings: dict[str, Any],
-        context: EngineContext | None = None,
     ) -> dict[str, Any]:
         if not self.hardware.connected:
             raise RuntimeError("Fluidics hardware is not connected")
         camera_recorder = self._camera.acquisition if self.camera_live else None
         return self._recordings.start_recording(
             settings,
-            context=context,
             camera_recorder=camera_recorder,
             frame_size=self._camera.recording_frame_size(settings),
         )
@@ -497,7 +475,7 @@ class FluidicsControlEngine:
             for step in expand_protocol_steps(steps)
         ]
 
-    def _connect(self, settings: dict[str, Any]) -> EngineResult:
+    def _connect(self, settings: dict[str, Any]) -> dict[str, Any]:
         try:
             state = self.hardware.connect(simulated=settings["simulated"])
         except FluigentConnectionError as exc:
@@ -525,7 +503,7 @@ class FluidicsControlEngine:
             },
         )
 
-    def _disconnect(self, action: str) -> EngineResult:
+    def _disconnect(self, action: str) -> dict[str, Any]:
         self.stop_recording()
         self.stop_polling()
         self.stop_pipeline()
@@ -536,10 +514,10 @@ class FluidicsControlEngine:
     def _configure_channels_from_state(self, state: Any) -> None:
         self.channel_manager.configure_channels(_pair_channels(state))
 
-    def _connect_camera(self, settings: dict[str, Any]) -> EngineResult:
+    def _connect_camera(self, settings: dict[str, Any]) -> dict[str, Any]:
         return self._status_result("connect_camera", extra_metadata=self._camera.connect(settings))
 
-    def _apply_camera_settings(self, settings: dict[str, Any]) -> EngineResult:
+    def _apply_camera_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         return self._status_result("apply_camera_settings", extra_metadata=self._camera.apply_settings(settings))
 
     @property
@@ -552,7 +530,7 @@ class FluidicsControlEngine:
     def stop_camera_live(self) -> None:
         self._camera.stop_live()
 
-    def _verify_fluigent(self, settings: dict[str, Any]) -> EngineResult:
+    def _verify_fluigent(self, settings: dict[str, Any]) -> dict[str, Any]:
         metadata: dict[str, Any] = {
             "fluigent_connect_ok": False,
             "fluigent_connect_error": "",
@@ -662,9 +640,8 @@ class FluidicsControlEngine:
     def _status_result(
         self,
         action: str,
-        artifacts: dict[str, Any] | None = None,
         extra_metadata: dict[str, Any] | None = None,
-    ) -> EngineResult:
+    ) -> dict[str, Any]:
         state = self.hardware.state
         metadata = {
             "action": action,
@@ -681,14 +658,7 @@ class FluidicsControlEngine:
         metadata.update(self._recordings.status_metadata())
         if extra_metadata:
             metadata.update(extra_metadata)
-        stats = (
-            SummaryStat("pressure_channels", metadata["pressure_channels"]),
-            SummaryStat("sensor_channels", metadata["sensor_channels"]),
-        )
-        return EngineResult(
-            result_set=ResultSet(records=(), stats=stats, metadata=metadata),
-            artifacts=artifacts or {},
-        )
+        return metadata
 
 
 def create_engine() -> FluidicsControlEngine:

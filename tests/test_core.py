@@ -2,15 +2,14 @@ import unittest
 
 from admet.core.engine import (
     ActionSpec,
-    EngineContext,
     EngineRegistry,
-    EngineResult,
     LazyEngineSpec,
+    RunJob,
+    RunResult,
     validate_action_settings,
 )
-from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema, ResultRecord, ResultSet
+from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema
 from admet.core.workflow import Stage, StageControl, StageStatus, Workflow, WorkflowRunner
-from admet.ui.analyze.renderer import _record_to_row, _single_record_field_rows
 from admet.workflows import create_control_workflow
 
 
@@ -150,7 +149,7 @@ class WorkflowRunnerTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(state.statuses["analyze"], StageStatus.COMPLETE)
-        self.assertEqual(state.data["analyze"].result_set.records[0].sample_id, "s1")
+        self.assertEqual(state.data["analyze"].metadata["sample_id"], "s1")
 
     def test_runner_refuses_paused_workflow(self):
         workflow = Workflow("demo", "Demo", (Stage("analyze", "Analyze", action="analyze"),))
@@ -178,7 +177,7 @@ class WorkflowRunnerTests(unittest.TestCase):
         _, result = runner.run_current(workflow.initial_state(), {"limit": 2})
 
         self.assertEqual(engine.calls, [("ping", {"limit": 2})])
-        self.assertEqual(result.result_set.metadata["settings"], {"limit": 2})
+        self.assertEqual(result.metadata["settings"], {"limit": 2})
 
 
 class EngineRegistryTests(unittest.TestCase):
@@ -215,37 +214,6 @@ class EngineContractTests(unittest.TestCase):
                     action_ids.add(action.id)
 
 
-class RendererHelperTests(unittest.TestCase):
-    def test_record_rows_flatten_lists_and_dicts_for_nicegui_tables(self):
-        row = _record_to_row(
-            0,
-            ResultRecord(
-                sample_id="control",
-                engine="fluidics",
-                values={"cameras": [], "camera": {"pypylon_available": False}},
-            ),
-        )
-
-        self.assertEqual(row["cameras"], "")
-        self.assertEqual(row["camera"], '{"pypylon_available": false}')
-
-    def test_single_record_rows_are_transposed_for_status_tables(self):
-        rows = _single_record_field_rows(
-            {
-                "id": 0,
-                "sample_id": "control",
-                "engine": "fluidics",
-                "action": "connect_camera",
-                "camera_message": "No Basler cameras are currently enumerated; refresh after attaching one.",
-            }
-        )
-
-        self.assertNotIn("Id", [row["field"] for row in rows])
-        self.assertEqual(rows[0], {"field": "Sample Id", "value": "control"})
-        self.assertEqual(rows[2], {"field": "Action", "value": "connect_camera"})
-        self.assertEqual(rows[3]["field"], "Camera Message")
-
-
 class PartialActionEngine:
     id = "partial"
     name = "Partial Action Engine"
@@ -260,14 +228,15 @@ class PartialActionEngine:
     def __init__(self):
         self.calls = []
 
-    def run_action(
-        self,
-        action: str,
-        settings: dict,
-        context: EngineContext | None = None,
-    ) -> EngineResult:
-        self.calls.append((action, dict(settings)))
-        return EngineResult(ResultSet(metadata={"settings": dict(settings)}))
+    def run(self, job: RunJob) -> RunResult:
+        normalized = validate_action_settings(self.settings, self.actions, job.action, job.settings)
+        self.calls.append((job.action, dict(normalized)))
+        return RunResult(
+            job_id=job.id,
+            engine=self.id,
+            action=job.action,
+            metadata={"settings": dict(normalized)},
+        )
 
 
 class LocalAnalysisEngine:
@@ -281,23 +250,16 @@ class LocalAnalysisEngine:
     )
     actions = (ActionSpec("analyze", "Analyze", "analysis", params=("sample_id", "threshold")),)
 
-    def run_action(
-        self,
-        action: str,
-        settings: dict,
-        context: EngineContext | None = None,
-    ) -> EngineResult:
-        normalized = validate_action_settings(self.settings, self.actions, action, settings)
-        return EngineResult(
-            ResultSet(
-                records=(
-                    ResultRecord(
-                        sample_id=normalized["sample_id"],
-                        engine=self.id,
-                        values={"threshold": normalized["threshold"]},
-                    ),
-                )
-            )
+    def run(self, job: RunJob) -> RunResult:
+        normalized = validate_action_settings(self.settings, self.actions, job.action, job.settings)
+        return RunResult(
+            job_id=job.id,
+            engine=self.id,
+            action=job.action,
+            metadata={
+                "sample_id": normalized["sample_id"],
+                "threshold": normalized["threshold"],
+            },
         )
 
 

@@ -5,8 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from admet.core.engine import EngineResult
-from admet.core.schema import ResultSet
 from admet.core.session import load_session, new_session, save_session
 from admet.core.workflow import StageStatus
 from admet.engines.control import RecordingSession
@@ -75,12 +73,12 @@ class FakeControlBackend:
     def __init__(self):
         self.actions = []
 
-    def run_action(self, action, settings, context=None):
-        self.actions.append((action, dict(settings)))
-        if action == "start_recording":
-            csv_path = str(Path(settings["fluidics_dir"]) / settings["csv_filename"])
-            return EngineResult(ResultSet(), artifacts={"csv_path": csv_path})
-        return EngineResult(ResultSet())
+    def start_recording(self, settings):
+        self.actions.append(("start_recording", dict(settings)))
+        return str(Path(settings["fluidics_dir"]) / settings["csv_filename"])
+
+    def stop_recording(self):
+        self.actions.append(("stop_recording", {}))
 
 
 class RecordingSessionTests(unittest.TestCase):

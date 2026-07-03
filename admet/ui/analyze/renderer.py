@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from admet.core.api import AdmetAPI
-from admet.core.engine import EngineContext, EngineResult
-from admet.core.schema import ParamKind, ParamSchema, ResultRecord, ResultSet
+from admet.core.engine import RunJob, RunResult
+from admet.core.schema import ParamKind, ParamSchema
 from admet.core.session import new_session, save_session, session_path
 from admet.core.workflow import Stage, StageControl, StageStatus, StageSurface, Workflow, WorkflowState
 
@@ -201,7 +201,7 @@ class CoreWorkflowView:
         self.status = "Ready"
         self.status_kind = "info"
         self.action_log: list[str] = ["Analyze UI ready."]
-        self.last_result: EngineResult | None = None
+        self.last_result: RunResult | None = None
         self.batch_files: list[dict[str, Any]] = []
         self._selection_drag_start: tuple[int, int] | None = None
         self._show_camera_settings = False
@@ -418,12 +418,12 @@ class CoreWorkflowView:
                     ui.button(
                         "Apply",
                         icon="check",
-                        on_click=partial(self._run_action, "apply_camera_settings", False),
+                        on_click=partial(self._execute_action, "apply_camera_settings", False),
                     ).props("dense no-caps outline color=green").classes("w-full")
                     ui.button(
                         "Disconnect",
                         icon="power_off",
-                        on_click=partial(self._run_action, "disconnect_camera", False),
+                        on_click=partial(self._execute_action, "disconnect_camera", False),
                     ).props("dense no-caps outline color=orange").classes("w-full")
             for group in surface.options.get("groups", ()):
                 self._render_camera_setting_group(surface, group)
@@ -666,91 +666,31 @@ class CoreWorkflowView:
     def _render_results_panel(self) -> None:
         from nicegui import ui
 
-        result_set = self._latest_result_set()
+        metadata = self._latest_metadata()
         with ui.column().classes("admet-panel w-full gap-2 p-3"):
             ui.label("Results").classes("text-sm font-semibold")
-            if result_set is None:
+            if not metadata:
                 ui.label("No results yet. Run a workflow action to populate this area.").classes(
                     "admet-muted"
                 )
                 return
-            self._render_stats(result_set)
-            self._render_plot(result_set)
-            self._render_record_table(result_set)
-
-    def _render_stats(self, result_set: ResultSet) -> None:
-        from nicegui import ui
-
-        if not result_set.stats:
-            return
-        with ui.row().classes("w-full gap-2 flex-wrap"):
-            for stat in result_set.stats:
-                label = f"{stat.value} {stat.unit}".strip()
-                with ui.column().classes("border border-gray-200 rounded-md px-2 py-1 gap-0"):
-                    ui.label(stat.name.replace("_", " ").title()).classes("admet-muted text-xs")
-                    ui.label(label).classes("text-sm font-semibold")
-
-    def _render_plot(self, result_set: ResultSet) -> None:
-        from nicegui import ui
-
-        stats = [stat for stat in result_set.stats if isinstance(stat.value, int | float)]
-        if not stats:
-            return
-        ui.echart(
-            {
-                "tooltip": {},
-                "grid": {"left": 48, "right": 16, "top": 24, "bottom": 48},
-                "xAxis": {"type": "category", "data": [stat.name for stat in stats]},
-                "yAxis": {"type": "value"},
-                "series": [
-                    {
-                        "type": "bar",
-                        "data": [stat.value for stat in stats],
-                        "itemStyle": {"color": "#2563eb"},
-                    }
-                ],
-            }
-        ).classes("w-full h-64")
-
-    def _render_record_table(self, result_set: ResultSet) -> None:
-        from nicegui import ui
-
-        rows = [_record_to_row(index, record) for index, record in enumerate(result_set.records)]
-        if not rows:
-            rows = [{"id": 0, "sample_id": "", "engine": "", "status": "no records"}]
-        if len(rows) == 1:
-            columns = [
-                {
-                    "name": "field",
-                    "label": "Field",
-                    "field": "field",
-                    "align": "left",
-                    "style": "width: 12rem; max-width: 35%; white-space: normal;",
-                },
-                {
-                    "name": "value",
-                    "label": "Value",
-                    "field": "value",
-                    "align": "left",
-                    "style": "white-space: normal; overflow-wrap: anywhere; word-break: break-word;",
-                },
+            rows = [
+                {"field": key.replace("_", " ").title(), "value": _table_value(value, key)}
+                for key, value in sorted(metadata.items())
             ]
             ui.table(
-                columns=columns,
-                rows=_single_record_field_rows(rows[0]),
+                columns=[
+                    {"name": "field", "label": "Field", "field": "field", "align": "left"},
+                    {"name": "value", "label": "Value", "field": "value", "align": "left"},
+                ],
+                rows=rows,
                 row_key="field",
             ).classes("admet-record-table w-full").props("wrap-cells dense flat")
-            return
-        keys = sorted({key for row in rows for key in row})
-        columns = [{"name": key, "label": key.replace("_", " ").title(), "field": key} for key in keys]
-        ui.table(columns=columns, rows=rows, row_key="id").classes("admet-record-table w-full").props(
-            "wrap-cells dense"
-        )
 
     def _handle_control(self, stage: Stage, control: StageControl) -> None:
         self._activate_index(self.workflow.stages.index(stage), refresh=False)
         if control.action is not None:
-            self._run_action(control.action, control.completes)
+            self._execute_action(control.action, control.completes)
             return
         if control.skippable:
             self._skip_current()
@@ -760,17 +700,23 @@ class CoreWorkflowView:
             return
         self._refresh()
 
-    def _run_action(self, action: str, complete_after: bool = False) -> None:
+    def _execute_action(self, action: str, complete_after: bool = False) -> None:
         if self.engine is None:
             self._set_status("No engine is attached.", "warning")
             self._refresh()
             return
 
         try:
-            result = self.engine.run_action(
-                action,
-                self._engine_payload(),
-                EngineContext(metadata={"workflow": self.workflow.id, "stage": self.workflow.current_stage(self.state).id}),
+            stage = self.workflow.current_stage(self.state)
+            result = self.engine.run(
+                RunJob(
+                    id=f"{self.workflow.id}_{stage.id}_{int(time.time() * 1000)}",
+                    engine=self.engine.id,
+                    action=action,
+                    settings=self._engine_payload(),
+                    inputs=self._engine_inputs(),
+                    metadata={"workflow": self.workflow.id, "stage": stage.id},
+                )
             )
         except Exception as exc:
             self._set_status(f"{action} failed: {exc}", "error")
@@ -793,7 +739,14 @@ class CoreWorkflowView:
         if not self._latest_metadata().get("camera_live"):
             return
         try:
-            result = self.engine.run_action("camera_status", self._engine_payload())
+            result = self.engine.run(
+                RunJob(
+                    id=f"camera_status_{int(time.time() * 1000)}",
+                    engine=self.engine.id,
+                    action="camera_status",
+                    settings=self._engine_payload(),
+                )
+            )
         except Exception:
             return
         self.last_result = result
@@ -844,7 +797,7 @@ class CoreWorkflowView:
         if refresh:
             self._refresh()
 
-    def _store_stage_result(self, result: EngineResult) -> None:
+    def _store_stage_result(self, result: RunResult) -> None:
         data = dict(self.state.data)
         data[self.workflow.current_stage(self.state).id] = result
         self.state = replace(self.state, data=data)
@@ -858,19 +811,21 @@ class CoreWorkflowView:
             if name in self.engine_setting_names
         }
 
-    def _latest_result_set(self) -> ResultSet | None:
-        if self.last_result is not None:
-            return self.last_result.result_set
-        for value in reversed(list(self.state.data.values())):
-            if isinstance(value, EngineResult):
-                return value.result_set
-        return None
+    def _engine_inputs(self) -> dict[str, Path]:
+        inputs: dict[str, Path] = {}
+        for name, value in self._engine_payload().items():
+            if name in {"video_path", "input_dir"} and value:
+                key = "video" if name == "video_path" else "input_dir"
+                inputs[key] = Path(str(value))
+        return inputs
 
     def _latest_metadata(self) -> dict[str, Any]:
-        result_set = self._latest_result_set()
-        if result_set is None:
-            return {}
-        return result_set.metadata
+        if self.last_result is not None:
+            return dict(self.last_result.metadata)
+        for value in reversed(list(self.state.data.values())):
+            if isinstance(value, RunResult):
+                return dict(value.metadata)
+        return {}
 
     def _workflow_progress(self) -> float:
         total = max(1, len(self.workflow.stages))
@@ -1005,20 +960,6 @@ def _param_by_name(settings: ParamSchema, name: str):
         if param.name == name:
             return param
     raise KeyError(name)
-
-
-def _record_to_row(index: int, record: ResultRecord) -> dict[str, Any]:
-    row = {"id": index, "sample_id": record.sample_id, "engine": record.engine}
-    row.update({key: _table_value(value, key) for key, value in record.values.items()})
-    return row
-
-
-def _single_record_field_rows(row: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        {"field": key.replace("_", " ").title(), "value": value}
-        for key, value in row.items()
-        if key != "id"
-    ]
 
 
 def _table_value(value: Any, key: str = "") -> Any:

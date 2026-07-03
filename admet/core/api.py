@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
-from admet.core.engine import Engine, EngineContext, EngineResult, RunJob, RunResult
+from admet.core.engine import Engine, RunJob, RunResult
 from admet.core.schema import ParamSchema
 from admet.core.session import AdmetSession
 
@@ -37,28 +37,14 @@ class AdmetAPI:
             "session": self.session.project_id if self.session else None,
         }
 
-    def run_action(
-        self,
-        action: str,
-        settings: dict[str, Any],
-        context: EngineContext | None = None,
-    ) -> EngineResult:
-        context = context or EngineContext()
-        if context.session is None and self.session is not None:
-            context = EngineContext(
-                workdir=context.workdir,
-                metadata=context.metadata,
-                session=self.session,
-            )
-        if context.workdir is None and self.workdir is not None:
-            context = EngineContext(
-                workdir=self.workdir,
-                metadata=context.metadata,
-                session=context.session,
-            )
-        return self.engine.run_action(action, settings, context)
-
     def run(self, job: RunJob) -> RunResult:
         if job.engine != self.engine.id:
             raise ValueError(f"job engine {job.engine!r} does not match {self.engine.id!r}")
+        metadata = dict(job.metadata)
+        if self.session is not None:
+            metadata.setdefault("session_id", self.session.project_id)
+        if self.workdir is not None:
+            metadata.setdefault("workdir", self.workdir)
+        if metadata != job.metadata:
+            job = replace(job, metadata=metadata)
         return self.engine.run(job)

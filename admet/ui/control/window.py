@@ -37,7 +37,8 @@ from PySide6.QtWidgets import (
 )
 
 from admet.core.api import AdmetAPI
-from admet.core.engine import EngineResult
+from admet.core.engine import RunJob, RunResult
+from admet.core.project import ProjectStore
 from admet.core.schema import Param, ParamKind
 from admet.core.session import SessionFile, SessionItem, load_session, new_session, save_session, session_path
 from admet.core.workflow import Stage, StageControl, StageStatus
@@ -166,7 +167,7 @@ class ControlWindow(QMainWindow):
         self.workflow = create_control_workflow()
         self.workflow_state = self.workflow.initial_state()
         self.values = api.settings.defaults()
-        self.last_result: EngineResult | None = None
+        self.last_result: RunResult | None = None
         self.last_metadata: dict[str, Any] = {}
         self.runtime_state: dict[str, bool] = {
             "project": False,
@@ -1306,7 +1307,7 @@ class ControlWindow(QMainWindow):
         if payload is None:
             return None
         try:
-            result = self.api.run_action(action, payload)
+            result = self.api.run(self._build_run_job(action, payload))
         except Exception as exc:
             self._handle_action_error(action, exc, refresh=refresh, raise_errors=raise_errors)
             return None
@@ -1341,6 +1342,28 @@ class ControlWindow(QMainWindow):
             payload.update(settings)
         return payload
 
+    def _build_run_job(self, action: str, payload: dict[str, Any]) -> RunJob:
+        metadata = {
+            "workflow": self.workflow.id,
+            "stage": self.workflow.current_stage(self.workflow_state).id,
+        }
+        outputs: dict[str, Path] = {}
+        if action == "start_recording" and self.project_path is not None and self.api.session is not None:
+            label = str(payload.get("recording_label") or "recording")
+            store = ProjectStore(self.project_path, self.api.session)
+            target = store.control_recording_target(label)
+            outputs = target.outputs
+            metadata["recording_label"] = label
+            metadata["recording_id"] = target.recording_id
+        return RunJob(
+            id=f"{action}_{int(time.time() * 1000)}",
+            engine=self.api.engine.id,
+            action=action,
+            settings=payload,
+            outputs=outputs,
+            metadata=metadata,
+        )
+
     def _handle_action_error(
         self,
         action: str,
@@ -1359,16 +1382,16 @@ class ControlWindow(QMainWindow):
     def _handle_action_result(
         self,
         action: str,
-        result: EngineResult,
+        result: RunResult,
         *,
         refresh: bool,
         notify_success: bool,
-    ) -> EngineResult:
+    ) -> RunResult:
         self.last_result = result
-        self.last_metadata = dict(result.result_set.metadata)
+        self.last_metadata = dict(result.metadata)
         self._refresh_runtime_state()
         if action == "stop_recording":
-            self._store_recording_artifact(result.artifacts.get("recording"))
+            self._store_recording_artifact(result.metadata.get("recording"))
         warning = self._action_result_warning(action, self.last_metadata)
         if warning:
             self._set_status(action, "warning")
@@ -1612,7 +1635,13 @@ class ControlWindow(QMainWindow):
         if now - self._last_status_poll >= 0.5:
             self._last_status_poll = now
             try:
-                result = self.api.run_action("camera_status", {})
+                result = self.api.run(
+                    RunJob(
+                        id=f"camera_status_{int(now * 1000)}",
+                        engine=self.api.engine.id,
+                        action="camera_status",
+                    )
+                )
             except Exception as exc:
                 message = f"{type(exc).__name__}: {exc}"
                 if message != self._last_poll_error:
@@ -1621,7 +1650,7 @@ class ControlWindow(QMainWindow):
                 return
             self._last_poll_error = ""
             self.last_result = result
-            self.last_metadata = dict(result.result_set.metadata)
+            self.last_metadata = dict(result.metadata)
             self._refresh_runtime_state()
             self._stop_recording_on_finished_pipeline()
 
@@ -1987,7 +2016,13 @@ class ControlWindow(QMainWindow):
         if "fluigent_instrument_count" in self.last_metadata:
             return
         try:
-            result = self.api.run_action("verify_backend", {})
+            result = self.api.run(
+                RunJob(
+                    id=f"verify_backend_{int(time.time() * 1000)}",
+                    engine=self.api.engine.id,
+                    action="verify_backend",
+                )
+            )
         except Exception as exc:
             metadata = {
                 "fluigent_detect_ok": False,
@@ -1996,7 +2031,7 @@ class ControlWindow(QMainWindow):
                 "fluigent_device_message": str(exc),
             }
         else:
-            metadata = dict(result.result_set.metadata)
+            metadata = dict(result.metadata)
         self.last_metadata.update(metadata)
 
     def _stage_params(self, stage: Stage) -> list[Param]:
@@ -2137,14 +2172,16 @@ class ControlWindow(QMainWindow):
         return {name: self.values.get(name) for name in action_params}
 
     def _store_recording_artifact(self, recording: Any) -> None:
-        if not self._register_recording_artifact(recording):
+        if not isinstance(recording, dict) or self.project_path is None or self.api.session is None:
             return
-        if self.project_path is not None:
-            try:
-                self.project_path = save_session(self.project_path, self.api.session)
-                self.api.workdir = str(self.project_path)
-            except Exception as exc:
-                self._append_log(f"project: acquisition metadata save failed: {exc}")
+        try:
+            store = ProjectStore(self.project_path, self.api.session)
+            store.append_control_recording(recording)
+            self.project_path = store.path
+            self.api.session = store.session
+            self.api.workdir = str(store.path)
+        except Exception as exc:
+            self._append_log(f"project: acquisition metadata save failed: {exc}")
 
     def _register_recording_artifact(self, recording: Any) -> bool:
         if not isinstance(recording, dict) or self.api.session is None:
@@ -2266,10 +2303,10 @@ class ControlWindow(QMainWindow):
 
     def _recording_metadata_sources(self) -> list[dict[str, Any]]:
         recordings: list[dict[str, Any]] = []
-        artifacts = self.last_result.artifacts if self.last_result is not None else {}
-        artifact_recording = artifacts.get("recording") if isinstance(artifacts, dict) else None
-        if isinstance(artifact_recording, dict):
-            recordings.append(artifact_recording)
+        if self.last_result is not None:
+            result_recording = self.last_result.metadata.get("recording")
+            if isinstance(result_recording, dict):
+                recordings.append(result_recording)
 
         for key in ("current_recording", "last_recording"):
             value = self.last_metadata.get(key)
@@ -2483,7 +2520,13 @@ class ControlWindow(QMainWindow):
             "disconnect_fluidics",
         ):
             try:
-                self.api.run_action(action, {})
+                self.api.run(
+                    RunJob(
+                        id=f"close_{action}_{int(time.time() * 1000)}",
+                        engine=self.api.engine.id,
+                        action=action,
+                    )
+                )
             except Exception:
                 continue
         super().closeEvent(event)

@@ -157,20 +157,6 @@ class CellposeHelperTests(unittest.TestCase):
         ):
             detector.detect_droplets_cellpose(np.zeros((4, 4), dtype=np.uint8))
 
-    def test_cellpose_engine_returns_empty_result_for_empty_input(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            input_dir = Path(tmpdir) / "empty-sample"
-            input_dir.mkdir()
-
-            result = create_engine().run_action("analyze", {"input_dir": str(input_dir)})
-
-        stats = {stat.name: stat.value for stat in result.result_set.stats}
-        self.assertEqual(result.result_set.records, ())
-        self.assertEqual(stats["total_droplets"], 0)
-        self.assertEqual(stats["total_inclusions"], 0)
-        self.assertEqual(result.result_set.metadata["sample_id"], "empty-sample")
-        self.assertTrue(result.artifacts["cache_dir"])
-
     def test_cellpose_engine_writes_raw_rows_to_job_sink(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             input_dir = Path(tmpdir) / "empty-sample"

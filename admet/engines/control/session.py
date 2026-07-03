@@ -8,9 +8,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from admet.core.engine import EngineResult
-from admet.core.schema import ResultSet
-
 from .camera import VideoWorker
 from .fluidics import CsvLogger
 
@@ -34,7 +31,10 @@ class RecordingCamera(Protocol):
 
 
 class ControlBackend(Protocol):
-    def run_action(self, action: str, settings: dict[str, Any], context=None) -> EngineResult:
+    def start_recording(self, settings: dict[str, Any]) -> str:
+        ...
+
+    def stop_recording(self) -> None:
         ...
 
 
@@ -131,8 +131,7 @@ class RecordingSession:
         if not self.camera.start_recording(writer, max_frames=max_frames, max_time=max_time):
             raise RuntimeError("Failed to start camera recording")
 
-        result = self.control.run_action(
-            "start_recording",
+        csv_path = self.control.start_recording(
             {
                 "fluidics_dir": str(fluidics_dir),
                 "csv_filename": csv_file.name,
@@ -149,7 +148,7 @@ class RecordingSession:
             height=height,
             fps=fps,
             converted_fps=fps,
-            fluidics_csv=str(result.artifacts.get("csv_path", "")),
+            fluidics_csv=str(csv_path),
         )
         self.write_metadata()
         return self.current
@@ -164,7 +163,7 @@ class RecordingSession:
         else:
             frames_recorded = _last_recording_frames(self.camera)
         writer_frame_count = _writer_frame_count(self.camera) or writer_frame_count
-        self.control.run_action("stop_recording", {})
+        self.control.stop_recording()
 
         now = time.monotonic()
         output_dir = Path(self.current.output_dir)
@@ -225,7 +224,6 @@ class RecordingCoordinator:
         self,
         settings: dict[str, Any],
         *,
-        context: Any | None = None,
         camera_recorder: RecordingCamera | None = None,
         frame_size: tuple[int, int] = (0, 0),
     ) -> dict[str, Any]:
@@ -237,18 +235,17 @@ class RecordingCoordinator:
                 "recording": recording.to_dict() if recording is not None else {},
             }
 
-        report_root = self._recording_root(settings, context)
+        report_root = self._recording_root(settings)
         recording_label = str(settings["recording_label"])
         if camera_recorder is not None:
             return self._start_camera_recording(
                 settings,
-                context,
                 camera_recorder,
                 report_root,
                 recording_label,
                 frame_size,
             )
-        return self._start_csv_only_recording(settings, context, report_root, recording_label)
+        return self._start_csv_only_recording(settings, report_root, recording_label)
 
     def stop_recording(self) -> dict[str, Any]:
         if self._recording_session is not None and self._recording_session.current is not None:
@@ -327,7 +324,6 @@ class RecordingCoordinator:
     def _start_camera_recording(
         self,
         settings: dict[str, Any],
-        context: Any | None,
         camera_recorder: RecordingCamera,
         report_root: Path,
         recording_label: str,
@@ -338,7 +334,7 @@ class RecordingCoordinator:
             session = RecordingSession(
                 report_root,
                 camera_recorder,
-                _CsvRecordingBackend(self, context),
+                _CsvRecordingBackend(self),
                 writer_factory=self._writer_factory,
                 write_metadata=not _has_explicit_recording_paths(settings),
             )
@@ -368,7 +364,6 @@ class RecordingCoordinator:
     def _start_csv_only_recording(
         self,
         settings: dict[str, Any],
-        context: Any | None,
         report_root: Path,
         recording_label: str,
     ) -> dict[str, Any]:
@@ -385,7 +380,7 @@ class RecordingCoordinator:
             csv_filename = csv_file.name
         else:
             csv_filename = f"{recording_id}.csv"
-        csv_path = self._start_csv_recording(str(fluidics_dir), context, csv_filename=csv_filename)
+        csv_path = self._start_csv_recording(str(fluidics_dir), csv_filename=csv_filename)
         metadata = RecordingMetadata(
             started_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
             started_monotonic_s=time.monotonic(),
@@ -408,14 +403,11 @@ class RecordingCoordinator:
     def _start_csv_recording(
         self,
         fluidics_dir_value: str,
-        context: Any | None = None,
         *,
         csv_prefix: str = "fluidics",
         csv_filename: str = "",
     ) -> str:
         fluidics_dir = Path(fluidics_dir_value)
-        if context and context.workdir and not fluidics_dir.is_absolute():
-            fluidics_dir = Path(context.workdir) / fluidics_dir
         self.csv_logger = CsvLogger(fluidics_dir, prefix=csv_prefix, filename=csv_filename)
         state = self._hardware_state()
         filepath = self.csv_logger.start(
@@ -442,7 +434,7 @@ class RecordingCoordinator:
             if callable(preview_setter):
                 preview_setter(True)
 
-    def _recording_root(self, settings: dict[str, Any], context: Any | None) -> Path:
+    def _recording_root(self, settings: dict[str, Any]) -> Path:
         if settings.get("video_path"):
             return Path(str(settings["video_path"])).parent.parent
         if settings.get("fluidics_csv_path"):
@@ -451,8 +443,6 @@ class RecordingCoordinator:
         if not recording_root_value:
             raise RuntimeError("Recording root is not configured")
         path = Path(recording_root_value)
-        if context and context.workdir and not path.is_absolute():
-            return Path(context.workdir) / path
         return path
 
 
@@ -460,29 +450,18 @@ class _CsvRecordingBackend:
     def __init__(
         self,
         coordinator: RecordingCoordinator,
-        context: Any | None,
     ) -> None:
         self.coordinator = coordinator
-        self.context = context
 
-    def run_action(
-        self,
-        action: str,
-        settings: dict[str, Any],
-        context: Any | None = None,
-    ) -> EngineResult:
-        if action == "start_recording":
-            csv_path = self.coordinator._start_csv_recording(
-                settings["fluidics_dir"],
-                context or self.context,
-                csv_prefix=str(settings.get("csv_prefix") or "fluidics"),
-                csv_filename=str(settings.get("csv_filename") or ""),
-            )
-            return EngineResult(ResultSet(), artifacts={"csv_path": csv_path})
-        if action == "stop_recording":
-            self.coordinator._stop_csv_recording()
-            return EngineResult(ResultSet())
-        raise ValueError(f"unsupported recording action: {action}")
+    def start_recording(self, settings: dict[str, Any]) -> str:
+        return self.coordinator._start_csv_recording(
+            settings["fluidics_dir"],
+            csv_prefix=str(settings.get("csv_prefix") or "fluidics"),
+            csv_filename=str(settings.get("csv_filename") or ""),
+        )
+
+    def stop_recording(self) -> None:
+        self.coordinator._stop_csv_recording()
 
 
 def _default_writer_factory(video_dir: Path, prefix: str, width: int, height: int, fps: float):

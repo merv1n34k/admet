@@ -5,21 +5,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .actions import ActionSpec
-from admet.core.schema import ParamSchema, ResultSet
-from admet.core.session import AdmetSession
-
-
-@dataclass(frozen=True)
-class EngineContext:
-    workdir: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-    session: AdmetSession | None = None
-
-
-@dataclass(frozen=True)
-class EngineResult:
-    result_set: ResultSet
-    artifacts: dict[str, Any] = field(default_factory=dict)
+from admet.core.schema import ParamSchema
 
 
 class RunSink(Protocol):
@@ -57,12 +43,4 @@ class Engine(Protocol):
     actions: tuple[ActionSpec, ...]
 
     def run(self, job: RunJob) -> RunResult:
-        ...
-
-    def run_action(
-        self,
-        action: str,
-        settings: dict[str, Any],
-        context: EngineContext | None = None,
-    ) -> EngineResult:
         ...

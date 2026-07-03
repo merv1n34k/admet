@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from admet.core.engine import EngineContext
+from admet.core.engine import RunJob
 from admet.engines.control.engine import FluidicsControlEngine
 from admet.engines.control.camera import Camera
 from admet.engines.control.camera.camera import CameraAvailability
@@ -16,6 +16,26 @@ from admet.engines.control.fluidics.config import (
     build_priming_protocol,
     build_wash_protocol,
 )
+
+
+def run_engine(
+    engine: FluidicsControlEngine,
+    action: str,
+    settings: dict | None = None,
+    *,
+    outputs: dict | None = None,
+    metadata: dict | None = None,
+):
+    return engine.run(
+        RunJob(
+            id=action,
+            engine=engine.id,
+            action=action,
+            settings=dict(settings or {}),
+            outputs=dict(outputs or {}),
+            metadata=dict(metadata or {}),
+        )
+    )
 
 
 class FakeControlSDK:
@@ -207,23 +227,22 @@ class FluidicsControlEngineTests(unittest.TestCase):
         sdk = FakeControlSDK()
         engine = FluidicsControlEngine(sdk)
 
-        result = engine.run_action(
+        result = run_engine(engine,
             "connect_fluidics",
             {"simulated": True, "start_polling": False},
         )
 
-        metadata = result.result_set.metadata
+        metadata = result.metadata
         self.assertEqual(metadata["action"], "connect_fluidics")
         self.assertTrue(metadata["connected"])
         self.assertTrue(metadata["simulated"])
         self.assertEqual(metadata["pressure_channels"], 2)
         self.assertEqual(metadata["sensor_channels"], 2)
-        self.assertEqual(result.result_set.records, ())
         self.assertEqual(len(engine.channel_manager.channels), 2)
         self.assertFalse(metadata["polling_active"])
         self.assertIn(("init", None), sdk.calls)
 
-        engine.run_action("disconnect_fluidics", {})
+        run_engine(engine, "disconnect_fluidics", {})
         self.assertFalse(engine.hardware.connected)
         self.assertIn(("close",), sdk.calls)
 
@@ -235,14 +254,14 @@ class FluidicsControlEngineTests(unittest.TestCase):
         sdk = NoInstrumentSDK()
         engine = FluidicsControlEngine(sdk)
 
-        preflight = engine.run_action("verify_backend", {})
-        self.assertEqual(preflight.result_set.metadata["fluigent_instrument_count"], 0)
+        preflight = run_engine(engine, "verify_backend", {})
+        self.assertEqual(preflight.metadata["fluigent_instrument_count"], 0)
 
-        missing = engine.run_action(
+        missing = run_engine(engine,
             "connect_fluidics",
             {"simulated": False, "start_polling": False},
         )
-        metadata = missing.result_set.metadata
+        metadata = missing.metadata
 
         self.assertFalse(metadata["fluigent_connect_ok"])
         self.assertFalse(metadata["connected"])
@@ -250,32 +269,31 @@ class FluidicsControlEngineTests(unittest.TestCase):
         self.assertEqual(engine.channel_manager.channels, [])
         self.assertNotIn(("init", None), sdk.calls)
 
-        connected = engine.run_action(
+        connected = run_engine(engine,
             "connect_fluidics",
             {"simulated": True, "start_polling": False},
         )
 
-        self.assertTrue(connected.result_set.metadata["fluigent_connect_ok"])
-        self.assertTrue(connected.result_set.metadata["connected"])
-        self.assertTrue(connected.result_set.metadata["simulated"])
+        self.assertTrue(connected.metadata["fluigent_connect_ok"])
+        self.assertTrue(connected.metadata["connected"])
+        self.assertTrue(connected.metadata["simulated"])
 
-    def test_start_recording_uses_context_workdir(self):
+    def test_start_recording_uses_configured_recording_root(self):
         sdk = FakeControlSDK()
         engine = FluidicsControlEngine(sdk)
-        engine.run_action("connect_fluidics", {"simulated": False, "start_polling": False})
+        run_engine(engine, "connect_fluidics", {"simulated": False, "start_polling": False})
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = engine.run_action(
+            result = run_engine(engine,
                 "start_recording",
                 {
-                    "recording_root": "records",
+                    "recording_root": str(Path(tmpdir) / "records"),
                     "recording_label": "set01_rep01",
                 },
-                EngineContext(workdir=tmpdir),
             )
-            csv_path = Path(result.artifacts["csv_path"])
-            self.assertTrue(result.result_set.metadata["recording_active"])
-            engine.run_action("stop_recording", {})
+            csv_path = Path(result.metadata["csv_path"])
+            self.assertTrue(result.metadata["recording_active"])
+            run_engine(engine, "stop_recording", {})
 
         self.assertEqual(csv_path.parent.name, "fluidics")
         self.assertEqual(csv_path.parent.parent.name, "records")
@@ -288,48 +306,46 @@ class FluidicsControlEngineTests(unittest.TestCase):
         camera = FakeCameraAcquisition()
         engine._camera._acquisition = camera
         engine._camera._on_frame(np.zeros((12, 16), dtype=np.uint8))
-        engine.run_action("connect_fluidics", {"simulated": False, "start_polling": False})
+        run_engine(engine, "connect_fluidics", {"simulated": False, "start_polling": False})
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = engine.run_action(
+            result = run_engine(engine,
                 "start_recording",
                 {
-                    "recording_root": "records",
+                    "recording_root": str(Path(tmpdir) / "records"),
                     "recording_label": "set01_rep02",
                     "camera_video_fps": 120.0,
                     "camera_preview_off_recording": True,
                 },
-                EngineContext(workdir=tmpdir),
             )
-            stop = engine.run_action("stop_recording", {})
-            second = engine.run_action(
+            stop = run_engine(engine, "stop_recording", {})
+            second = run_engine(engine,
                 "start_recording",
                 {
-                    "recording_root": "records",
+                    "recording_root": str(Path(tmpdir) / "records"),
                     "recording_label": "set01_rep03",
                     "camera_video_fps": 120.0,
                     "camera_preview_off_recording": True,
                 },
-                EngineContext(workdir=tmpdir),
             )
-            second_stop = engine.run_action("stop_recording", {})
-            report_dir = Path(result.artifacts["report_dir"])
+            second_stop = run_engine(engine, "stop_recording", {})
+            report_dir = Path(result.metadata["report_dir"])
             metadata_path = report_dir / "metadata.json"
             metadata_exists = metadata_path.exists()
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
-        self.assertTrue(result.artifacts["csv_path"].endswith(".csv"))
-        self.assertEqual(second.artifacts["report_dir"], result.artifacts["report_dir"])
+        self.assertTrue(result.metadata["csv_path"].endswith(".csv"))
+        self.assertEqual(second.metadata["report_dir"], result.metadata["report_dir"])
         self.assertEqual(report_dir.name, "records")
         self.assertTrue(metadata_exists)
-        self.assertTrue(Path(stop.artifacts["video_path"]).name.startswith("set01_rep02_"))
-        self.assertTrue(Path(second_stop.artifacts["video_path"]).name.startswith("set01_rep03_"))
+        self.assertTrue(Path(stop.metadata["video_path"]).name.startswith("set01_rep02_"))
+        self.assertTrue(Path(second_stop.metadata["video_path"]).name.startswith("set01_rep03_"))
         self.assertEqual(metadata["recording_count"], 2)
-        self.assertEqual(Path(stop.artifacts["recording"]["fluidics_csv"]).parent.name, "fluidics")
-        self.assertEqual(stop.artifacts["recording"]["width"], 16)
-        self.assertEqual(stop.artifacts["recording"]["height"], 12)
-        self.assertEqual(stop.artifacts["recording"]["converted_fps"], 120.0)
-        self.assertGreater(stop.artifacts["recording"]["acquisition_fps"], 0.0)
+        self.assertEqual(Path(stop.metadata["recording"]["fluidics_csv"]).parent.name, "fluidics")
+        self.assertEqual(stop.metadata["recording"]["width"], 16)
+        self.assertEqual(stop.metadata["recording"]["height"], 12)
+        self.assertEqual(stop.metadata["recording"]["converted_fps"], 120.0)
+        self.assertGreater(stop.metadata["recording"]["acquisition_fps"], 0.0)
         self.assertFalse(engine.recording_active)
         self.assertTrue(camera.preview_enabled)
 
@@ -436,10 +452,10 @@ class FluidicsControlEngineTests(unittest.TestCase):
     def test_fluidics_control_actions_use_configured_channels(self):
         sdk = FakeControlSDK()
         engine = FluidicsControlEngine(sdk)
-        engine.run_action("connect_fluidics", {"simulated": False, "start_polling": False})
+        run_engine(engine, "connect_fluidics", {"simulated": False, "start_polling": False})
 
-        calibrate = engine.run_action("calibrate", {})
-        corrections = engine.run_action(
+        calibrate = run_engine(engine, "calibrate", {})
+        corrections = run_engine(engine,
             "apply_corrections",
             {
                 "oil_l_calibration": "IPA",
@@ -456,13 +472,13 @@ class FluidicsControlEngineTests(unittest.TestCase):
                 "beads_m_quadratic": 0.0,
             },
         )
-        engine.run_action("set_channel_flow", {"channel_index": 1, "channel_flow_ul_min": 67.0})
-        engine.run_action("set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 120.0})
-        engine.run_action("set_channel_response", {"channel_index": 1, "channel_response_s": 4})
-        engine.run_action("stop_channel", {"channel_index": 1})
+        run_engine(engine, "set_channel_flow", {"channel_index": 1, "channel_flow_ul_min": 67.0})
+        run_engine(engine, "set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 120.0})
+        run_engine(engine, "set_channel_response", {"channel_index": 1, "channel_response_s": 4})
+        run_engine(engine, "stop_channel", {"channel_index": 1})
 
-        self.assertEqual(calibrate.result_set.metadata["action"], "calibrate")
-        self.assertEqual(corrections.result_set.metadata["action"], "apply_corrections")
+        self.assertEqual(calibrate.metadata["action"], "calibrate")
+        self.assertEqual(corrections.metadata["action"], "apply_corrections")
         self.assertIn(("calibrate", 0), sdk.calls)
         self.assertIn(("calibrate", 1), sdk.calls)
         self.assertIn(("sensor_calibration", 0, 2), sdk.calls)
@@ -478,20 +494,20 @@ class FluidicsControlEngineTests(unittest.TestCase):
         engine = FluidicsControlEngine(FakeControlSDK())
         engine.camera = Camera(EmptyPylon)
 
-        refresh = engine.run_action("refresh_cameras", {})
-        connect = engine.run_action("connect_camera", {})
+        refresh = run_engine(engine, "refresh_cameras", {})
+        connect = run_engine(engine, "connect_camera", {})
 
-        self.assertTrue(refresh.result_set.metadata["pypylon_available"])
-        self.assertEqual(refresh.result_set.metadata["camera_count"], 0)
-        self.assertFalse(connect.result_set.metadata["camera_connect_ok"])
-        self.assertIn("not currently available", connect.result_set.metadata["camera_connect_message"])
+        self.assertTrue(refresh.metadata["pypylon_available"])
+        self.assertEqual(refresh.metadata["camera_count"], 0)
+        self.assertFalse(connect.metadata["camera_connect_ok"])
+        self.assertIn("not currently available", connect.metadata["camera_connect_message"])
 
     def test_apply_camera_settings_uses_pylonguy_parameter_mapping(self):
         engine = FluidicsControlEngine(FakeControlSDK())
         camera = FakeEngineCamera()
         engine.camera = camera
 
-        result = engine.run_action(
+        result = run_engine(engine,
             "apply_camera_settings",
             {
                 "camera_width": 512,
@@ -512,7 +528,7 @@ class FluidicsControlEngineTests(unittest.TestCase):
             },
         )
 
-        self.assertTrue(result.result_set.metadata["camera_settings_ok"])
+        self.assertTrue(result.metadata["camera_settings_ok"])
         self.assertIn(("OffsetX", 0), camera.set_calls)
         self.assertIn(("OffsetY", 0), camera.set_calls)
         self.assertEqual(camera.applied["Width"], 512)

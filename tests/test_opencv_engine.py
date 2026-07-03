@@ -74,29 +74,5 @@ class OpenCVEngineTests(unittest.TestCase):
             self.assertEqual(rows[0]["kind"], "frame")
             self.assertTrue(result.metadata["cache_dir"])
 
-    def test_action_returns_shared_result_set(self):
-        from admet.engines.analyze.opencv import create_engine
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            video_path = Path(tmpdir) / "droplets.avi"
-            write_synthetic_video(video_path)
-
-            result = create_engine().run_action(
-                "analyze",
-                {
-                    "video_path": str(video_path),
-                    "microns_per_pixel": 1.0,
-                    "fps": 30.0,
-                    "max_frames": 30,
-                },
-            )
-
-            stats = {stat.name: stat.value for stat in result.result_set.stats}
-            self.assertGreater(stats["total_detections"], 0)
-            self.assertGreaterEqual(stats["frames_processed"], 1)
-            self.assertEqual(result.result_set.metadata["sample_id"], "droplets")
-            self.assertIsNone(result.artifacts["cache_dir"])
-
-
 if __name__ == "__main__":
     unittest.main()

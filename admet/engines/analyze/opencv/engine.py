@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from admet.core.engine import ActionSpec, EngineContext, EngineResult, RunJob, RunResult, validate_action_settings
-from admet.core.schema import Param, ParamKind, ParamSchema, ResultRecord, ResultSet, SummaryStat
+from admet.core.engine import ActionSpec, RunJob, RunResult, validate_action_settings
+from admet.core.schema import Param, ParamKind, ParamSchema
 
 from .pipeline import DropletPipeline
 
@@ -29,31 +29,16 @@ class OpenCVAnalysisEngine:
         ),
     )
 
-    def run_action(
-        self,
-        action: str,
-        settings: dict[str, Any],
-        context: EngineContext | None = None,
-    ) -> EngineResult:
-        normalized = validate_action_settings(self.settings, self.actions, action, settings)
-        result, _row_count = self._process_video(
-            normalized["video_path"],
-            normalized,
-            cache_dir=None,
-            job=None,
-        )
-        return result
-
     def run(self, job: RunJob) -> RunResult:
         if job.action != "analyze":
             raise ValueError(f"unsupported action for {self.id}: {job.action}")
-        video_path = _job_input(job, "video")
-        settings = self.settings.defaults()
-        settings.update(job.settings)
+        video_path = _job_input(job, "video", "video_path")
+        settings = dict(job.settings)
         settings["video_path"] = str(video_path)
-        result, row_count = self._process_video(
+        normalized = validate_action_settings(self.settings, self.actions, job.action, settings)
+        data, row_count = self._process_video(
             str(video_path),
-            settings,
+            normalized,
             cache_dir=job.cache_dir,
             job=job,
         )
@@ -63,8 +48,19 @@ class OpenCVAnalysisEngine:
             action=job.action,
             metadata={
                 "row_count": row_count,
-                "cache_dir": result.artifacts.get("cache_dir"),
-                **result.result_set.metadata,
+                "sample_id": Path(video_path).stem,
+                "cache_dir": data.get("cache_dir"),
+                "frames_processed": data.get("frames_processed", 0),
+                "total_detections": data.get("total_detections", 0),
+                "total_droplets": data.get("total_droplets", 0),
+                "mean_diameter_um": data.get("mean_diameter_um", 0.0),
+                "std_diameter_um": data.get("std_diameter_um", 0.0),
+                "mean_speed_mm_s": data.get("mean_speed_mm_s", 0.0),
+                "frequency_hz": data.get("frequency_hz", 0.0),
+                "threshold": data.get("threshold"),
+                "trajectory": data.get("trajectory", {}),
+                "true_stats": data.get("true_stats", {}),
+                "droplet_geometry": data.get("droplet_geometry", {}),
             },
         )
 
@@ -75,7 +71,7 @@ class OpenCVAnalysisEngine:
         *,
         cache_dir: Path | None,
         job: RunJob | None,
-    ) -> tuple[EngineResult, int]:
+    ) -> tuple[dict[str, Any], int]:
         config = self._config_from_settings(settings, cache_dir=cache_dir)
 
         pipeline = DropletPipeline(config)
@@ -84,15 +80,8 @@ class OpenCVAnalysisEngine:
         if "error" in data:
             raise RuntimeError(data["error"])
 
-        result = EngineResult(
-            result_set=self._to_result_set(video_path, data),
-            artifacts={
-                "background": pipeline.background,
-                "cache_dir": data.get("cache_dir"),
-            },
-        )
         row_count = self._write_raw_rows(job, data) if job is not None else 0
-        return result, row_count
+        return data, row_count
 
     def _config_from_settings(
         self,
@@ -171,41 +160,15 @@ class OpenCVAnalysisEngine:
             row_count += 1
         return row_count
 
-    def _to_result_set(self, video_path: str, result: dict[str, Any]) -> ResultSet:
-        sample_id = Path(video_path).stem
-        records = tuple(
-            ResultRecord(sample_id=sample_id, engine=self.id, values=track)
-            for track in result.get("tracks", [])
-        )
-        stats = tuple(
-            SummaryStat(name=name, value=value, unit=unit)
-            for name, unit, value in (
-                ("total_droplets", "", result.get("total_droplets", 0)),
-                ("total_detections", "", result.get("total_detections", 0)),
-                ("frames_processed", "", result.get("frames_processed", 0)),
-                ("mean_diameter", "um", result.get("mean_diameter_um", 0.0)),
-                ("std_diameter", "um", result.get("std_diameter_um", 0.0)),
-                ("mean_speed", "mm/s", result.get("mean_speed_mm_s", 0.0)),
-                ("frequency", "Hz", result.get("frequency_hz", 0.0)),
-            )
-        )
-        metadata = {
-            "sample_id": sample_id,
-            "threshold": result.get("threshold"),
-            "trajectory": result.get("trajectory", {}),
-            "true_stats": result.get("true_stats", {}),
-            "droplet_geometry": result.get("droplet_geometry", {}),
-        }
-        return ResultSet(records=records, stats=stats, metadata=metadata)
-
-
 def create_engine() -> OpenCVAnalysisEngine:
     return OpenCVAnalysisEngine()
 
 
-def _job_input(job: RunJob, key: str) -> Path:
+def _job_input(job: RunJob, key: str, setting_key: str) -> Path:
     if key in job.inputs:
         return job.inputs[key]
+    if setting_key in job.settings:
+        return Path(str(job.settings[setting_key]))
     if job.inputs:
         return next(iter(job.inputs.values()))
     raise ValueError(f"{job.id} requires input {key!r}")

@@ -4,7 +4,6 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from admet.core.engine import EngineContext
 from admet.core.project import ProjectStore
 from admet.core.run import JsonlRunSink
 from admet.core.session import (
@@ -263,13 +262,6 @@ class SessionProjectTests(unittest.TestCase):
         self.assertEqual(loaded.caches[0].engine, "analyze")
         self.assertEqual(loaded.items[0].id, target.run_id)
         self.assertEqual(loaded.items[0].caches, (target.run_id,))
-
-    def test_engine_context_can_carry_session(self):
-        session = new_session("project-1", "analysis")
-        context = EngineContext(session=session)
-
-        self.assertEqual(context.session.project_id, "project-1")
-
 
 if __name__ == "__main__":
     unittest.main()
