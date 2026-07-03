@@ -11,7 +11,13 @@ from admet.core.engine import ActionSpec, EngineRegistry, RunJob, RunResult
 from admet.core.project import ProjectStore
 from admet.core.schema import Param, ParamKind, ParamSchema
 from admet.core.session import load_session
-from admet.ui.analyze.renderer import AnalyzeWorkflowView, StoredRun, read_raw_rows, summarize_raw_rows
+from admet.ui.analyze.renderer import (
+    AnalyzeWorkflowView,
+    MatrixRow,
+    StoredRun,
+    read_raw_rows,
+    summarize_raw_rows,
+)
 from admet.workflows import create_analyze_workflow
 
 
@@ -174,6 +180,73 @@ class AnalyzeWorkflowViewTests(unittest.TestCase):
         self.assertEqual(view.notice_kind, "success")
         self.assertEqual(len(view.matrix), 1)
         self.assertEqual(view.matrix[0].sample_id, "set01")
+
+    def test_target_to_run_uses_row_specific_engine_settings(self):
+        view = AnalyzeWorkflowView(
+            create_analyze_workflow(),
+            create_analyze_workflow().initial_state(),
+            EngineRegistry(),
+        )
+        row = MatrixRow(
+            uid="target-1",
+            project_path="/tmp/study.admetp",
+            source_path="/tmp/video.avi",
+            engine="opencv",
+            sample_id="set01",
+            settings={
+                "microns_per_pixel": 2.5,
+                "fps": 150.0,
+                "max_frames": 90,
+                "start_frame": 10,
+                "end_frame": 120,
+                "roi_enabled": True,
+                "roi_x": 16,
+                "roi_y": 24,
+                "roi_width": 320,
+                "roi_height": 160,
+            },
+        )
+
+        target = view._target_to_run(row)
+
+        self.assertEqual(target.settings["microns_per_pixel"], 2.5)
+        self.assertEqual(target.settings["fps"], 150.0)
+        self.assertEqual(target.settings["max_frames"], 90)
+        self.assertEqual(target.settings["start_frame"], 10)
+        self.assertEqual(target.settings["end_frame"], 120)
+        self.assertEqual(target.settings["roi_x"], 16)
+        self.assertEqual(target.settings["roi_y"], 24)
+        self.assertEqual(target.settings["roi_width"], 320)
+        self.assertEqual(target.settings["roi_height"], 160)
+
+    def test_target_to_run_uses_row_specific_cellpose_settings(self):
+        view = AnalyzeWorkflowView(
+            create_analyze_workflow(),
+            create_analyze_workflow().initial_state(),
+            EngineRegistry(),
+        )
+        row = MatrixRow(
+            uid="target-1",
+            project_path="/tmp/study.admetp",
+            source_path="/tmp/images",
+            engine="cellpose",
+            sample_id="set01",
+            settings={
+                "config_path": "/tmp/cellpose.json",
+                "px_to_um": 1.9,
+                "frame_limit": 20,
+                "use_cache": False,
+                "detect_inclusions": False,
+            },
+        )
+
+        target = view._target_to_run(row)
+
+        self.assertEqual(target.settings["config_path"], "/tmp/cellpose.json")
+        self.assertEqual(target.settings["px_to_um"], 1.9)
+        self.assertEqual(target.settings["frame_limit"], 20)
+        self.assertFalse(target.settings["use_cache"])
+        self.assertFalse(target.settings["detect_inclusions"])
 
     def test_raw_rows_are_summarized_for_view_plots(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -18,6 +18,12 @@ class OpenCVAnalysisEngine:
             Param("microns_per_pixel", "Microns Per Pixel", ParamKind.FLOAT, default=1.0),
             Param("fps", "FPS", ParamKind.FLOAT, default=0.0, minimum=0.0),
             Param("max_frames", "Max Frames", ParamKind.INTEGER, default=None),
+            Param("start_frame", "Start Frame", ParamKind.INTEGER, default=0, minimum=0),
+            Param("end_frame", "End Frame", ParamKind.INTEGER, default=None, minimum=0),
+            Param("roi_x", "ROI X", ParamKind.INTEGER, default=0, minimum=0),
+            Param("roi_y", "ROI Y", ParamKind.INTEGER, default=0, minimum=0),
+            Param("roi_width", "ROI Width", ParamKind.INTEGER, default=0, minimum=0),
+            Param("roi_height", "ROI Height", ParamKind.INTEGER, default=0, minimum=0),
         )
     )
     actions = (
@@ -103,6 +109,20 @@ class OpenCVAnalysisEngine:
         }
         if cache_dir is not None:
             config["processing"] = {"cache_dir": str(cache_dir)}
+        video_config: dict[str, Any] = {}
+        if settings["start_frame"]:
+            video_config["start_frame"] = settings["start_frame"]
+        if settings["end_frame"] is not None:
+            video_config["end_frame"] = settings["end_frame"]
+        if settings["roi_width"] and settings["roi_height"]:
+            video_config["roi"] = (
+                settings["roi_x"],
+                settings["roi_y"],
+                settings["roi_width"],
+                settings["roi_height"],
+            )
+        if video_config:
+            config["video"] = video_config
         if settings["fps"]:
             config["analysis"]["fps"] = settings["fps"]
         if settings["max_frames"] is not None:

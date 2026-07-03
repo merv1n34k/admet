@@ -4,7 +4,7 @@ import csv
 import json
 import math
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from statistics import mean, pstdev
 from typing import Any
@@ -35,6 +35,7 @@ class MatrixRow:
     sample_id: str
     cache_policy: str = "use"
     active: bool = True
+    settings: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -575,21 +576,43 @@ class AnalyzeWorkflowView:
             with ui.element("div").classes("mock-editor-grid w-full"):
                 with ui.column().classes("gap-2"):
                     ui.html(_mock_video_preview_html(target)).classes("w-full")
+                    with ui.row().classes("editor-control-row w-full"):
+                        ui.number(
+                            "Preview frame",
+                            value=_row_int(target, "preview_frame", 0),
+                            min=0,
+                            step=1,
+                            on_change=lambda event, row=target: self._set_row_int(
+                                row,
+                                "preview_frame",
+                                event.value,
+                            ),
+                        ).classes("compact-number grow")
+                        ui.button(
+                            "Reset crop",
+                            on_click=lambda row=target: self._reset_opencv_crop(row),
+                        ).props("dense no-caps outline")
                 with ui.column().classes("gap-2"):
                     ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
-                    ui.table(
-                        columns=[
-                            {"name": "setting", "label": "Setting", "field": "setting", "align": "left"},
-                            {"name": "value", "label": "Value", "field": "value", "align": "left"},
-                        ],
-                        rows=[
-                            {"setting": "Source", "value": target.source_path},
-                            {"setting": "Microns / px", "value": self.settings["opencv_microns_per_pixel"]},
-                            {"setting": "FPS", "value": self.settings["opencv_fps"]},
-                            {"setting": "Max frames", "value": self.settings["opencv_max_frames"] or "all"},
-                            {"setting": "Cache policy", "value": target.cache_policy},
-                        ],
-                    ).classes("w-full").props("dense flat hide-bottom")
+                    ui.label(target.source_path).classes("muted text-xs path-label")
+                    with ui.element("div").classes("editor-grid"):
+                        self._number_editor(
+                            target,
+                            "microns_per_pixel",
+                            "Microns / px",
+                            self.settings["opencv_microns_per_pixel"],
+                            step=0.01,
+                        )
+                        self._number_editor(target, "fps", "FPS", self.settings["opencv_fps"], step=1)
+                        self._number_editor(target, "max_frames", "Max frames", 0, step=1)
+                        self._number_editor(target, "start_frame", "Start frame", 0, step=1)
+                        self._number_editor(target, "end_frame", "End frame", 0, step=1)
+                        self._bool_editor(target, "roi_enabled", "Crop ROI", False)
+                    with ui.element("div").classes("editor-grid editor-grid-roi"):
+                        self._number_editor(target, "roi_x", "ROI X", 0, step=8)
+                        self._number_editor(target, "roi_y", "ROI Y", 0, step=8)
+                        self._number_editor(target, "roi_width", "ROI W", 0, step=8)
+                        self._number_editor(target, "roi_height", "ROI H", 0, step=8)
 
     def _render_cellpose_editor(self) -> None:
         from nicegui import ui
@@ -603,21 +626,55 @@ class AnalyzeWorkflowView:
             with ui.element("div").classes("mock-editor-grid w-full"):
                 with ui.column().classes("gap-2"):
                     ui.html(_mock_cellpose_preview_html(target)).classes("w-full")
+                    ui.number(
+                        "Image frame",
+                        value=_row_int(target, "image_frame", 1),
+                        min=1,
+                        step=1,
+                        on_change=lambda event, row=target: self._set_row_int(
+                            row,
+                            "image_frame",
+                            event.value,
+                        ),
+                    ).classes("compact-number")
                 with ui.column().classes("gap-2"):
                     ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
-                    ui.table(
-                        columns=[
-                            {"name": "setting", "label": "Setting", "field": "setting", "align": "left"},
-                            {"name": "value", "label": "Value", "field": "value", "align": "left"},
-                        ],
-                        rows=[
-                            {"setting": "Image directory", "value": target.source_path},
-                            {"setting": "px to um", "value": self.settings["cellpose_px_to_um"]},
-                            {"setting": "Frame limit", "value": self.settings["cellpose_frame_limit"] or "all"},
-                            {"setting": "Detect inclusions", "value": "yes" if self.settings["cellpose_detect_inclusions"] else "no"},
-                            {"setting": "Cache policy", "value": target.cache_policy},
-                        ],
-                    ).classes("w-full").props("dense flat hide-bottom")
+                    ui.label(target.source_path).classes("muted text-xs path-label")
+                    with ui.element("div").classes("editor-grid"):
+                        self._number_editor(
+                            target,
+                            "px_to_um",
+                            "px to um",
+                            self.settings["cellpose_px_to_um"],
+                            step=0.01,
+                        )
+                        self._number_editor(target, "frame_limit", "Frame limit", 0, step=1)
+                        self._bool_editor(
+                            target,
+                            "use_cache",
+                            "Use cache",
+                            bool(self.settings["cellpose_use_cache"]),
+                        )
+                        self._bool_editor(
+                            target,
+                            "detect_inclusions",
+                            "Detect inclusions",
+                            bool(self.settings["cellpose_detect_inclusions"]),
+                        )
+                        self._bool_editor(target, "overlay_masks", "Show masks", True)
+                        self._bool_editor(target, "overlay_inclusions", "Show inclusions", True)
+                    ui.input(
+                        "Config path",
+                        value=str(_row_setting(target, "config_path", self.settings["cellpose_config_path"])),
+                        on_change=lambda event, row=target: self._set_row_setting(
+                            row,
+                            "config_path",
+                            event.value or "",
+                        ),
+                    ).classes("w-full")
+                    with ui.element("div").classes("correction-grid"):
+                        self._counter_editor(target, "disabled_droplets", "Disabled droplets")
+                        self._counter_editor(target, "added_inclusions", "Added inclusions")
                     ui.label("Correction edits will apply to raw droplet rows in View Results.").classes(
                         "mock-editor-note"
                     )
@@ -755,6 +812,66 @@ class AnalyzeWorkflowView:
         if selected is not None and selected.engine == engine:
             return selected
         return next((row for row in self.matrix if row.active and row.engine == engine), None)
+
+    def _number_editor(
+        self,
+        row: MatrixRow,
+        key: str,
+        label: str,
+        default: Any,
+        *,
+        step: float,
+    ) -> None:
+        from nicegui import ui
+
+        value = _row_float(row, key, default) if step < 1 else _row_int(row, key, default)
+        ui.number(
+            label,
+            value=value,
+            min=0,
+            step=step,
+            on_change=lambda event, item=row, name=key, use_int=step >= 1: self._set_row_number(
+                item,
+                name,
+                event.value,
+                integer=use_int,
+            ),
+        ).classes("compact-number")
+
+    def _bool_editor(
+        self,
+        row: MatrixRow,
+        key: str,
+        label: str,
+        default: Any,
+    ) -> None:
+        from nicegui import ui
+
+        ui.checkbox(
+            label,
+            value=_row_bool(row, key, default),
+            on_change=lambda event, item=row, name=key: self._set_row_setting(
+                item,
+                name,
+                bool(event.value),
+            ),
+        ).classes("compact-checkbox")
+
+    def _counter_editor(self, row: MatrixRow, key: str, label: str) -> None:
+        from nicegui import ui
+
+        with ui.column().classes("counter-card"):
+            ui.label(label).classes("muted text-xs font-semibold")
+            ui.label(str(_row_int(row, key, 0))).classes("counter-value")
+            with ui.row().classes("w-full gap-1"):
+                ui.button(
+                    "-",
+                    on_click=lambda item=row, name=key: self._increment_row_counter(item, name, -1),
+                ).props("dense no-caps outline").classes("grow")
+                ui.button(
+                    "+",
+                    on_click=lambda item=row, name=key: self._increment_row_counter(item, name, 1),
+                ).props("dense no-caps outline").classes("grow")
 
     def _action_specs(self, stage_id: str) -> list[dict[str, Any]]:
         if stage_id == "import":
@@ -895,7 +1012,7 @@ class AnalyzeWorkflowView:
         self._refresh()
 
     def _target_to_run(self, row: MatrixRow) -> AnalyzeTarget:
-        settings = self._engine_settings(row.engine)
+        settings = self._engine_settings(row)
         return AnalyzeTarget(
             project_path=Path(row.project_path),
             source_path=Path(row.source_path),
@@ -905,22 +1022,47 @@ class AnalyzeWorkflowView:
             cache_policy=row.cache_policy,
         )
 
-    def _engine_settings(self, engine: str) -> dict[str, Any]:
-        if engine == "cellpose":
-            frame_limit = int(self.settings["cellpose_frame_limit"] or 0)
+    def _engine_settings(self, row: MatrixRow) -> dict[str, Any]:
+        if row.engine == "cellpose":
+            frame_limit = _row_int(row, "frame_limit", self.settings["cellpose_frame_limit"])
             return {
-                "config_path": str(self.settings["cellpose_config_path"] or ""),
-                "px_to_um": float(self.settings["cellpose_px_to_um"] or 0),
+                "config_path": str(_row_setting(row, "config_path", self.settings["cellpose_config_path"]) or ""),
+                "px_to_um": _row_float(row, "px_to_um", self.settings["cellpose_px_to_um"]),
                 "frame_limit": frame_limit or None,
-                "use_cache": bool(self.settings["cellpose_use_cache"]),
-                "detect_inclusions": bool(self.settings["cellpose_detect_inclusions"]),
+                "use_cache": _row_bool(row, "use_cache", self.settings["cellpose_use_cache"]),
+                "detect_inclusions": _row_bool(
+                    row,
+                    "detect_inclusions",
+                    self.settings["cellpose_detect_inclusions"],
+                ),
             }
-        max_frames = int(self.settings["opencv_max_frames"] or 0)
-        return {
-            "microns_per_pixel": float(self.settings["opencv_microns_per_pixel"] or 0),
-            "fps": float(self.settings["opencv_fps"] or 0),
+        max_frames = _row_int(row, "max_frames", self.settings["opencv_max_frames"])
+        end_frame = _row_int(row, "end_frame", 0)
+        settings = {
+            "microns_per_pixel": _row_float(
+                row,
+                "microns_per_pixel",
+                self.settings["opencv_microns_per_pixel"],
+            ),
+            "fps": _row_float(row, "fps", self.settings["opencv_fps"]),
             "max_frames": max_frames or None,
+            "start_frame": _row_int(row, "start_frame", 0),
+            "end_frame": end_frame or None,
+            "roi_x": 0,
+            "roi_y": 0,
+            "roi_width": 0,
+            "roi_height": 0,
         }
+        if _row_bool(row, "roi_enabled", False):
+            settings.update(
+                {
+                    "roi_x": _row_int(row, "roi_x", 0),
+                    "roi_y": _row_int(row, "roi_y", 0),
+                    "roi_width": _row_int(row, "roi_width", 0),
+                    "roi_height": _row_int(row, "roi_height", 0),
+                }
+            )
+        return settings
 
     def _refresh_view(self) -> None:
         self.stage_progress["view"] = 100 if self._analysis_run_rows() else 0
@@ -1053,6 +1195,38 @@ class AnalyzeWorkflowView:
 
     def _set_setting(self, key: str, value: Any) -> None:
         self.settings[key] = value
+
+    def _set_row_setting(self, row: MatrixRow, key: str, value: Any) -> None:
+        row.settings[key] = value
+        self.selected_uid = row.uid
+        self._refresh()
+
+    def _set_row_number(
+        self,
+        row: MatrixRow,
+        key: str,
+        value: Any,
+        *,
+        integer: bool,
+    ) -> None:
+        number = _numeric(value)
+        if number is None:
+            number = 0
+        self._set_row_setting(row, key, int(number) if integer else float(number))
+
+    def _set_row_int(self, row: MatrixRow, key: str, value: Any) -> None:
+        self._set_row_number(row, key, value, integer=True)
+
+    def _increment_row_counter(self, row: MatrixRow, key: str, delta: int) -> None:
+        row.settings[key] = max(0, _row_int(row, key, 0) + delta)
+        self.selected_uid = row.uid
+        self._refresh()
+
+    def _reset_opencv_crop(self, row: MatrixRow) -> None:
+        for key in ("roi_enabled", "roi_x", "roi_y", "roi_width", "roi_height"):
+            row.settings.pop(key, None)
+        self.selected_uid = row.uid
+        self._refresh()
 
     def _project_options(self) -> dict[str, str]:
         return {str(ref.path): _project_ref_label(ref) for ref in self.project_refs}
@@ -1412,24 +1586,50 @@ def _plot_card(options: dict[str, Any]) -> None:
 
 def _mock_video_preview_html(target: MatrixRow) -> str:
     label = target.sample_id or Path(target.source_path).stem
+    frame = _row_int(target, "preview_frame", 0)
+    roi_html = ""
+    if _row_bool(target, "roi_enabled", False):
+        width = _row_int(target, "roi_width", 0)
+        height = _row_int(target, "roi_height", 0)
+        if width and height:
+            roi_html = (
+                '<div class="mock-roi" '
+                f'style="left:{_roi_percent(target, "roi_x", 1280)}%; '
+                f'top:{_roi_percent(target, "roi_y", 720)}%; '
+                f'width:{_roi_percent(target, "roi_width", 1280)}%; '
+                f'height:{_roi_percent(target, "roi_height", 720)}%;"></div>'
+            )
     return f"""
     <div class="mock-viewer">
-      <div class="mock-roi" style="left:12%; top:20%; width:66%; height:48%;"></div>
-      <div class="mock-playhead">{_escape(label)} · OpenCV target</div>
+      {roi_html}
+      <div class="mock-playhead">{_escape(label)} · frame {frame}</div>
     </div>
     """
 
 
 def _mock_cellpose_preview_html(target: MatrixRow) -> str:
     label = target.sample_id or Path(target.source_path).stem
+    frame = _row_int(target, "image_frame", 1)
+    shift = (frame % 6) * 2
+    disabled = " mock-droplet-disabled" if _row_int(target, "disabled_droplets", 0) else ""
+    droplets = ""
+    if _row_bool(target, "overlay_masks", True):
+        droplets = f"""
+      <div class="mock-droplet{disabled}" style="left:{20 + shift}%; top:28%;"></div>
+      <div class="mock-droplet" style="left:{52 - shift / 2}%; top:44%; width:92px; height:92px;"></div>
+      <div class="mock-droplet" style="left:70%; top:{20 + shift / 2}%; width:64px; height:64px;"></div>
+        """
+    inclusions = ""
+    if _row_bool(target, "overlay_inclusions", True):
+        inclusions = f"""
+      <div class="mock-inclusion" style="left:{59 - shift / 3}%; top:54%;"></div>
+      <div class="mock-inclusion" style="left:77%; top:{29 + shift / 2}%;"></div>
+        """
     return f"""
     <div class="mock-viewer mock-viewer-cellpose">
-      <div class="mock-droplet" style="left:22%; top:28%;"></div>
-      <div class="mock-droplet" style="left:52%; top:44%; width:92px; height:92px;"></div>
-      <div class="mock-droplet mock-droplet-disabled" style="left:70%; top:20%; width:64px; height:64px;"></div>
-      <div class="mock-inclusion" style="left:59%; top:54%;"></div>
-      <div class="mock-inclusion" style="left:77%; top:29%;"></div>
-      <div class="mock-playhead">{_escape(label)} · Cellpose correction</div>
+      {droplets}
+      {inclusions}
+      <div class="mock-playhead">{_escape(label)} · image {frame}</div>
     </div>
     """
 
@@ -1442,6 +1642,31 @@ def _resolve_project_path(project_path: Path, stored_path: str) -> Path:
 def _row_values(row: dict[str, Any]) -> dict[str, Any]:
     values = row.get("values")
     return values if isinstance(values, dict) else {}
+
+
+def _row_setting(row: MatrixRow, key: str, default: Any) -> Any:
+    value = row.settings.get(key, default)
+    return default if value in {None, ""} else value
+
+
+def _row_int(row: MatrixRow, key: str, default: Any) -> int:
+    return int(_numeric(_row_setting(row, key, default)) or 0)
+
+
+def _row_float(row: MatrixRow, key: str, default: Any) -> float:
+    return float(_numeric(_row_setting(row, key, default)) or 0.0)
+
+
+def _row_bool(row: MatrixRow, key: str, default: Any) -> bool:
+    value = _row_setting(row, key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _roi_percent(row: MatrixRow, key: str, denominator: int) -> float:
+    value = _row_float(row, key, 0)
+    return round(max(0.0, min(100.0, value / denominator * 100.0)), 2)
 
 
 def _numeric(value: Any) -> float | None:
@@ -1663,6 +1888,43 @@ def _style() -> str:
       background: #f7fafc;
       font-size: 12px;
       font-weight: 600;
+    }
+    .editor-control-row { align-items: center; gap: 8px; }
+    .editor-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .editor-grid-roi {
+      border-top: 1px solid #d7e2ea;
+      padding-top: 8px;
+    }
+    .compact-number .q-field__control,
+    .compact-checkbox .q-checkbox__inner {
+      min-height: 30px;
+    }
+    .path-label {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      line-height: 1.3;
+    }
+    .correction-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .counter-card {
+      border: 1px solid #d7e2ea;
+      border-radius: 8px;
+      padding: 8px;
+      background: #f7fafc;
+      gap: 6px;
+    }
+    .counter-value {
+      color: #16212b;
+      font-size: 24px;
+      line-height: 28px;
+      font-weight: 650;
     }
     .log-text {
       background: #f0f5f8;
