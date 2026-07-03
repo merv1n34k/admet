@@ -127,47 +127,40 @@ class AnalyzeWorkflowView:
         self.notice = "Create or select a project, then add files to the batch matrix."
         self.notice_kind = "primary"
         self.action_log: list[str] = ["Analyze UI ready."]
-        self._screen: Any | None = None
+        self._mounted_signature: tuple[Any, ...] | None = None
+        self._refs: dict[str, Any] = {}
+        self._table_refs: dict[str, list[Any]] = {}
+        self._button_refs: list[Any] = []
 
     def render(self) -> None:
         from nicegui import ui
 
-        @ui.refreshable
-        def screen() -> None:
-            self._render_screen()
-
-        self._screen = screen
-        screen()
-
-    def _render_screen(self) -> None:
-        from nicegui import ui
-
         ui.query("body").classes("m-0")
         with ui.column().classes("shell w-full"):
-            self._render_topbar()
+            self._refs["topbar"] = ui.row().classes("topbar w-full items-center justify-between px-4 py-3")
             with ui.row().classes("w-full gap-4 flex-nowrap items-start"):
-                with ui.column().classes("left-rail shrink-0"):
-                    self._render_toc()
-                    self._render_instruction_card()
-                    self._render_notice_card()
-                with ui.column().classes("grow min-w-0 gap-3"):
-                    self._render_action_box()
-                    self._render_action_panel()
-                    self._render_main_window()
-                    self._render_results()
-                    self._render_log()
+                self._refs["sidebar"] = ui.column().classes("left-rail shrink-0")
+                self._refs["content"] = ui.column().classes("grow min-w-0 gap-3")
+        self._mount_topbar()
+        self._mount_sidebar()
+        self._mount_content_shell()
+        self._render_current_stage(force_mount=True)
 
-    def _render_topbar(self) -> None:
+    def _mount_topbar(self) -> None:
         from nicegui import ui
 
-        with ui.row().classes("topbar w-full items-center justify-between px-4 py-3"):
+        topbar = self._refs.get("topbar")
+        if topbar is None:
+            return
+        topbar.clear()
+        with topbar:
             with ui.row().classes("items-baseline gap-3"):
                 ui.label("admet analyze").classes("text-xl font-semibold")
                 ui.label("Project analysis matrix").classes("muted text-sm")
             with ui.row().classes("items-center gap-2"):
                 options = self._project_options()
                 selected = self.project_path if self.project_path in options else None
-                ui.select(
+                self._refs["project_select"] = ui.select(
                     options,
                     label="Project",
                     value=selected,
@@ -176,10 +169,232 @@ class AnalyzeWorkflowView:
                 ui.button("Refresh", on_click=self._refresh_projects).props("dense no-caps outline")
                 ui.button("New Project", on_click=self._new_project).props("dense no-caps outline")
                 ui.button("Load Project", on_click=self._load_project).props("dense no-caps outline")
-                ui.input(
+                self._refs["manual_project_input"] = ui.input(
                     "Manual path",
                     value=self.project_path,
                 ).bind_value(self, "project_path").classes("manual-project-input")
+
+    def _mount_sidebar(self) -> None:
+        sidebar = self._refs.get("sidebar")
+        if sidebar is None:
+            return
+        sidebar.clear()
+        with sidebar:
+            self._render_toc()
+            self._render_instruction_card()
+            self._render_notice_card()
+
+    def _mount_content_shell(self) -> None:
+        from nicegui import ui
+
+        content = self._refs.get("content")
+        if content is None:
+            return
+        content.clear()
+        with content:
+            for key, title in (
+                ("action_box", "Action Box"),
+                ("action_panel", "Action Panel"),
+                ("main", "Main Window"),
+                ("results", "Results"),
+                ("log", "Action Log"),
+            ):
+                with ui.column().classes("admet-panel w-full gap-0") as box:
+                    ui.label(title).classes("admet-box-title")
+                    body = ui.column().classes("admet-panel-body w-full gap-2")
+                self._refs[f"{key}_box"] = box
+                self._refs[f"{key}_body"] = body
+
+    def _render_current_stage(self, *, force_mount: bool = False) -> None:
+        if "main_body" not in self._refs:
+            return
+        signature = self._structure_signature()
+        if force_mount or signature != self._mounted_signature:
+            self._mount_stage()
+            self._mounted_signature = signature
+        self._sync_stage()
+
+    def _structure_signature(self) -> tuple[Any, ...]:
+        return (
+            self._stage_id(),
+            self.selected_uid,
+            self.project_path,
+            tuple((row.uid, row.engine, row.active) for row in self.matrix),
+            tuple(str(ref.path) for ref in self.project_refs),
+            id(self.last_report),
+        )
+
+    def _mount_stage(self) -> None:
+        for key in ("action_box_body", "action_panel_body", "main_body", "results_body", "log_body"):
+            body = self._refs.get(key)
+            if body is not None:
+                body.clear()
+        self._table_refs = {}
+        self._button_refs = []
+        self._mount_action_box()
+        self._mount_action_panel()
+        self._mount_main_window()
+        self._mount_results()
+        self._mount_log()
+
+    def _sync_stage(self) -> None:
+        self._sync_topbar()
+        self._mount_sidebar()
+        self._sync_action_box()
+        self._sync_tables()
+        self._sync_previews()
+        self._sync_log()
+
+    def _sync_topbar(self) -> None:
+        select = self._refs.get("project_select")
+        if select is not None:
+            select.options = self._project_options()
+            selected = self.project_path if self.project_path in select.options else None
+            select.set_value(selected)
+            select.update()
+        manual = self._refs.get("manual_project_input")
+        if manual is not None:
+            manual.set_value(self.project_path)
+
+    def _mount_action_box(self) -> None:
+        from nicegui import ui
+
+        body = self._refs["action_box_body"]
+        stage_id = self._stage_id()
+        with body:
+            with ui.column().classes("admet-process w-full gap-0 overflow-hidden"):
+                self._refs["action_progress"] = ui.linear_progress(value=0.0).classes("w-full")
+                with ui.row().classes("admet-transport w-full items-stretch gap-0"):
+                    for index, spec in enumerate(self._action_specs(stage_id)):
+                        if index:
+                            ui.element("span").classes("admet-transport-separator")
+                        button = ui.button(spec["label"], on_click=spec["handler"]).props(
+                            "unelevated dense no-caps flat"
+                        )
+                        classes = "admet-transport-btn grow"
+                        if spec.get("active"):
+                            classes += " admet-transport-btn-active"
+                        if spec.get("warning"):
+                            classes += " admet-transport-btn-warning"
+                        button.classes(classes)
+                        self._button_refs.append(button)
+
+    def _sync_action_box(self) -> None:
+        progress = self._refs.get("action_progress")
+        if progress is not None:
+            progress.set_value(self.stage_progress.get(self._stage_id(), 0) / 100.0)
+        specs = self._action_specs(self._stage_id())
+        if len(specs) != len(self._button_refs):
+            return
+        for button, spec in zip(self._button_refs, specs, strict=True):
+            button.set_text(spec["label"])
+            button.set_enabled(bool(spec.get("enabled", True)))
+
+    def _mount_action_panel(self) -> None:
+        from nicegui import ui
+
+        body = self._refs["action_panel_body"]
+        with body:
+            with ui.column().classes("panel w-full gap-2 p-2"):
+                if self._stage_id() == "import":
+                    self._render_import_controls()
+                elif self._stage_id() == "video":
+                    self._render_opencv_settings()
+                elif self._stage_id() == "imaging":
+                    self._render_cellpose_settings()
+                elif self._stage_id() == "view":
+                    self._render_view_settings()
+                else:
+                    ui.label("Export will use stored raw analysis data.").classes("muted text-xs")
+
+    def _mount_main_window(self) -> None:
+        body = self._refs["main_body"]
+        with body:
+            if self._stage_id() == "import":
+                self._render_matrix()
+                self._render_import_inventory()
+            elif self._stage_id() == "video":
+                self._render_video_stage()
+            elif self._stage_id() == "imaging":
+                self._render_imaging_stage()
+            elif self._stage_id() == "view":
+                self._render_view_results()
+            else:
+                self._render_analysis_runs()
+
+    def _mount_results(self) -> None:
+        from nicegui import ui
+
+        body = self._refs["results_body"]
+        with body:
+            with ui.column().classes("panel w-full gap-2 p-3"):
+                ui.label("Run summary").classes("section-title")
+                rows = self._result_rows()
+                table = ui.table(
+                    columns=[
+                        {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
+                        {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
+                        {"name": "status", "label": "Status", "field": "status", "align": "left"},
+                        {"name": "rows", "label": "Rows", "field": "rows", "align": "right"},
+                        {"name": "frames", "label": "Frames", "field": "frames", "align": "right"},
+                        {"name": "cache", "label": "Cache", "field": "cache", "align": "left"},
+                    ],
+                    rows=rows,
+                ).classes("w-full").props("dense flat hide-bottom")
+                self._register_table("run_summary", table)
+                if not rows:
+                    ui.label("No results yet. Run OpenCV, Cellpose, or Run All.").classes("muted text-xs")
+
+    def _mount_log(self) -> None:
+        from nicegui import ui
+
+        body = self._refs["log_body"]
+        with body:
+            self._refs["log"] = ui.html("").classes("log-text w-full")
+
+    def _sync_tables(self) -> None:
+        row_sources = {
+            "matrix": lambda: [self._matrix_row(row) for row in self.matrix],
+            "project_files": self._project_file_rows,
+            "recording_inventory": self._recording_inventory_rows,
+            "opencv_matrix": lambda: [self._matrix_row(row) for row in self._targets("opencv")],
+            "cellpose_matrix": lambda: [self._matrix_row(row) for row in self._targets("cellpose")],
+            "opencv_summary": lambda: _summary_table_rows(
+                [summary for summary in self._raw_summaries() if summary.engine == "opencv"]
+            ),
+            "cellpose_summary": lambda: _summary_table_rows(
+                [summary for summary in self._raw_summaries() if summary.engine == "cellpose"]
+            ),
+            "view_fluidics": lambda: _fluidics_rows(self._fluidics_runs()),
+            "analysis_runs": self._analysis_run_rows,
+            "run_summary": self._result_rows,
+        }
+        for key, tables in self._table_refs.items():
+            source = row_sources.get(key)
+            if source is None:
+                continue
+            rows = source()
+            for table in tables:
+                table.rows = rows
+                table.update()
+
+    def _sync_previews(self) -> None:
+        target = self._selected_row_for_engine("opencv")
+        preview = self._refs.get("opencv_preview")
+        if target is not None and preview is not None:
+            preview.content = _mock_video_preview_html(target)
+        target = self._selected_row_for_engine("cellpose")
+        preview = self._refs.get("cellpose_preview")
+        if target is not None and preview is not None:
+            preview.content = _mock_cellpose_preview_html(target)
+
+    def _sync_log(self) -> None:
+        log = self._refs.get("log")
+        if log is not None:
+            log.content = "<br>".join(_escape(line) for line in self.action_log[-80:]) or "No actions yet."
+
+    def _register_table(self, key: str, table: Any) -> None:
+        self._table_refs.setdefault(key, []).append(table)
 
     def _render_toc(self) -> None:
         from nicegui import ui
@@ -399,6 +614,7 @@ class AnalyzeWorkflowView:
             rows=[self._matrix_row(row) for row in rows],
             row_key="uid",
         ).classes("slim-table target-table w-full").props("dense flat hide-bottom")
+        self._register_table("matrix", table)
         self._wire_matrix_table(table)
         table.on("rowClick", self._select_row_event)
 
@@ -477,7 +693,7 @@ class AnalyzeWorkflowView:
             with ui.element("div").classes("comparison-grid w-full"):
                 with ui.column().classes("plot-card"):
                     ui.label("Analysis files").classes("text-sm font-semibold px-2 pt-1")
-                    ui.table(
+                    table = ui.table(
                         columns=[
                             {"name": "project", "label": "Project", "field": "project", "align": "left"},
                             {"name": "role", "label": "Role", "field": "role", "align": "left"},
@@ -486,9 +702,10 @@ class AnalyzeWorkflowView:
                         ],
                         rows=self._project_file_rows(),
                     ).classes("w-full").props("dense flat hide-bottom")
+                    self._register_table("project_files", table)
                 with ui.column().classes("plot-card"):
                     ui.label("Recording inventory").classes("text-sm font-semibold px-2 pt-1")
-                    ui.table(
+                    table = ui.table(
                         columns=[
                             {"name": "project", "label": "Project", "field": "project", "align": "left"},
                             {"name": "recordings", "label": "Recordings", "field": "recordings", "align": "right"},
@@ -497,6 +714,7 @@ class AnalyzeWorkflowView:
                         ],
                         rows=self._recording_inventory_rows(),
                     ).classes("w-full").props("dense flat hide-bottom")
+                    self._register_table("recording_inventory", table)
 
     def _render_engine_matrix(self, engine: str) -> None:
         from nicegui import ui
@@ -509,6 +727,7 @@ class AnalyzeWorkflowView:
                 rows=[self._matrix_row(row) for row in rows],
                 row_key="uid",
             ).classes("slim-table target-table w-full").props("dense flat hide-bottom")
+            self._register_table(f"{engine}_matrix", table)
             self._wire_matrix_table(table)
             table.on("rowClick", self._select_row_event)
             if not rows:
@@ -552,7 +771,7 @@ class AnalyzeWorkflowView:
             with ui.element("div").classes("comparison-grid w-full"):
                 _plot_card(_fluidics_chart(fluidics, "pressure"))
                 _plot_card(_fluidics_chart(fluidics, "flow"))
-            ui.table(
+            table = ui.table(
                 columns=[
                     {"name": "project", "label": "Project", "field": "project", "align": "left"},
                     {"name": "recording", "label": "Recording", "field": "recording", "align": "left"},
@@ -563,6 +782,7 @@ class AnalyzeWorkflowView:
                 ],
                 rows=_fluidics_rows(fluidics),
             ).classes("w-full").props("dense flat hide-bottom")
+            self._register_table("view_fluidics", table)
 
     def _render_opencv_editor(self) -> None:
         from nicegui import ui
@@ -575,7 +795,7 @@ class AnalyzeWorkflowView:
                 return
             with ui.element("div").classes("mock-editor-grid w-full"):
                 with ui.column().classes("gap-2"):
-                    ui.html(_mock_video_preview_html(target)).classes("w-full")
+                    self._refs["opencv_preview"] = ui.html(_mock_video_preview_html(target)).classes("w-full")
                     with ui.row().classes("editor-control-row w-full"):
                         ui.number(
                             "Preview frame",
@@ -625,7 +845,7 @@ class AnalyzeWorkflowView:
                 return
             with ui.element("div").classes("mock-editor-grid w-full"):
                 with ui.column().classes("gap-2"):
-                    ui.html(_mock_cellpose_preview_html(target)).classes("w-full")
+                    self._refs["cellpose_preview"] = ui.html(_mock_cellpose_preview_html(target)).classes("w-full")
                     ui.number(
                         "Image frame",
                         value=_row_int(target, "image_frame", 1),
@@ -689,7 +909,7 @@ class AnalyzeWorkflowView:
                 _plot_card(_diameter_chart(summaries))
                 _plot_card(_count_chart(summaries))
                 _plot_card(_cv_chart(summaries))
-            ui.table(
+            table = ui.table(
                 columns=[
                     {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
                     {"name": "rows", "label": "Rows", "field": "rows", "align": "right"},
@@ -700,6 +920,7 @@ class AnalyzeWorkflowView:
                 ],
                 rows=_summary_table_rows(summaries),
             ).classes("w-full").props("dense flat hide-bottom")
+            self._register_table(f"{engine}_summary", table)
 
     def _render_analysis_runs(self) -> None:
         from nicegui import ui
@@ -707,7 +928,7 @@ class AnalyzeWorkflowView:
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("Stored analysis runs").classes("section-title")
             rows = self._analysis_run_rows()
-            ui.table(
+            table = ui.table(
                 columns=[
                     {"name": "project", "label": "Project", "field": "project", "align": "left"},
                     {"name": "run_id", "label": "Run", "field": "run_id", "align": "left"},
@@ -716,6 +937,7 @@ class AnalyzeWorkflowView:
                 ],
                 rows=rows,
             ).classes("w-full").props("dense flat hide-bottom")
+            self._register_table("analysis_runs", table)
             if not rows:
                 ui.label("No stored analysis runs found for the matrix projects.").classes("muted text-xs")
 
@@ -727,7 +949,7 @@ class AnalyzeWorkflowView:
             with ui.column().classes("panel w-full gap-2 p-3"):
                 ui.label("Run summary").classes("section-title")
                 rows = self._result_rows()
-                ui.table(
+                table = ui.table(
                     columns=[
                         {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
                         {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
@@ -738,6 +960,7 @@ class AnalyzeWorkflowView:
                     ],
                     rows=rows,
                 ).classes("w-full").props("dense flat hide-bottom")
+                self._register_table("run_summary", table)
                 if not rows:
                     ui.label("No results yet. Run OpenCV, Cellpose, or Run All.").classes("muted text-xs")
 
@@ -1293,8 +1516,7 @@ class AnalyzeWorkflowView:
         self.action_log.append(f"{time.strftime('%H:%M:%S')} {message}")
 
     def _refresh(self) -> None:
-        if self._screen is not None:
-            self._screen.refresh()
+        self._render_current_stage()
 
 
 def _matrix_columns() -> list[dict[str, Any]]:
@@ -1746,6 +1968,22 @@ def _style() -> str:
       border-radius: 8px;
     }
     .topbar { min-height: 58px; }
+    .admet-panel {
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      gap: 4px;
+    }
+    .admet-box-title {
+      font-size: 16px;
+      line-height: 22px;
+      font-weight: 650;
+      color: #16212b;
+      padding: 0;
+    }
+    .admet-panel-body {
+      padding: 0;
+    }
     .workflow-toc { padding: 10px 12px; gap: 3px; }
     .notification-card {
       background: #ffffff;
@@ -1764,6 +2002,47 @@ def _style() -> str:
     .control-box-title { font-size: 16px; line-height: 22px; font-weight: 650; color: #16212b; }
     .process-bar { background: #f0f5f8; border: 1px solid #d7e2ea; border-radius: 8px; min-height: 24px; }
     .process-bar .q-linear-progress { height: 18px; border-radius: 4px; }
+    .admet-process {
+      background: #f0f5f8;
+      border: 1px solid #d7e2ea;
+      border-radius: 8px;
+      min-height: 24px;
+    }
+    .admet-process .q-linear-progress {
+      height: 18px;
+      border-radius: 4px;
+    }
+    .admet-transport {
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+    }
+    .admet-transport-btn {
+      background: #ffffff !important;
+      color: #16212b !important;
+      border: 0 !important;
+      border-radius: 0 !important;
+      min-height: 22px !important;
+      height: 22px !important;
+      padding: 0 !important;
+      font-weight: 500;
+    }
+    .admet-transport-btn:hover { background: #f0f5f8 !important; }
+    .admet-transport-btn-active {
+      color: #225d82 !important;
+      background: #e6eef4 !important;
+      font-weight: 650;
+    }
+    .admet-transport-btn-warning {
+      color: #ffffff !important;
+      background: #b7791f !important;
+      font-weight: 700;
+    }
+    .admet-transport-separator {
+      width: 1px;
+      align-self: stretch;
+      background: #d7e2ea;
+    }
     .transport-buttons { background: transparent; border: 0; border-radius: 0; }
     .transport-btn {
       background: #ffffff !important;
