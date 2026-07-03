@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
-import time
 import re
+import signal
+import sys
+import time
 from collections import deque
 from dataclasses import replace
 from pathlib import Path
@@ -47,9 +49,47 @@ from admet.engines.control._fluidics.config import (
     FLUIDIC_CHANNELS,
 )
 from admet.engines.control.settings import CORRECTION_PARAM_NAMES
-from admet.ui.control import theme as ui
-from admet.ui.control.theme import Theme
+from admet.ui import theme as ui
+from admet.ui.render import structure_changed, structure_signature
+from admet.ui.scaffold import panel_specs
+from admet.ui.theme import Theme
 from admet.workflows import create_control_workflow
+
+
+def run_control_app(api: AdmetAPI, argv: list[str] | None = None) -> int:
+    app = QApplication.instance()
+    owns_app = app is None
+    if app is None:
+        app = QApplication(argv if argv is not None else sys.argv[:1])
+    app.setStyleSheet(ui.stylesheet())
+
+    window = ControlWindow(api)
+    window.show()
+    if owns_app:
+        interrupted = False
+        previous_sigint = signal.getsignal(signal.SIGINT)
+
+        def handle_sigint(_signum, _frame) -> None:
+            nonlocal interrupted
+            interrupted = True
+            QTimer.singleShot(0, window.close)
+            QTimer.singleShot(0, app.quit)
+
+        signal_timer = QTimer()
+        signal_timer.timeout.connect(lambda: None)
+        signal_timer.start(100)
+        signal.signal(signal.SIGINT, handle_sigint)
+        try:
+            return_code = app.exec()
+        except KeyboardInterrupt:
+            interrupted = True
+            window.close()
+            return_code = 0
+        finally:
+            signal_timer.stop()
+            signal.signal(signal.SIGINT, previous_sigint)
+        return 0 if interrupted else return_code
+    return 0
 
 
 STATUS_COLORS = {
@@ -139,21 +179,15 @@ class ControlStagePage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        self.action_box_panel, self.action_box_layout = _panel_box("Action Box")
-        self.action_panel, self.action_layout = _panel_box("Action Panel")
-        self.main_panel, self.main_layout = _panel_box("Main Window", "MainPanel")
-        self.channel_manager_panel, self.channel_manager_layout = _panel_box("Channel Manager")
-        self.results_panel, self.results_layout = _panel_box("Results")
-        self.log_panel, self.log_layout = _panel_box("Action Log")
+        panels = {spec.key: _panel_box(spec.title, spec.object_name) for spec in panel_specs(channel_manager=True)}
+        self.action_box_panel, self.action_box_layout = panels["action_box"]
+        self.action_panel, self.action_layout = panels["action_panel"]
+        self.main_panel, self.main_layout = panels["main"]
+        self.channel_manager_panel, self.channel_manager_layout = panels["channel_manager"]
+        self.results_panel, self.results_layout = panels["results"]
+        self.log_panel, self.log_layout = panels["log"]
 
-        for panel in (
-            self.action_box_panel,
-            self.action_panel,
-            self.main_panel,
-            self.channel_manager_panel,
-            self.results_panel,
-            self.log_panel,
-        ):
+        for panel, _body in panels.values():
             layout.addWidget(panel)
         layout.addStretch()
 
@@ -560,7 +594,7 @@ class ControlWindow(QMainWindow):
         page = self._activate_stage_page(stage)
         stage_changed = previous_page is not None and previous_page is not page
         signature = self._structure_signature(stage)
-        if signature != page.mounted_signature:
+        if structure_changed(page.mounted_signature, signature):
             self._mount_stage(stage)
             page.mounted_signature = signature
             self._mounted_signature = signature
@@ -576,7 +610,7 @@ class ControlWindow(QMainWindow):
         state = getattr(getattr(self.api.engine, "hardware", None), "state", None)
         sensor_count = len(getattr(state, "sensor_channels", []) or ())
         pressure_count = len(getattr(state, "pressure_channels", []) or ())
-        return (
+        return structure_signature(
             stage.id,
             self._project_ready(),
             self.runtime_state["camera"],

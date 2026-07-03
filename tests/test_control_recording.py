@@ -8,7 +8,7 @@ from unittest.mock import patch
 from admet.core.session import AdmetSession, SessionFile, load_session, new_session, save_session
 from admet.engines.control import RecordingRun
 from admet.engines.control.settings import CAMERA_SETTINGS, CORRECTION_SETTINGS
-from admet.ui.control.window import ControlWindow
+from admet.ui.control import ControlWindow
 from admet.workflows import StageStatus
 
 
@@ -151,7 +151,7 @@ class RecordingRunTests(unittest.TestCase):
         window._complete_current_stage = lambda: completions.append(True)
         callbacks = []
 
-        with patch("admet.ui.control.window.QTimer.singleShot", side_effect=lambda ms, cb: callbacks.append((ms, cb))):
+        with patch("admet.ui.control.QTimer.singleShot", side_effect=lambda ms, cb: callbacks.append((ms, cb))):
             window._schedule_completed_pipeline_stage_finish(stage)
             window._schedule_completed_pipeline_stage_finish(stage)
 
@@ -476,7 +476,7 @@ class RecordingRunTests(unittest.TestCase):
                 return str(target), ""
 
             with patch(
-                "admet.ui.control.window.QFileDialog.getSaveFileName",
+                "admet.ui.control.QFileDialog.getSaveFileName",
                 side_effect=select_path,
             ):
                 window._new_project()

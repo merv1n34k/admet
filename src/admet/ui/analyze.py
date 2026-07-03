@@ -16,6 +16,8 @@ from admet.core.discovery import ProjectRef, discover_projects, projects_root
 from admet.core.engine import EngineRegistry
 from admet.core.project import ProjectStore
 from admet.core.session import session_path
+from admet.ui.render import structure_signature
+from admet.ui.scaffold import panel_specs
 from admet.workflows import StageStatus, Workflow, WorkflowState
 from admet.workflows.analyze import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 
@@ -193,18 +195,12 @@ class AnalyzeWorkflowView:
             return
         content.clear()
         with content:
-            for key, title in (
-                ("action_box", "Action Box"),
-                ("action_panel", "Action Panel"),
-                ("main", "Main Window"),
-                ("results", "Results"),
-                ("log", "Action Log"),
-            ):
+            for spec in panel_specs():
                 with ui.column().classes("admet-panel w-full gap-0") as box:
-                    ui.label(title).classes("admet-box-title")
+                    ui.label(spec.title).classes("admet-box-title")
                     body = ui.column().classes("admet-panel-body w-full gap-2")
-                self._refs[f"{key}_box"] = box
-                self._refs[f"{key}_body"] = body
+                self._refs[f"{spec.key}_box"] = box
+                self._refs[f"{spec.key}_body"] = body
 
     def _render_current_stage(self, *, force_mount: bool = False) -> None:
         if "main_body" not in self._refs:
@@ -216,7 +212,7 @@ class AnalyzeWorkflowView:
         self._sync_stage()
 
     def _structure_signature(self) -> tuple[Any, ...]:
-        return (
+        return structure_signature(
             self._stage_id(),
             self.selected_uid,
             self.project_path,

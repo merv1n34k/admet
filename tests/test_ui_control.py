@@ -1,6 +1,6 @@
 import unittest
 
-from admet.ui.control.theme import box_padding, button_qss, spacing, stylesheet, text_qss
+from admet.ui.theme import box_padding, button_qss, spacing, stylesheet, text_qss
 
 
 class ControlThemeTests(unittest.TestCase):

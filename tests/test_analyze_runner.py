@@ -10,7 +10,7 @@ from admet.core.engine import ActionSpec, EngineRegistry, Param, ParamKind, Para
 from admet.core.project import ProjectStore
 from admet.core.run import RunJob, RunResult
 from admet.core.session import load_session
-from admet.ui.analyze.renderer import (
+from admet.ui.analyze import (
     AnalyzeWorkflowView,
     MatrixRow,
     StoredRun,
