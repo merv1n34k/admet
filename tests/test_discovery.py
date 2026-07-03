@@ -18,6 +18,13 @@ class DiscoveryTests(unittest.TestCase):
                 self.assertEqual(projects_root(), env_root.resolve())
                 self.assertEqual(projects_root(explicit_root), explicit_root.resolve())
 
+    def test_projects_root_defaults_to_projects_dir_when_present(self):
+        with tempfile.TemporaryDirectory() as tmpdir, patch.dict(os.environ, {}, clear=True):
+            root = Path(tmpdir)
+            (root / "projects").mkdir()
+            with patch("pathlib.Path.cwd", return_value=root):
+                self.assertEqual(projects_root(), (root / "projects").resolve())
+
     def test_discover_projects_orders_by_updated_and_skips_bare_dirs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

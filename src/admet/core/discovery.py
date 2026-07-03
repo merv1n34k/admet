@@ -28,6 +28,9 @@ def projects_root(explicit: str | Path | None = None) -> Path:
     env = os.environ.get(ENV_ROOT)
     if env:
         return Path(env).expanduser().resolve()
+    project_dir = Path.cwd() / "projects"
+    if project_dir.is_dir():
+        return project_dir.resolve()
     return Path.cwd()
 
 
