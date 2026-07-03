@@ -37,9 +37,9 @@ from PySide6.QtWidgets import (
 )
 
 from admet.core.api import AdmetAPI
-from admet.core.engine import RunJob, RunResult
+from admet.core.run import RunJob, RunResult
 from admet.core.project import ProjectStore
-from admet.core.schema import Param, ParamKind
+from admet.core.engine import Param, ParamKind
 from admet.core.session import SessionFile, SessionItem, load_session, new_session, save_session, session_path
 from admet.core.workflow import Stage, StageControl, StageStatus
 from admet.engines.control.fluidics.config import (

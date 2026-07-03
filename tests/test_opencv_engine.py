@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from admet.core.engine import RunJob
 from admet.core.run import JsonlRunSink
+from admet.core.run import RunJob
 
 try:
     import cv2

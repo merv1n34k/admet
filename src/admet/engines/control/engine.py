@@ -4,7 +4,8 @@ from dataclasses import asdict
 from queue import Queue
 from typing import Any, Callable
 
-from admet.core.engine import ActionSpec, RunJob, RunResult, validate_action_settings
+from admet.core.engine import ActionSpec, validate_action_settings
+from admet.core.run import RunJob, RunResult
 from admet.engines.control.camera import CameraController
 from admet.engines.control.fluidics import (
     AcquisitionThread,

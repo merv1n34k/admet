@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from admet.core.engine import Engine, RunJob, RunResult, action_spec
+from admet.core.engine import Engine, action_spec
+from admet.core.run import RunJob, RunResult
 
 from .model import Workflow, WorkflowState
 

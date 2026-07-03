@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
-from admet.core.engine import Engine, RunJob, RunResult
-from admet.core.schema import ParamSchema
+from admet.core.engine import Engine, ParamSchema
+from admet.core.run import RunJob, RunResult
 from admet.core.session import AdmetSession
 
 

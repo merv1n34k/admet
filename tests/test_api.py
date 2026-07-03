@@ -1,8 +1,8 @@
 import unittest
 
 from admet.core.api import AdmetAPI
-from admet.core.engine import ActionSpec, RunJob, RunResult
-from admet.core.schema import Param, ParamKind, ParamSchema
+from admet.core.engine import ActionSpec, Param, ParamKind, ParamSchema
+from admet.core.run import RunJob, RunResult
 from admet.core.session import new_session
 
 

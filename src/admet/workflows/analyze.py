@@ -1,4 +1,4 @@
-from admet.core.schema import Param, ParamKind, ParamSchema
+from admet.core.engine import Param, ParamKind, ParamSchema
 from admet.core.workflow import Stage, StageControl, Workflow
 
 

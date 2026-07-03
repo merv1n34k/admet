@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from admet.core.api import AdmetAPI
-from admet.core.engine import EngineRegistry, RunJob, RunResult, action_spec
+from admet.core.engine import EngineRegistry, action_spec
+from admet.core.run import RunJob, RunResult
 from admet.core.project import ProjectStore
 from admet.core.run import JsonlRunSink
 from admet.core.session import content_cache_key, session_path

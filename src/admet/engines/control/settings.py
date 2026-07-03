@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from admet.core.schema import Param, ParamKind, ParamOption, ParamSchema
+from admet.core.engine import Param, ParamKind, ParamOption, ParamSchema
 from admet.engines.control.fluidics.config import (
     FLUIDIC_CHANNELS,
     PIPELINES,

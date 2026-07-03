@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from admet.core.engine import RunJob
+from admet.core.run import RunJob
 from admet.engines.control.engine import FluidicsControlEngine
 from admet.engines.control.camera import Camera
 from admet.engines.control.camera.camera import CameraAvailability

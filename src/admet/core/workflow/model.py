@@ -4,7 +4,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
-from admet.core.schema import ParamSchema
+from admet.core.engine import ParamSchema
 
 
 class StageStatus(StrEnum):

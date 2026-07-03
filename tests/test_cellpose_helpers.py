@@ -6,8 +6,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from admet.core.engine import RunJob
-from admet.core.run import JsonlRunSink
+from admet.core.run import JsonlRunSink, RunJob
 from admet.engines.analyze.cellpose.cache import Cache
 from admet.engines.analyze.cellpose.config import load_config
 from admet.engines.analyze.cellpose.correction import update_results_with_inclusions
