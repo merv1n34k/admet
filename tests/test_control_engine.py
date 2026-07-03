@@ -349,6 +349,35 @@ class FluidicsControlEngineTests(unittest.TestCase):
         self.assertFalse(engine.recording_active)
         self.assertTrue(camera.preview_enabled)
 
+    def test_start_recording_uses_explicit_job_outputs(self):
+        sdk = FakeControlSDK()
+        engine = FluidicsControlEngine(sdk, video_writer_factory=FakeVideoWriter)
+        camera = FakeCameraAcquisition()
+        engine._camera._acquisition = camera
+        engine._camera._on_frame(np.zeros((12, 16), dtype=np.uint8))
+        run_engine(engine, "connect_fluidics", {"simulated": False, "start_polling": False})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            video_path = root / "records" / "camera" / "explicit.avi"
+            csv_path = root / "records" / "fluidics" / "explicit.csv"
+            result = run_engine(
+                engine,
+                "start_recording",
+                {
+                    "recording_root": str(root / "unused"),
+                    "recording_label": "set01_rep04",
+                    "camera_video_fps": 120.0,
+                    "camera_preview_off_recording": False,
+                },
+                outputs={"video": video_path, "fluidics_csv": csv_path},
+            )
+            stop = run_engine(engine, "stop_recording", {})
+
+        self.assertEqual(Path(result.metadata["csv_path"]), csv_path)
+        self.assertEqual(Path(stop.metadata["video_path"]), video_path)
+        self.assertEqual(Path(stop.metadata["recording"]["fluidics_csv"]), csv_path)
+
     def test_camera_frame_delivery_waits_for_ui_acknowledgement(self):
         engine = FluidicsControlEngine(FakeControlSDK())
         acknowledger = FakeFrameAcknowledger()

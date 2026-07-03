@@ -63,7 +63,7 @@ class ProjectStore:
         return self.path / "analysis"
 
     def control_recording_target(self, label: str) -> ControlRecordingTarget:
-        recording_id = _recording_id(label)
+        recording_id = _stamped_id(label)
         return ControlRecordingTarget(
             recording_id=recording_id,
             video_path=self.records_dir / "camera" / f"{recording_id}.avi",
@@ -89,7 +89,7 @@ class ProjectStore:
         self.save()
 
     def analysis_run_target(self, label: str = "analysis") -> AnalysisRunTarget:
-        run_id = _run_id(label)
+        run_id = _stamped_id(label)
         run_dir = self.analysis_dir / "runs" / run_id
         return AnalysisRunTarget(
             run_id=run_id,
@@ -251,11 +251,7 @@ class ProjectStore:
             return str(path)
 
 
-def _recording_id(label: str) -> str:
-    return f"{_safe_label(label)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-
-def _run_id(label: str) -> str:
+def _stamped_id(label: str) -> str:
     return f"{_safe_label(label)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 

@@ -37,6 +37,8 @@ from admet.engines.control.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_P
 
 
 ActionHandler = Callable[[dict[str, Any]], dict[str, Any]]
+ActionSettingsPreparer = Callable[[RunJob, dict[str, Any]], dict[str, Any]]
+ActionPrivateSettings = Callable[[RunJob], dict[str, Any]]
 
 CAMERA_CONFIGURATION_PARAMS = (
     "camera_width",
@@ -173,6 +175,8 @@ class FluidicsControlEngine:
             writer_factory=video_writer_factory,
         )
         self._corrected_sensors: set[int] = set()
+        self._action_preparers = self._build_action_preparers()
+        self._private_action_settings = self._build_private_action_settings()
         self._action_handlers = self._build_action_handlers()
         self._validate_action_handlers()
 
@@ -259,6 +263,12 @@ class FluidicsControlEngine:
             "wash": lambda settings: self._start_protocol_action("wash", "Wash", settings),
         }
 
+    def _build_action_preparers(self) -> dict[str, ActionSettingsPreparer]:
+        return {"start_recording": self._prepare_start_recording_settings}
+
+    def _build_private_action_settings(self) -> dict[str, ActionPrivateSettings]:
+        return {"start_recording": self._start_recording_private_settings}
+
     def _validate_action_handlers(self) -> None:
         declared = {action.id for action in self.actions}
         handled = set(self._action_handlers)
@@ -268,25 +278,9 @@ class FluidicsControlEngine:
             raise RuntimeError(f"control action handler mismatch: missing={missing}, extra={extra}")
 
     def run(self, job: RunJob) -> RunResult:
-        settings = dict(job.settings)
-        private_settings: dict[str, Any] = {}
-        if job.action == "start_recording":
-            if "video" in job.outputs:
-                private_settings["video_path"] = str(job.outputs["video"])
-            if "fluidics_csv" in job.outputs:
-                private_settings["fluidics_csv_path"] = str(job.outputs["fluidics_csv"])
-            settings.setdefault("recording_label", job.metadata.get("recording_label", job.id))
-            settings.setdefault("camera_width", 640)
-            settings.setdefault("camera_height", 480)
-            width, height = self._camera.recording_frame_size(settings)
-            settings["camera_width"] = width
-            settings["camera_height"] = height
-            settings.setdefault("camera_video_fps", 24.0)
-            settings.setdefault("camera_preview_off_recording", False)
-
+        settings = self._prepare_action_settings(job)
         normalized = validate_action_settings(self.settings, self.actions, job.action, settings)
-        if job.action == "start_recording":
-            normalized.update(private_settings)
+        normalized.update(self._private_settings_for_job(job))
         handler = self._action_handlers.get(job.action)
         if handler is None:
             raise ValueError(f"unsupported fluidics action: {job.action}")
@@ -297,6 +291,41 @@ class FluidicsControlEngine:
             action=job.action,
             metadata=metadata,
         )
+
+    def _prepare_action_settings(self, job: RunJob) -> dict[str, Any]:
+        settings = dict(job.settings)
+        preparer = self._action_preparers.get(job.action)
+        return preparer(job, settings) if preparer else settings
+
+    def _private_settings_for_job(self, job: RunJob) -> dict[str, Any]:
+        private_settings = self._private_action_settings.get(job.action)
+        return private_settings(job) if private_settings else {}
+
+    def _prepare_start_recording_settings(
+        self,
+        job: RunJob,
+        settings: dict[str, Any],
+    ) -> dict[str, Any]:
+        settings.setdefault("recording_label", job.metadata.get("recording_label", job.id))
+        settings.setdefault("camera_width", 640)
+        settings.setdefault("camera_height", 480)
+        width, height = self._camera.recording_frame_size(settings)
+        settings["camera_width"] = width
+        settings["camera_height"] = height
+        settings.setdefault("camera_video_fps", 24.0)
+        settings.setdefault("camera_preview_off_recording", False)
+        return settings
+
+    def _start_recording_private_settings(self, job: RunJob) -> dict[str, Any]:
+        private_settings: dict[str, Any] = {}
+        for output_key, setting_key in (
+            ("video", "video_path"),
+            ("fluidics_csv", "fluidics_csv_path"),
+        ):
+            path = job.outputs.get(output_key)
+            if path is not None:
+                private_settings[setting_key] = str(path)
+        return private_settings
 
     def _status_after(self, action: str, operation: Callable[[], None]) -> dict[str, Any]:
         operation()

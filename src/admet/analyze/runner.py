@@ -91,11 +91,41 @@ class AnalyzeBatchRunner:
 
         with JsonlRunSink(run_target.raw_path) as sink:
             for index, target in enumerate(targets, start=1):
-                engine_id = target.engine or infer_engine(target.source_path)
-                if engine_id not in self.registry.ids():
-                    raise LookupError(f"unknown analyze engine: {engine_id}")
                 cache_policy = _cache_policy(target.cache_policy)
                 sample_id = target.sample_id or target.source_path.stem
+                try:
+                    engine_id = target.engine or infer_engine(target.source_path)
+                except ValueError as exc:
+                    job_reports.append(
+                        _skipped_target_report(
+                            run_id=run_target.run_id,
+                            index=index,
+                            engine=target.engine,
+                            sample_id=sample_id,
+                            source_path=str(target.source_path),
+                            reason=str(exc),
+                        )
+                    )
+                    matrix_rows.append(
+                        _skipped_matrix_row(target, engine=target.engine, cache_policy=cache_policy, reason=str(exc))
+                    )
+                    continue
+                if engine_id not in self.registry.ids():
+                    reason = f"unknown analyze engine: {engine_id}"
+                    job_reports.append(
+                        _skipped_target_report(
+                            run_id=run_target.run_id,
+                            index=index,
+                            engine=engine_id,
+                            sample_id=sample_id,
+                            source_path=str(target.source_path),
+                            reason=reason,
+                        )
+                    )
+                    matrix_rows.append(
+                        _skipped_matrix_row(target, engine=engine_id, cache_policy=cache_policy, reason=reason)
+                    )
+                    continue
                 file = store.register_analysis_file(
                     target.source_path,
                     engine=engine_id,
@@ -237,6 +267,25 @@ def _job_inputs(engine_id: str, source_path: Path) -> dict[str, Path]:
     raise LookupError(f"unknown analyze engine: {engine_id}")
 
 
+def _skipped_matrix_row(
+    target: AnalyzeTarget,
+    *,
+    engine: str,
+    cache_policy: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "file_id": "",
+        "engine": engine,
+        "sample_id": target.sample_id or target.source_path.stem,
+        "source_path": str(target.source_path),
+        "cache_policy": cache_policy,
+        "settings": dict(target.settings),
+        "status": "skipped",
+        "reason": reason,
+    }
+
+
 def _content_key(source_path: Path, settings: dict[str, Any]) -> str:
     path = Path(source_path)
     if path.is_file():
@@ -275,6 +324,28 @@ def _job_report(
         status=result.status,
         metadata=metadata,
         warnings=result.warnings,
+    )
+
+
+def _skipped_target_report(
+    *,
+    run_id: str,
+    index: int,
+    engine: str,
+    sample_id: str,
+    source_path: str,
+    reason: str,
+) -> AnalyzeJobReport:
+    engine_id = engine or "unknown"
+    return AnalyzeJobReport(
+        job_id=f"{run_id}_{index}_{_safe(engine_id)}",
+        engine=engine,
+        sample_id=sample_id,
+        file_id="",
+        source_path=source_path,
+        status="skipped",
+        metadata={"reason": reason},
+        warnings=(reason,),
     )
 
 

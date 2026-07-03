@@ -30,6 +30,25 @@ def write_synthetic_video(path: Path, frames=30):
 
 @unittest.skipIf(cv2 is None, "OpenCV is not installed")
 class OpenCVEngineTests(unittest.TestCase):
+    def test_engine_rejects_missing_video_input(self):
+        from admet.engines.analyze.opencv import create_engine
+
+        engine = create_engine()
+
+        with self.assertRaisesRegex(ValueError, "requires input 'video'"):
+            engine.run(
+                RunJob(
+                    id="job-opencv",
+                    engine="opencv",
+                    action="analyze",
+                    inputs={"mask": Path("wrong.tif")},
+                    settings={
+                        "microns_per_pixel": 1.0,
+                        "fps": 30.0,
+                    },
+                )
+            )
+
     def test_engine_writes_raw_rows_to_job_sink(self):
         from admet.engines.analyze.opencv import create_engine
 

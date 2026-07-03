@@ -91,6 +91,30 @@ class AnalyzeBatchRunnerTests(unittest.TestCase):
         self.assertEqual({project.project_path.name for project in report.projects}, {"one.admetp", "two.admetp"})
         self.assertEqual(len(report.jobs), 2)
 
+    def test_runner_skips_unknown_source_without_aborting_project(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "notes.txt"
+            source.write_text("not analysis input", encoding="utf-8")
+            registry = EngineRegistry()
+            registry.register("opencv", lambda: FakeAnalyzeEngine("opencv"))
+
+            report = AnalyzeBatchRunner(registry, cache_root=root / "cache-root").run(
+                (
+                    AnalyzeTarget(root / "study.admetp", source),
+                )
+            )
+            session = load_session(root / "study.admetp")
+            metadata = json.loads(
+                (root / "study.admetp" / "analysis" / "metadata.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(len(report.jobs), 1)
+        self.assertEqual(report.jobs[0].status, "skipped")
+        self.assertIn("cannot infer analyze engine", report.jobs[0].warnings[0])
+        self.assertEqual(session.files, ())
+        self.assertEqual(metadata["runs"][0]["metadata"]["jobs"][0]["status"], "skipped")
+
 
 class AnalyzeWorkflowViewTests(unittest.TestCase):
     def test_new_project_button_handler_creates_manifest(self):

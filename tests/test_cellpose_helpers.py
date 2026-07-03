@@ -162,6 +162,17 @@ class CellposeHelperTests(unittest.TestCase):
         ):
             detector.detect_droplets_cellpose(np.zeros((4, 4), dtype=np.uint8))
 
+    def test_cellpose_engine_rejects_missing_input_dir(self):
+        with self.assertRaisesRegex(ValueError, "requires input 'input_dir'"):
+            create_engine().run(
+                RunJob(
+                    id="job-cellpose",
+                    engine="cellpose",
+                    action="analyze",
+                    inputs={"mask": Path("wrong.tif")},
+                )
+            )
+
     def test_cellpose_engine_writes_raw_rows_to_job_sink(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             input_dir = Path(tmpdir) / "empty-sample"

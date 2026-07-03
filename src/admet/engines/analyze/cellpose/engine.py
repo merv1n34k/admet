@@ -122,6 +122,4 @@ def _job_input(job: RunJob, key: str, setting_key: str) -> Path:
         return job.inputs[key]
     if setting_key in job.settings:
         return Path(str(job.settings[setting_key]))
-    if job.inputs:
-        return next(iter(job.inputs.values()))
-    raise ValueError(f"{job.id} requires input {key!r}")
+    raise ValueError(f"{job.id} requires input {key!r} or setting {setting_key!r}")
