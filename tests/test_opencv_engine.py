@@ -52,25 +52,27 @@ class OpenCVEngineTests(unittest.TestCase):
     def test_config_includes_frame_range_and_roi(self):
         from admet.engines.analyze.opencv import create_engine
 
-        config = create_engine()._config_from_settings(
-            {
-                "microns_per_pixel": 1.5,
-                "fps": 100.0,
-                "max_frames": 50,
-                "start_frame": 10,
-                "end_frame": 90,
-                "roi_x": 12,
-                "roi_y": 18,
-                "roi_width": 320,
-                "roi_height": 120,
-            },
-            cache_dir=Path("/tmp/cache"),
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video_path = Path(tmpdir) / "droplets.avi"
+            write_synthetic_video(video_path)
+            config = create_engine()._config_from_settings(
+                {
+                    "video_path": str(video_path),
+                    "microns_per_pixel": 1.5,
+                    "fps": 100.0,
+                    "start_frame": 10,
+                    "end_frame": 90,
+                    "roi_x": 12,
+                    "roi_y": 18,
+                    "roi_width": 320,
+                    "roi_height": 0,
+                },
+                cache_dir=Path("/tmp/cache"),
+            )
 
         self.assertEqual(config["video"]["start_frame"], 10)
         self.assertEqual(config["video"]["end_frame"], 90)
-        self.assertEqual(config["video"]["roi"], (12, 18, 320, 120))
-        self.assertEqual(config["processing"]["max_frames"], 50)
+        self.assertEqual(config["video"]["roi"], (12, 18, 320, 80))
         self.assertEqual(config["analysis"]["fps"], 100.0)
 
     def test_engine_writes_raw_rows_to_job_sink(self):
@@ -96,7 +98,8 @@ class OpenCVEngineTests(unittest.TestCase):
                         settings={
                             "microns_per_pixel": 1.0,
                             "fps": 30.0,
-                            "max_frames": 30,
+                            "start_frame": 0,
+                            "end_frame": 30,
                         },
                     )
                 )

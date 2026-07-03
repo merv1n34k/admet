@@ -32,7 +32,6 @@ def create_analyze_workflow() -> Workflow:
                     (
                         Param("microns_per_pixel", "Microns Per Pixel", ParamKind.FLOAT, default=1.0),
                         Param("fps", "FPS", ParamKind.FLOAT, default=0.0, minimum=0.0),
-                        Param("max_frames", "Max Frames", ParamKind.INTEGER, default=None),
                     )
                 ),
                 controls=(StageControl("Run OpenCV", "analyze", completes=True),),

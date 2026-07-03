@@ -36,7 +36,7 @@ class CellposeHelperTests(unittest.TestCase):
         self.assertEqual(config["min_droplet_diameter"], 100)
         self.assertFalse(config["cache"]["enabled"])
         self.assertEqual(config["cache"]["dir"], "custom-cache")
-        self.assertEqual(config["cache"]["max_frames"], 100)
+        self.assertEqual(config["cache"]["max_entries"], 100)
         self.assertFalse(config["settings"]["inclusions"])
         self.assertEqual(config["settings"]["dilution"], 500)
 
@@ -55,7 +55,7 @@ class CellposeHelperTests(unittest.TestCase):
                 "max_inclusion_area": 50,
                 "edge_buffer": 5,
                 "px_to_um": 1.14,
-                "cache": {"enabled": True, "max_frames": 1, "dir": str(cache_dir)},
+                "cache": {"enabled": True, "max_entries": 1, "dir": str(cache_dir)},
             }
 
             cache = Cache(config)

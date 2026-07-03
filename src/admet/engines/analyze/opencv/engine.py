@@ -17,7 +17,6 @@ class OpenCVAnalysisEngine:
             Param("video_path", "Video Path", ParamKind.PATH, default="", required=True),
             Param("microns_per_pixel", "Microns Per Pixel", ParamKind.FLOAT, default=1.0),
             Param("fps", "FPS", ParamKind.FLOAT, default=0.0, minimum=0.0),
-            Param("max_frames", "Max Frames", ParamKind.INTEGER, default=None),
             Param("start_frame", "Start Frame", ParamKind.INTEGER, default=0, minimum=0),
             Param("end_frame", "End Frame", ParamKind.INTEGER, default=None, minimum=0),
             Param("roi_x", "ROI X", ParamKind.INTEGER, default=0, minimum=0),
@@ -114,19 +113,23 @@ class OpenCVAnalysisEngine:
             video_config["start_frame"] = settings["start_frame"]
         if settings["end_frame"] is not None:
             video_config["end_frame"] = settings["end_frame"]
-        if settings["roi_width"] and settings["roi_height"]:
+        roi_width = int(settings["roi_width"] or 0)
+        roi_height = int(settings["roi_height"] or 0)
+        if roi_width or roi_height:
+            if not roi_width or not roi_height:
+                video_width, video_height = _video_dimensions(Path(str(settings["video_path"])))
+                roi_width = roi_width or video_width
+                roi_height = roi_height or video_height
             video_config["roi"] = (
                 settings["roi_x"],
                 settings["roi_y"],
-                settings["roi_width"],
-                settings["roi_height"],
+                roi_width,
+                roi_height,
             )
         if video_config:
             config["video"] = video_config
         if settings["fps"]:
             config["analysis"]["fps"] = settings["fps"]
-        if settings["max_frames"] is not None:
-            config.setdefault("processing", {})["max_frames"] = settings["max_frames"]
         return config
 
     def _write_raw_rows(self, job: RunJob | None, result: dict[str, Any]) -> int:
@@ -190,3 +193,20 @@ def _job_input(job: RunJob, key: str, setting_key: str) -> Path:
     if setting_key in job.settings:
         return Path(str(job.settings[setting_key]))
     raise ValueError(f"{job.id} requires input {key!r} or setting {setting_key!r}")
+
+
+def _video_dimensions(path: Path) -> tuple[int, int]:
+    try:
+        import cv2
+    except Exception:
+        return 0, 0
+    capture = cv2.VideoCapture(str(path))
+    try:
+        if not capture.isOpened():
+            return 0, 0
+        return (
+            max(int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0), 0),
+            max(int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0), 0),
+        )
+    finally:
+        capture.release()

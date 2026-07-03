@@ -126,7 +126,6 @@ class DropletPipeline:
 
     def _frame_range(self, total_frames: int) -> tuple:
         video_config = self.config.get("video", {})
-        processing_config = self.config.get("processing", {})
         start_frame = max(int(video_config.get("start_frame") or 0), 0)
         if total_frames > 0:
             start_frame = min(start_frame, total_frames)
@@ -138,10 +137,6 @@ class DropletPipeline:
             end_frame = max(int(configured_end), start_frame)
             if total_frames > 0:
                 end_frame = min(end_frame, total_frames)
-
-        max_frames = processing_config.get("max_frames")
-        if max_frames:
-            end_frame = min(end_frame, start_frame + int(max_frames))
 
         return start_frame, end_frame
 

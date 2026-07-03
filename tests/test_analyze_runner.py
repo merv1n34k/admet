@@ -51,7 +51,8 @@ class AnalyzeBatchRunnerTests(unittest.TestCase):
                         settings={
                             "microns_per_pixel": 1.2,
                             "fps": 30.0,
-                            "max_frames": 3,
+                            "start_frame": 0,
+                            "end_frame": 3,
                         },
                     ),
                 )
@@ -196,14 +197,12 @@ class AnalyzeWorkflowViewTests(unittest.TestCase):
             settings={
                 "microns_per_pixel": 2.5,
                 "fps": 150.0,
-                "max_frames": 90,
                 "start_frame": 10,
                 "end_frame": 120,
-                "roi_enabled": True,
                 "roi_x": 16,
                 "roi_y": 24,
                 "roi_width": 320,
-                "roi_height": 160,
+                "roi_height": 0,
             },
         )
 
@@ -211,13 +210,12 @@ class AnalyzeWorkflowViewTests(unittest.TestCase):
 
         self.assertEqual(target.settings["microns_per_pixel"], 2.5)
         self.assertEqual(target.settings["fps"], 150.0)
-        self.assertEqual(target.settings["max_frames"], 90)
         self.assertEqual(target.settings["start_frame"], 10)
         self.assertEqual(target.settings["end_frame"], 120)
         self.assertEqual(target.settings["roi_x"], 16)
         self.assertEqual(target.settings["roi_y"], 24)
         self.assertEqual(target.settings["roi_width"], 320)
-        self.assertEqual(target.settings["roi_height"], 160)
+        self.assertEqual(target.settings["roi_height"], 720)
 
     def test_target_to_run_uses_row_specific_cellpose_settings(self):
         view = AnalyzeWorkflowView(
@@ -307,7 +305,8 @@ class FakeAnalyzeEngine:
             Param("video_path", "Video Path", ParamKind.PATH, default="", required=True),
             Param("microns_per_pixel", "Microns Per Pixel", ParamKind.FLOAT, default=1.0),
             Param("fps", "FPS", ParamKind.FLOAT, default=0.0),
-            Param("max_frames", "Max Frames", ParamKind.INTEGER, default=None),
+            Param("start_frame", "Start Frame", ParamKind.INTEGER, default=0),
+            Param("end_frame", "End Frame", ParamKind.INTEGER, default=None),
         )
     )
     actions = (
@@ -315,7 +314,7 @@ class FakeAnalyzeEngine:
             "analyze",
             "Analyze",
             "analysis",
-            params=("video_path", "microns_per_pixel", "fps", "max_frames"),
+            params=("video_path", "microns_per_pixel", "fps", "start_frame", "end_frame"),
         ),
     )
 

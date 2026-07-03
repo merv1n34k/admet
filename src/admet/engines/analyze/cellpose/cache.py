@@ -14,7 +14,7 @@ class Cache:
     def __init__(self, config: dict[str, Any], cache_dir: str | Path | None = None):
         cache_cfg = config.get("cache", {})
         self.enabled = cache_cfg.get("enabled", True)
-        self.max_frames = cache_cfg.get("max_frames", 100)
+        self.max_entries = cache_cfg.get("max_entries", 100)
         configured_dir = cache_dir or cache_cfg.get("dir")
         self.cache_dir = (
             Path(configured_dir)
@@ -110,7 +110,7 @@ class Cache:
             self._save_metadata()
 
     def _enforce_lru(self) -> None:
-        while len(self.metadata["access_order"]) > self.max_frames:
+        while len(self.metadata["access_order"]) > self.max_entries:
             oldest_key = self.metadata["access_order"].pop(0)
             cache_file = self.cache_dir / f"{oldest_key}.npz"
             if cache_file.exists():

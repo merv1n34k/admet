@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
 import csv
+import html
 import json
 import math
+import mimetypes
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -24,6 +27,8 @@ WORKFLOW_STAGES = (
     ("view", "4. View Results"),
     ("export", "5. Export"),
 )
+VIDEO_SUFFIXES = {".avi", ".mp4", ".mov", ".mkv"}
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 
 
 @dataclass
@@ -108,7 +113,6 @@ class AnalyzeWorkflowView:
         self.settings: dict[str, Any] = {
             "opencv_microns_per_pixel": 1.0,
             "opencv_fps": 0.0,
-            "opencv_max_frames": 0,
             "cellpose_config_path": "",
             "cellpose_px_to_um": 1.14,
             "cellpose_frame_limit": 0,
@@ -157,6 +161,7 @@ class AnalyzeWorkflowView:
             with ui.row().classes("items-baseline gap-3"):
                 ui.label("admet analyze").classes("text-xl font-semibold")
                 ui.label("Project analysis matrix").classes("muted text-sm")
+                ui.label(f"root: {self.discovery_root}").classes("muted text-xs root-hint")
             with ui.row().classes("items-center gap-2"):
                 options = self._project_options()
                 selected = self.project_path if self.project_path in options else None
@@ -168,11 +173,7 @@ class AnalyzeWorkflowView:
                 ).classes("project-select")
                 ui.button("Refresh", on_click=self._refresh_projects).props("dense no-caps outline")
                 ui.button("New Project", on_click=self._new_project).props("dense no-caps outline")
-                ui.button("Load Project", on_click=self._load_project).props("dense no-caps outline")
-                self._refs["manual_project_input"] = ui.input(
-                    "Manual path",
-                    value=self.project_path,
-                ).bind_value(self, "project_path").classes("manual-project-input")
+                ui.button("Load Project", on_click=self._open_project_browser).props("dense no-caps outline")
 
     def _mount_sidebar(self) -> None:
         sidebar = self._refs.get("sidebar")
@@ -219,7 +220,8 @@ class AnalyzeWorkflowView:
             self._stage_id(),
             self.selected_uid,
             self.project_path,
-            tuple((row.uid, row.engine, row.active) for row in self.matrix),
+            self.source_path,
+            tuple((row.uid, row.engine, row.active, row.source_path) for row in self.matrix),
             tuple(str(ref.path) for ref in self.project_refs),
             id(self.last_report),
         )
@@ -250,11 +252,9 @@ class AnalyzeWorkflowView:
         if select is not None:
             select.options = self._project_options()
             selected = self.project_path if self.project_path in select.options else None
-            select.set_value(selected)
+            if getattr(select, "value", None) != selected:
+                select.set_value(selected)
             select.update()
-        manual = self._refs.get("manual_project_input")
-        if manual is not None:
-            manual.set_value(self.project_path)
 
     def _mount_action_box(self) -> None:
         from nicegui import ui
@@ -357,8 +357,8 @@ class AnalyzeWorkflowView:
             "matrix": lambda: [self._matrix_row(row) for row in self.matrix],
             "project_files": self._project_file_rows,
             "recording_inventory": self._recording_inventory_rows,
-            "opencv_matrix": lambda: [self._matrix_row(row) for row in self._targets("opencv")],
-            "cellpose_matrix": lambda: [self._matrix_row(row) for row in self._targets("cellpose")],
+            "opencv_matrix": lambda: [self._engine_matrix_row(row) for row in self._targets("opencv")],
+            "cellpose_matrix": lambda: [self._engine_matrix_row(row) for row in self._targets("cellpose")],
             "opencv_summary": lambda: _summary_table_rows(
                 [summary for summary in self._raw_summaries() if summary.engine == "opencv"]
             ),
@@ -382,11 +382,11 @@ class AnalyzeWorkflowView:
         target = self._selected_row_for_engine("opencv")
         preview = self._refs.get("opencv_preview")
         if target is not None and preview is not None:
-            preview.content = _mock_video_preview_html(target)
+            preview.content = self._opencv_preview_html(target)
         target = self._selected_row_for_engine("cellpose")
         preview = self._refs.get("cellpose_preview")
         if target is not None and preview is not None:
-            preview.content = _mock_cellpose_preview_html(target)
+            preview.content = self._cellpose_preview_html(target)
 
     def _sync_log(self) -> None:
         log = self._refs.get("log")
@@ -472,69 +472,21 @@ class AnalyzeWorkflowView:
     def _render_import_controls(self) -> None:
         from nicegui import ui
 
-        with ui.grid(columns="repeat(4, minmax(0, 1fr))").classes("w-full gap-2"):
-            ui.input("Source", value=self.source_path).bind_value(self, "source_path").classes("col-span-2")
-            ui.select(
-                {"": "Auto", "opencv": "OpenCV", "cellpose": "Cellpose"},
-                label="Engine",
-                value=self._selected_engine_value(),
-                on_change=lambda event: self._set_selected_field("engine", event.value),
-            )
-            ui.select(
-                {"use": "Use cache", "discard": "Discard cache", "skip": "Skip"},
-                label="Cache",
-                value=self._selected_cache_policy(),
-                on_change=lambda event: self._set_selected_field("cache_policy", event.value),
-            )
-        with ui.grid(columns="repeat(4, minmax(0, 1fr))").classes("w-full gap-2"):
-            selected = self._selected_row()
-            ui.input(
-                "Project",
-                value=selected.project_path if selected else self.project_path,
-                on_change=lambda event: self._set_selected_or_project_path(event.value),
-            ).classes("col-span-2")
-            ui.input(
-                "Sample ID",
-                value=selected.sample_id if selected else "",
-                on_change=lambda event: self._set_selected_field("sample_id", event.value),
-            )
-            ui.checkbox(
-                "Active",
-                value=selected.active if selected else True,
-                on_change=lambda event: self._set_selected_field("active", bool(event.value)),
-            )
-        with ui.row().classes("w-full gap-2"):
-            ui.button("Add Target", on_click=self._add_target).props("dense no-caps outline").classes("grow")
-            ui.button("Remove Selected", on_click=self._remove_selected).props("dense no-caps outline color=red").classes(
-                "grow"
-            )
+        with ui.row().classes("w-full gap-2 items-end"):
+            with ui.column().classes("source-picker grow gap-1"):
+                ui.label("Source").classes("muted text-xs font-semibold")
+                with ui.row().classes("w-full gap-2 items-center"):
+                    ui.label(self._source_display()).classes("source-display grow")
+                    ui.button("Browse", on_click=self._open_source_browser).props("dense no-caps outline")
+            ui.label(f"Project: {Path(self.project_path).name}").classes("muted text-xs source-project")
 
     def _render_opencv_settings(self) -> None:
         from nicegui import ui
 
-        with ui.grid(columns="repeat(4, minmax(0, 1fr))").classes("w-full gap-2"):
-            ui.number(
-                "Microns / px",
-                value=self.settings["opencv_microns_per_pixel"],
-                min=0,
-                step=0.01,
-                on_change=lambda event: self._set_setting("opencv_microns_per_pixel", float(event.value or 0)),
-            )
-            ui.number(
-                "FPS",
-                value=self.settings["opencv_fps"],
-                min=0,
-                step=1,
-                on_change=lambda event: self._set_setting("opencv_fps", float(event.value or 0)),
-            )
-            ui.number(
-                "Max frames",
-                value=self.settings["opencv_max_frames"],
-                min=0,
-                step=1,
-                on_change=lambda event: self._set_setting("opencv_max_frames", int(float(event.value or 0))),
-            )
-            ui.label(f"{len(self._targets('opencv'))} active target(s)").classes("muted self-center")
+        with ui.row().classes("w-full gap-2 items-end"):
+            self._setting_number("opencv_microns_per_pixel", "Microns / px", step=0.01)
+            self._setting_number("opencv_fps", "FPS", step=1)
+            ui.label(f"{len(self._targets('opencv'))} active file(s)").classes("muted self-center")
 
     def _render_cellpose_settings(self) -> None:
         from nicegui import ui
@@ -545,19 +497,20 @@ class AnalyzeWorkflowView:
                 value=self.settings["cellpose_config_path"],
                 on_change=lambda event: self._set_setting("cellpose_config_path", event.value or ""),
             )
-            ui.number(
+            self._setting_slider(
+                "cellpose_px_to_um",
                 "px to um",
-                value=self.settings["cellpose_px_to_um"],
-                min=0,
-                step=0.01,
-                on_change=lambda event: self._set_setting("cellpose_px_to_um", float(event.value or 0)),
+                0.01,
+                10.0,
+                0.01,
             )
-            ui.number(
+            self._setting_slider(
+                "cellpose_frame_limit",
                 "Frame limit",
-                value=self.settings["cellpose_frame_limit"],
-                min=0,
-                step=1,
-                on_change=lambda event: self._set_setting("cellpose_frame_limit", int(float(event.value or 0))),
+                0,
+                10000,
+                1,
+                integer=True,
             )
             with ui.column().classes("gap-0"):
                 ui.checkbox(
@@ -579,6 +532,55 @@ class AnalyzeWorkflowView:
             value=self.settings["cache_root"],
             on_change=lambda event: self._set_setting("cache_root", event.value or ""),
         ).classes("w-full")
+
+    def _setting_slider(
+        self,
+        key: str,
+        label: str,
+        minimum: float,
+        maximum: float,
+        step: float,
+        *,
+        integer: bool = False,
+    ) -> None:
+        from nicegui import ui
+
+        value = _numeric(self.settings.get(key)) or 0
+        value = max(minimum, min(maximum, value))
+        if integer:
+            value = int(value)
+        with ui.column().classes("slider-field w-full gap-0"):
+            with ui.row().classes("slider-label-row w-full"):
+                ui.label(label).classes("muted text-xs font-semibold")
+                value_label = ui.label(_format_slider_value(value, step)).classes("slider-value")
+
+            def update_slider(event: Any, name: str = key, use_int: bool = integer) -> None:
+                number = int(float(event.value or 0)) if use_int else float(event.value or 0)
+                self._set_setting(name, number)
+                value_label.set_text(_format_slider_value(number, step))
+
+            ui.slider(
+                min=minimum,
+                max=maximum,
+                step=step,
+                value=value,
+                on_change=update_slider,
+            ).props("dense").classes("w-full")
+
+    def _setting_number(self, key: str, label: str, *, step: float) -> None:
+        from nicegui import ui
+
+        value = _numeric(self.settings.get(key)) or 0
+        ui.number(
+            label,
+            value=int(value) if step >= 1 else value,
+            min=0,
+            step=step,
+            on_change=lambda event, name=key, use_int=step >= 1: self._set_setting(
+                name,
+                int(float(event.value or 0)) if use_int else float(event.value or 0),
+            ),
+        ).classes("flat-number grow")
 
     def _render_main_window(self) -> None:
         from nicegui import ui
@@ -604,7 +606,7 @@ class AnalyzeWorkflowView:
             ui.label("Batch matrix").classes("section-title")
             self._render_matrix_table(self.matrix)
             if not self.matrix:
-                ui.label("No targets. Add a source path in the Action Panel.").classes("muted text-xs")
+                ui.label("No sources yet. Browse a video file or imaging folder.").classes("muted text-xs")
 
     def _render_matrix_table(self, rows: list[MatrixRow]) -> None:
         from nicegui import ui
@@ -613,7 +615,7 @@ class AnalyzeWorkflowView:
             columns=_matrix_columns(),
             rows=[self._matrix_row(row) for row in rows],
             row_key="uid",
-        ).classes("slim-table target-table w-full").props("dense flat hide-bottom")
+        ).classes("slim-table matrix-table w-full").props("dense flat hide-bottom")
         self._register_table("matrix", table)
         self._wire_matrix_table(table)
         table.on("rowClick", self._select_row_event)
@@ -623,9 +625,7 @@ class AnalyzeWorkflowView:
             "body-cell-project",
             """
             <q-td :props="props">
-              <q-input dense outlined v-model="props.row.project_path"
-                @blur="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'project_path', value: props.row.project_path})"
-                @keyup.enter="$event.target.blur()" />
+              <div class="source-cell-name">{{ props.row.project }}</div>
             </q-td>
             """,
         )
@@ -633,9 +633,11 @@ class AnalyzeWorkflowView:
             "body-cell-source",
             """
             <q-td :props="props">
-              <q-input dense outlined v-model="props.row.source_path"
-                @blur="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'source_path', value: props.row.source_path})"
-                @keyup.enter="$event.target.blur()" />
+              <div class="source-cell">
+                <div class="source-cell-name">{{ props.row.source }}</div>
+                <q-btn dense flat no-caps label="Browse"
+                  @click.stop="$parent.$emit('browse-source', {uid: props.row.uid})" />
+              </div>
             </q-td>
             """,
         )
@@ -643,11 +645,7 @@ class AnalyzeWorkflowView:
             "body-cell-engine",
             """
             <q-td :props="props">
-              <q-select dense outlined emit-value map-options :options="[
-                {label: 'OpenCV', value: 'opencv'},
-                {label: 'Cellpose', value: 'cellpose'}
-              ]" v-model="props.row.engine"
-                @update:model-value="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'engine', value: props.row.engine})" />
+              <div class="source-cell-name">{{ props.row.engine }}</div>
             </q-td>
             """,
         )
@@ -674,16 +672,8 @@ class AnalyzeWorkflowView:
             </q-td>
             """,
         )
-        table.add_slot(
-            "body-cell-active",
-            """
-            <q-td :props="props">
-              <q-checkbox dense :model-value="props.row.active"
-                @update:model-value="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'active', value: $event})" />
-            </q-td>
-            """,
-        )
         table.on("matrix-change", self._handle_matrix_change)
+        table.on("browse-source", self._browse_matrix_source)
 
     def _render_import_inventory(self) -> None:
         from nicegui import ui
@@ -721,27 +711,16 @@ class AnalyzeWorkflowView:
 
         rows = [row for row in self.matrix if row.active and row.engine == engine]
         with ui.column().classes("panel w-full gap-2 p-3"):
-            ui.label("Engine target matrix").classes("section-title")
+            ui.label(f"{engine.title()} files").classes("section-title")
             table = ui.table(
-                columns=_matrix_columns(),
-                rows=[self._matrix_row(row) for row in rows],
+                columns=_engine_matrix_columns(),
+                rows=[self._engine_matrix_row(row) for row in rows],
                 row_key="uid",
-            ).classes("slim-table target-table w-full").props("dense flat hide-bottom")
+            ).classes("slim-table matrix-table w-full").props("dense flat hide-bottom")
             self._register_table(f"{engine}_matrix", table)
-            self._wire_matrix_table(table)
             table.on("rowClick", self._select_row_event)
             if not rows:
-                ui.label(f"No active {engine} targets.").classes("muted text-xs")
-        with ui.column().classes("panel w-full gap-2 p-3"):
-            ui.label("Run plan").classes("section-title")
-            ui.table(
-                columns=[
-                    {"name": "step", "label": "Step", "field": "step", "align": "left"},
-                    {"name": "source", "label": "Source", "field": "source", "align": "left"},
-                    {"name": "output", "label": "Output", "field": "output", "align": "left"},
-                ],
-                rows=_run_plan_rows(engine),
-            ).classes("w-full").props("dense flat hide-bottom")
+                ui.label(f"No active {engine} files.").classes("muted text-xs")
 
     def _render_video_stage(self) -> None:
         self._render_engine_matrix("opencv")
@@ -758,7 +737,7 @@ class AnalyzeWorkflowView:
 
         summaries = self._raw_summaries()
         with ui.column().classes("panel w-full gap-2 p-3"):
-            ui.label("1. Analysis targets").classes("section-title")
+            ui.label("1. Analysis files").classes("section-title")
             self._render_matrix_table(self.matrix)
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("2. Summary plots").classes("section-title")
@@ -791,48 +770,208 @@ class AnalyzeWorkflowView:
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("Video preview / crop and frame limits").classes("section-title")
             if target is None:
-                ui.label("Select an OpenCV target.").classes("muted text-xs")
+                ui.label("Select an OpenCV file.").classes("muted text-xs")
                 return
-            with ui.element("div").classes("mock-editor-grid w-full"):
+            metadata = _video_metadata(self._resolve_media_path(target.source_path, target.project_path))
+            frame_max = max(int(metadata.get("frames") or 500) - 1, 1)
+            width_max = max(int(metadata.get("width") or 1280), 1)
+            height_max = max(int(metadata.get("height") or 720), 1)
+            preview = _read_video_frame(
+                self._resolve_media_path(target.source_path, target.project_path),
+                _preview_frame_index(target),
+            )
+            preview_ok = not bool(preview["error"])
+            with ui.element("div").classes("media-editor-grid w-full"):
                 with ui.column().classes("gap-2"):
-                    self._refs["opencv_preview"] = ui.html(_mock_video_preview_html(target)).classes("w-full")
-                    with ui.row().classes("editor-control-row w-full"):
-                        ui.number(
-                            "Preview frame",
-                            value=_row_int(target, "preview_frame", 0),
-                            min=0,
-                            step=1,
-                            on_change=lambda event, row=target: self._set_row_int(
-                                row,
-                                "preview_frame",
-                                event.value,
-                            ),
-                        ).classes("compact-number grow")
-                        ui.button(
-                            "Reset crop",
-                            on_click=lambda row=target: self._reset_opencv_crop(row),
-                        ).props("dense no-caps outline")
+                    self._refs["opencv_preview"] = ui.html(self._opencv_preview_html(target, preview)).classes("w-full")
                 with ui.column().classes("gap-2"):
                     ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
-                    ui.label(target.source_path).classes("muted text-xs path-label")
-                    with ui.element("div").classes("editor-grid"):
+                    ui.label(_compact_path(target.source_path)).classes("muted text-xs path-label").props(
+                        f'title="{html.escape(target.source_path)}"'
+                    )
+                    with ui.row().classes("calibration-row w-full gap-2"):
                         self._number_editor(
                             target,
                             "microns_per_pixel",
                             "Microns / px",
-                            self.settings["opencv_microns_per_pixel"],
+                            float(self.settings["opencv_microns_per_pixel"]),
                             step=0.01,
                         )
-                        self._number_editor(target, "fps", "FPS", self.settings["opencv_fps"], step=1)
-                        self._number_editor(target, "max_frames", "Max frames", 0, step=1)
-                        self._number_editor(target, "start_frame", "Start frame", 0, step=1)
-                        self._number_editor(target, "end_frame", "End frame", 0, step=1)
-                        self._bool_editor(target, "roi_enabled", "Crop ROI", False)
+                        self._number_editor(
+                            target,
+                            "fps",
+                            "FPS",
+                            int(self.settings["opencv_fps"]),
+                            step=1,
+                        )
+                    with ui.element("div").classes("editor-grid"):
+                        self._number_editor(target, "preview_frame", "Preview frame", 0, step=1, maximum=frame_max)
+                        self._number_editor(target, "start_frame", "Start frame", 0, step=1, maximum=frame_max)
+                        self._number_editor(target, "end_frame", "End frame", frame_max, step=1, maximum=frame_max + 1)
                     with ui.element("div").classes("editor-grid editor-grid-roi"):
-                        self._number_editor(target, "roi_x", "ROI X", 0, step=8)
-                        self._number_editor(target, "roi_y", "ROI Y", 0, step=8)
-                        self._number_editor(target, "roi_width", "ROI W", 0, step=8)
-                        self._number_editor(target, "roi_height", "ROI H", 0, step=8)
+                        if not preview_ok:
+                            ui.label("Preview unavailable. Relocate the source or use the arm64 analyze environment before editing crop/frame values.").classes(
+                                "editor-note"
+                            )
+                        self._number_editor(target, "roi_x", "ROI X", 0, step=1, maximum=width_max, enabled=preview_ok)
+                        self._number_editor(target, "roi_y", "ROI Y", 0, step=1, maximum=height_max, enabled=preview_ok)
+                        self._number_editor(target, "roi_width", "ROI W", 0, step=1, maximum=width_max, enabled=preview_ok)
+                        self._number_editor(target, "roi_height", "ROI H", 0, step=1, maximum=height_max, enabled=preview_ok)
+
+    def _slider_editor(
+        self,
+        row: MatrixRow,
+        key: str,
+        label: str,
+        minimum: float,
+        maximum: float,
+        step: float,
+        default: Any,
+    ) -> None:
+        from nicegui import ui
+
+        value = _row_float(row, key, default)
+        value = max(minimum, min(maximum, value))
+        if step >= 1:
+            value = int(value)
+        with ui.column().classes("slider-field w-full gap-0"):
+            with ui.row().classes("slider-label-row w-full"):
+                ui.label(label).classes("muted text-xs font-semibold")
+                value_label = ui.label(_format_slider_value(value, step)).classes("slider-value")
+
+            def update_slider(event: Any, item: MatrixRow = row, name: str = key, use_int: bool = step >= 1) -> None:
+                number = _numeric(event.value)
+                if number is None:
+                    number = 0
+                value_label.set_text(_format_slider_value(number, step))
+                self._set_row_slider(
+                    item,
+                    name,
+                    number,
+                    integer=use_int,
+                )
+
+            slider = ui.slider(
+                min=minimum,
+                max=maximum,
+                step=step,
+                value=value,
+                on_change=update_slider,
+            ).props("dense").classes("w-full")
+            slider.on("change", lambda _event: self._sync_previews())
+
+    def _set_row_slider(
+        self,
+        row: MatrixRow,
+        key: str,
+        value: Any,
+        *,
+        integer: bool,
+    ) -> None:
+        number = _numeric(value)
+        if number is None:
+            number = 0
+        row.settings[key] = int(number) if integer else float(number)
+        self.selected_uid = row.uid
+        self._sync_stage()
+
+    def _number_editor(
+        self,
+        row: MatrixRow,
+        key: str,
+        label: str,
+        default: Any,
+        *,
+        step: float,
+        maximum: float | None = None,
+        enabled: bool = True,
+    ) -> None:
+        from nicegui import ui
+
+        value = _row_float(row, key, default) if step < 1 else _row_int(row, key, default)
+        field = ui.number(
+            label,
+            value=value,
+            min=0,
+            max=maximum,
+            step=step,
+            on_change=lambda event, item=row, name=key, use_int=step >= 1: self._set_row_number(
+                item,
+                name,
+                event.value,
+                integer=use_int,
+            ),
+        ).classes("flat-number grow")
+        field.set_enabled(enabled)
+
+    def _set_row_number(
+        self,
+        row: MatrixRow,
+        key: str,
+        value: Any,
+        *,
+        integer: bool,
+    ) -> None:
+        number = _numeric(value)
+        if number is None:
+            number = 0
+        row.settings[key] = int(number) if integer else float(number)
+        self.selected_uid = row.uid
+        self._sync_stage()
+
+    def _opencv_preview_html(self, target: MatrixRow, frame: dict[str, Any] | None = None) -> str:
+        source = self._resolve_media_path(target.source_path, target.project_path)
+        frame_index = _preview_frame_index(target)
+        frame = frame or _read_video_frame(source, frame_index)
+        if frame["error"]:
+            return _viewer_error_html(target, source, str(frame["error"]))
+        width_px = max(int(frame["width"] or 1), 1)
+        height_px = max(int(frame["height"] or 1), 1)
+        left = _percent(_row_int(target, "roi_x", 0), width_px)
+        top = _percent(_row_int(target, "roi_y", 0), height_px)
+        roi_width_raw = _row_int(target, "roi_width", 0)
+        roi_height_raw = _row_int(target, "roi_height", 0)
+        roi_width = roi_width_raw or width_px
+        roi_height = roi_height_raw or height_px
+        width = _percent(roi_width, width_px)
+        height = _percent(roi_height, height_px)
+        roi = ""
+        if roi_width_raw or roi_height_raw:
+            roi = f'<div class="admet-roi" style="left:{left}%; top:{top}%; width:{width}%; height:{height}%;"></div>'
+        return f"""
+        <div class="admet-viewer" style="aspect-ratio:{width_px} / {height_px};">
+          <img class="admet-video-frame" src="{frame['src']}" alt="{html.escape(target.sample_id)} frame {frame_index}">
+          {roi}
+          <div class="admet-playhead">{html.escape(target.sample_id or Path(target.source_path).stem)} - frame {frame_index}</div>
+        </div>
+        """
+
+    def _cellpose_preview_html(self, target: MatrixRow) -> str:
+        source = self._resolve_media_path(target.source_path, target.project_path)
+        image = _read_image_source(source, _row_int(target, "image_frame", 1))
+        if image["error"]:
+            return _viewer_error_html(target, source, str(image["error"]))
+        return f"""
+        <div class="admet-viewer">
+          <img class="admet-video-frame" src="{image['src']}" alt="{html.escape(target.sample_id)} image {image['index']}">
+          <div class="admet-playhead">{html.escape(target.sample_id or Path(target.source_path).stem)} - image {image['index']}</div>
+        </div>
+        """
+
+    def _resolve_media_path(self, source: str, project_path: str | None = None) -> Path:
+        path = Path(source)
+        if path.is_absolute():
+            return path
+        project = session_path(project_path) if project_path else self._project_path()
+        return project / path
+
+    def _image_count(self, target: MatrixRow) -> int:
+        source = self._resolve_media_path(target.source_path, target.project_path)
+        if source.is_file() and source.suffix.lower() in IMAGE_SUFFIXES:
+            return 1
+        if not source.is_dir():
+            return 48
+        return max(1, len([item for item in source.iterdir() if item.is_file() and item.suffix.lower() in IMAGE_SUFFIXES]))
 
     def _render_cellpose_editor(self) -> None:
         from nicegui import ui
@@ -841,34 +980,27 @@ class AnalyzeWorkflowView:
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("Post-run correction editor").classes("section-title")
             if target is None:
-                ui.label("Select a Cellpose target.").classes("muted text-xs")
+                ui.label("Select a Cellpose file or folder.").classes("muted text-xs")
                 return
-            with ui.element("div").classes("mock-editor-grid w-full"):
+            image_max = self._image_count(target)
+            with ui.element("div").classes("media-editor-grid w-full"):
                 with ui.column().classes("gap-2"):
-                    self._refs["cellpose_preview"] = ui.html(_mock_cellpose_preview_html(target)).classes("w-full")
-                    ui.number(
-                        "Image frame",
-                        value=_row_int(target, "image_frame", 1),
-                        min=1,
-                        step=1,
-                        on_change=lambda event, row=target: self._set_row_int(
-                            row,
-                            "image_frame",
-                            event.value,
-                        ),
-                    ).classes("compact-number")
+                    self._refs["cellpose_preview"] = ui.html(self._cellpose_preview_html(target)).classes("w-full")
+                    self._slider_editor(target, "image_frame", "Image frame", 1, image_max, 1, 1)
                 with ui.column().classes("gap-2"):
                     ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
                     ui.label(target.source_path).classes("muted text-xs path-label")
                     with ui.element("div").classes("editor-grid"):
-                        self._number_editor(
+                        self._slider_editor(
                             target,
                             "px_to_um",
                             "px to um",
-                            self.settings["cellpose_px_to_um"],
-                            step=0.01,
+                            0.01,
+                            10.0,
+                            0.01,
+                            float(self.settings["cellpose_px_to_um"]),
                         )
-                        self._number_editor(target, "frame_limit", "Frame limit", 0, step=1)
+                        self._slider_editor(target, "frame_limit", "Frame limit", 0, max(image_max, 500), 1, 0)
                         self._bool_editor(
                             target,
                             "use_cache",
@@ -896,7 +1028,7 @@ class AnalyzeWorkflowView:
                         self._counter_editor(target, "disabled_droplets", "Disabled droplets")
                         self._counter_editor(target, "added_inclusions", "Added inclusions")
                     ui.label("Correction edits will apply to raw droplet rows in View Results.").classes(
-                        "mock-editor-note"
+                        "editor-note"
                     )
 
     def _render_engine_plots(self, engine: str) -> None:
@@ -1036,31 +1168,6 @@ class AnalyzeWorkflowView:
             return selected
         return next((row for row in self.matrix if row.active and row.engine == engine), None)
 
-    def _number_editor(
-        self,
-        row: MatrixRow,
-        key: str,
-        label: str,
-        default: Any,
-        *,
-        step: float,
-    ) -> None:
-        from nicegui import ui
-
-        value = _row_float(row, key, default) if step < 1 else _row_int(row, key, default)
-        ui.number(
-            label,
-            value=value,
-            min=0,
-            step=step,
-            on_change=lambda event, item=row, name=key, use_int=step >= 1: self._set_row_number(
-                item,
-                name,
-                event.value,
-                integer=use_int,
-            ),
-        ).classes("compact-number")
-
     def _bool_editor(
         self,
         row: MatrixRow,
@@ -1096,12 +1203,158 @@ class AnalyzeWorkflowView:
                     on_click=lambda item=row, name=key: self._increment_row_counter(item, name, 1),
                 ).props("dense no-caps outline").classes("grow")
 
+    def _source_display(self) -> str:
+        selected = self._selected_row()
+        source = selected.source_path if selected is not None else self.source_path
+        return Path(source).name if source else "Browse a video file or imaging folder"
+
+    def _open_project_browser(self) -> None:
+        start = self._project_path()
+        root = start if start.is_dir() else projects_root(self.discovery_root)
+        self._open_path_browser(
+            title="Load project manifest",
+            start=root,
+            mode="project",
+            row_uid=None,
+        )
+
+    def _open_source_browser(self) -> None:
+        selected = self._selected_row()
+        source = selected.source_path if selected is not None else self.source_path
+        start = Path(source).parent if source else self._project_path().parent
+        self._open_path_browser(
+            title="Select source",
+            start=start,
+            mode="source",
+            row_uid=selected.uid if selected is not None else None,
+        )
+
+    def _browse_matrix_source(self, event: Any) -> None:
+        row = _event_row(event)
+        uid = str(row.get("uid") or "")
+        selected = next((item for item in self.matrix if item.uid == uid), None)
+        start = Path(selected.source_path).parent if selected is not None else self._project_path().parent
+        self._open_path_browser(title="Select source", start=start, mode="source", row_uid=uid or None)
+
+    def _open_path_browser(
+        self,
+        *,
+        title: str,
+        start: Path,
+        mode: str,
+        row_uid: str | None,
+    ) -> None:
+        from nicegui import ui
+
+        state = {"path": _existing_dir(start)}
+        dialog = ui.dialog().classes("browser-dialog")
+        with dialog, ui.card().classes("browser-card"):
+            header = ui.label(title).classes("section-title")
+            path_label = ui.label(str(state["path"])).classes("browser-path")
+            rows = ui.column().classes("browser-list w-full gap-1")
+            with ui.row().classes("w-full gap-2 justify-end"):
+                if mode == "source":
+                    ui.button(
+                        "Use This Folder",
+                        on_click=lambda: self._select_browser_path(state["path"], mode, row_uid, dialog),
+                    ).props("dense no-caps outline")
+                ui.button("Cancel", on_click=dialog.close).props("dense no-caps outline")
+
+        def render_entries() -> None:
+            current = state["path"]
+            path_label.set_text(str(current))
+            rows.clear()
+            with rows:
+                parent = current.parent
+                if parent != current:
+                    ui.button("..", on_click=lambda path=parent: navigate(path)).props("dense no-caps flat").classes(
+                        "browser-row"
+                    )
+                entries = _browser_entries(current, mode)
+                if not entries:
+                    ui.label("No matching entries.").classes("muted text-xs")
+                for entry in entries:
+                    label = entry.name + ("/" if entry.is_dir() else "")
+                    if entry.is_dir():
+                        ui.button(label, on_click=lambda path=entry: navigate(path)).props(
+                            "dense no-caps flat"
+                        ).classes("browser-row")
+                    else:
+                        ui.button(
+                            label,
+                            on_click=lambda path=entry: self._select_browser_path(path, mode, row_uid, dialog),
+                        ).props("dense no-caps flat").classes("browser-row")
+
+        def navigate(path: Path) -> None:
+            state["path"] = _existing_dir(path)
+            render_entries()
+
+        header.set_text(title)
+        render_entries()
+        dialog.open()
+
+    def _select_browser_path(
+        self,
+        path: Path,
+        mode: str,
+        row_uid: str | None,
+        dialog: Any,
+    ) -> None:
+        dialog.close()
+        if mode == "project":
+            manifest = path if path.name == "manifest.json" else path / "manifest.json"
+            self._load_project_from_manifest(manifest)
+            return
+        self._upsert_source(path, row_uid=row_uid)
+
+    def _load_project_from_manifest(self, manifest: Path) -> None:
+        if manifest.name != "manifest.json" or not manifest.is_file():
+            self._notify("Select a project manifest.json.", "warning")
+            self._refresh()
+            return
+        self._load_project(manifest.parent)
+
+    def _upsert_source(self, source: Path, *, row_uid: str | None) -> None:
+        source = source.expanduser().resolve()
+        try:
+            engine = infer_engine(source)
+        except Exception as exc:
+            self._notify(f"unsupported source: {exc}", "warning")
+            self._refresh()
+            return
+
+        row = next((item for item in self.matrix if item.uid == row_uid), None)
+        existing = next((item for item in self.matrix if Path(item.source_path) == source), None)
+        if row is None and existing is not None:
+            row = existing
+        if row is None:
+            row = MatrixRow(
+                uid=_uid(),
+                project_path=str(session_path(self.project_path)),
+                source_path=str(source),
+                engine=engine,
+                sample_id=source.stem or f"sample_{len(self.matrix) + 1}",
+            )
+            self.matrix.append(row)
+        else:
+            row.source_path = str(source)
+            row.engine = engine
+            if not row.sample_id or row.sample_id.startswith("sample_"):
+                row.sample_id = source.stem or row.sample_id
+        self.source_path = row.source_path
+        self.selected_uid = row.uid
+        self.stage_progress["import"] = 100
+        self._mark_stage("import", StageStatus.COMPLETE)
+        self._notify(f"source ready: {source.name}", "success")
+        self._log(f"matrix: source {source} -> {engine}")
+        self._refresh()
+
     def _action_specs(self, stage_id: str) -> list[dict[str, Any]]:
         if stage_id == "import":
             return [
                 {"label": "Create Project", "handler": self._new_project},
-                {"label": "Load Project", "handler": self._load_project},
-                {"label": "Add Target", "handler": self._add_target, "active": bool(self.source_path)},
+                {"label": "Load Project", "handler": self._open_project_browser},
+                {"label": "Browse Source", "handler": self._open_source_browser, "active": True},
             ]
         if stage_id == "video":
             return [{"label": "Run OpenCV", "handler": lambda: self._run_engine("opencv"), "active": True}]
@@ -1130,8 +1383,10 @@ class AnalyzeWorkflowView:
         self.project_refs = discover_projects(self.discovery_root)
         self._refresh()
 
-    def _load_project(self) -> None:
-        path = self._project_path()
+    def _load_project(self, path: Path | None = None) -> None:
+        path = session_path(path) if path is not None else self._project_path()
+        if path.name == "manifest.json":
+            path = path.parent
         if not (path / "manifest.json").is_file():
             self._notify("Project manifest not found.", "warning")
             self._refresh()
@@ -1170,43 +1425,11 @@ class AnalyzeWorkflowView:
                 )
             )
 
-    def _add_target(self) -> None:
-        if not self.source_path:
-            self._notify("Set a source path first.", "warning")
-            self._refresh()
-            return
-        try:
-            engine = infer_engine(self.source_path)
-        except Exception:
-            engine = "opencv"
-        row = MatrixRow(
-            uid=_uid(),
-            project_path=str(session_path(self.project_path)),
-            source_path=self.source_path,
-            engine=engine,
-            sample_id=Path(self.source_path).stem or f"sample_{len(self.matrix) + 1}",
-        )
-        self.matrix.append(row)
-        self.selected_uid = row.uid
-        self.stage_progress["import"] = 100
-        self._mark_stage("import", StageStatus.COMPLETE)
-        self._notify("target added.", "success")
-        self._log(f"matrix: added {row.source_path} -> {row.engine}")
-        self._refresh()
-
-    def _remove_selected(self) -> None:
-        if not self.selected_uid:
-            return
-        self.matrix = [row for row in self.matrix if row.uid != self.selected_uid]
-        self.selected_uid = self.matrix[0].uid if self.matrix else ""
-        self.stage_progress["import"] = 100 if self.matrix else 0
-        self._refresh()
-
     def _run_engine(self, engine: str | None) -> None:
         targets = self._targets(engine)
         if not targets:
             label = engine or "analyze"
-            self._notify(f"No active {label} targets.", "warning")
+            self._notify(f"No active {label} files.", "warning")
             self._refresh()
             return
         try:
@@ -1238,7 +1461,7 @@ class AnalyzeWorkflowView:
         settings = self._engine_settings(row)
         return AnalyzeTarget(
             project_path=Path(row.project_path),
-            source_path=Path(row.source_path),
+            source_path=self._resolve_media_path(row.source_path, row.project_path),
             engine=row.engine,
             sample_id=row.sample_id,
             settings=settings,
@@ -1259,8 +1482,11 @@ class AnalyzeWorkflowView:
                     self.settings["cellpose_detect_inclusions"],
                 ),
             }
-        max_frames = _row_int(row, "max_frames", self.settings["opencv_max_frames"])
         end_frame = _row_int(row, "end_frame", 0)
+        source = self._resolve_media_path(row.source_path, row.project_path)
+        metadata = _video_metadata(source)
+        roi_width = _row_int(row, "roi_width", 0)
+        roi_height = _row_int(row, "roi_height", 0)
         settings = {
             "microns_per_pixel": _row_float(
                 row,
@@ -1268,7 +1494,6 @@ class AnalyzeWorkflowView:
                 self.settings["opencv_microns_per_pixel"],
             ),
             "fps": _row_float(row, "fps", self.settings["opencv_fps"]),
-            "max_frames": max_frames or None,
             "start_frame": _row_int(row, "start_frame", 0),
             "end_frame": end_frame or None,
             "roi_x": 0,
@@ -1276,13 +1501,13 @@ class AnalyzeWorkflowView:
             "roi_width": 0,
             "roi_height": 0,
         }
-        if _row_bool(row, "roi_enabled", False):
+        if roi_width or roi_height:
             settings.update(
                 {
                     "roi_x": _row_int(row, "roi_x", 0),
                     "roi_y": _row_int(row, "roi_y", 0),
-                    "roi_width": _row_int(row, "roi_width", 0),
-                    "roi_height": _row_int(row, "roi_height", 0),
+                    "roi_width": roi_width or max(int(metadata.get("width") or 0), 0),
+                    "roi_height": roi_height or max(int(metadata.get("height") or 0), 0),
                 }
             )
         return settings
@@ -1348,6 +1573,17 @@ class AnalyzeWorkflowView:
             "active": row.active,
         }
 
+    def _engine_matrix_row(self, row: MatrixRow) -> dict[str, Any]:
+        return {
+            "uid": row.uid,
+            "selected": "selected" if row.uid == self.selected_uid else "",
+            "project": Path(row.project_path).name,
+            "source": Path(row.source_path).name or row.source_path,
+            "source_path": row.source_path,
+            "sample_id": row.sample_id,
+            "cache": row.cache_policy,
+        }
+
     def _targets(self, engine: str | None = None) -> list[MatrixRow]:
         return [
             row
@@ -1357,14 +1593,6 @@ class AnalyzeWorkflowView:
 
     def _selected_row(self) -> MatrixRow | None:
         return next((row for row in self.matrix if row.uid == self.selected_uid), None)
-
-    def _selected_engine_value(self) -> str:
-        row = self._selected_row()
-        return row.engine if row is not None else ""
-
-    def _selected_cache_policy(self) -> str:
-        row = self._selected_row()
-        return row.cache_policy if row is not None else "use"
 
     def _select_row_event(self, event: Any) -> None:
         row = _event_row(event)
@@ -1385,35 +1613,14 @@ class AnalyzeWorkflowView:
         field = str(payload.get("field") or "")
         value = payload.get("value")
         row = next((item for item in self.matrix if item.uid == uid), None)
-        if row is None or field not in {"project_path", "source_path", "engine", "sample_id", "cache_policy", "active"}:
+        if row is None or field not in {"sample_id", "cache_policy"}:
             return
-        if field == "project_path":
-            value = str(session_path(str(value or self.project_path)))
-        elif field == "engine":
-            value = str(value or "opencv")
-        elif field == "cache_policy":
+        if field == "cache_policy":
             value = str(value or "use")
-        elif field == "active":
-            value = bool(value)
         else:
             value = str(value or "")
         setattr(row, field, value)
         self.selected_uid = uid
-        self._refresh()
-
-    def _set_selected_field(self, field: str, value: Any) -> None:
-        row = self._selected_row()
-        if row is None:
-            return
-        setattr(row, field, value)
-        self._refresh()
-
-    def _set_selected_or_project_path(self, value: str) -> None:
-        row = self._selected_row()
-        if row is not None:
-            row.project_path = str(session_path(value))
-        else:
-            self.project_path = str(session_path(value))
         self._refresh()
 
     def _set_setting(self, key: str, value: Any) -> None:
@@ -1424,30 +1631,8 @@ class AnalyzeWorkflowView:
         self.selected_uid = row.uid
         self._refresh()
 
-    def _set_row_number(
-        self,
-        row: MatrixRow,
-        key: str,
-        value: Any,
-        *,
-        integer: bool,
-    ) -> None:
-        number = _numeric(value)
-        if number is None:
-            number = 0
-        self._set_row_setting(row, key, int(number) if integer else float(number))
-
-    def _set_row_int(self, row: MatrixRow, key: str, value: Any) -> None:
-        self._set_row_number(row, key, value, integer=True)
-
     def _increment_row_counter(self, row: MatrixRow, key: str, delta: int) -> None:
         row.settings[key] = max(0, _row_int(row, key, 0) + delta)
-        self.selected_uid = row.uid
-        self._refresh()
-
-    def _reset_opencv_crop(self, row: MatrixRow) -> None:
-        for key in ("roi_enabled", "roi_x", "roi_y", "roi_width", "roi_height"):
-            row.settings.pop(key, None)
         self.selected_uid = row.uid
         self._refresh()
 
@@ -1457,8 +1642,7 @@ class AnalyzeWorkflowView:
     def _select_project(self, value: str | None) -> None:
         if not value:
             return
-        self.project_path = str(session_path(value))
-        self._refresh()
+        self._load_project(session_path(value))
 
     def _refresh_projects(self) -> None:
         self.project_refs = discover_projects(self.discovery_root)
@@ -1499,7 +1683,7 @@ class AnalyzeWorkflowView:
     def _instruction(self) -> str:
         stage_id = self._stage_id()
         if stage_id == "import":
-            return "Create or load a project, add source paths, then confirm engine and cache policy per row."
+            return "Create or load a project, then browse source files or folders. Cache policy and sample names are edited in the matrix."
         if stage_id == "video":
             return "Configure OpenCV values and run the active video rows."
         if stage_id == "imaging":
@@ -1526,7 +1710,16 @@ def _matrix_columns() -> list[dict[str, Any]]:
         {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
         {"name": "sample_id", "label": "Sample ID", "field": "sample_id", "align": "left"},
         {"name": "cache", "label": "Cache", "field": "cache", "align": "left"},
-        {"name": "active", "label": "Active", "field": "active", "align": "left"},
+    ]
+
+
+def _engine_matrix_columns() -> list[dict[str, Any]]:
+    return [
+        {"name": "selected", "label": "", "field": "selected", "align": "left"},
+        {"name": "project", "label": "Project", "field": "project", "align": "left"},
+        {"name": "source", "label": "Source", "field": "source", "align": "left"},
+        {"name": "sample_id", "label": "Sample ID", "field": "sample_id", "align": "left"},
+        {"name": "cache", "label": "Cache", "field": "cache", "align": "left"},
     ]
 
 
@@ -1535,22 +1728,6 @@ def _project_ref_label(ref: ProjectRef) -> str:
         f"{ref.project_id} · {ref.project_type} · {ref.updated or 'unknown'} · "
         f"{ref.recording_count} recordings / {ref.run_count} runs"
     )
-
-
-def _run_plan_rows(engine: str) -> list[dict[str, str]]:
-    if engine == "cellpose":
-        return [
-            {"step": "Load images", "source": "matrix image directory", "output": "frame list"},
-            {"step": "Segment droplets", "source": "Cellpose masks", "output": "droplet raw rows"},
-            {"step": "Detect inclusions", "source": "droplet crops", "output": "inclusion counts"},
-            {"step": "Store run", "source": "raw sink", "output": "analysis/runs/<run>/raw.jsonl"},
-        ]
-    return [
-        {"step": "Load video", "source": "matrix video file", "output": "frames"},
-        {"step": "Detect droplets", "source": "OpenCV frames", "output": "detection raw rows"},
-        {"step": "Track droplets", "source": "detections", "output": "track raw rows"},
-        {"step": "Store run", "source": "raw sink", "output": "analysis/runs/<run>/raw.jsonl"},
-    ]
 
 
 def _load_stored_runs(project_paths: list[Path]) -> list[StoredRun]:
@@ -1806,54 +1983,116 @@ def _plot_card(options: dict[str, Any]) -> None:
         ui.echart(options).classes("w-full h-64")
 
 
-def _mock_video_preview_html(target: MatrixRow) -> str:
-    label = target.sample_id or Path(target.source_path).stem
-    frame = _row_int(target, "preview_frame", 0)
-    roi_html = ""
-    if _row_bool(target, "roi_enabled", False):
-        width = _row_int(target, "roi_width", 0)
-        height = _row_int(target, "roi_height", 0)
-        if width and height:
-            roi_html = (
-                '<div class="mock-roi" '
-                f'style="left:{_roi_percent(target, "roi_x", 1280)}%; '
-                f'top:{_roi_percent(target, "roi_y", 720)}%; '
-                f'width:{_roi_percent(target, "roi_width", 1280)}%; '
-                f'height:{_roi_percent(target, "roi_height", 720)}%;"></div>'
-            )
+def _video_metadata(path: Path) -> dict[str, int]:
+    if not path.exists():
+        return {"frames": 500, "width": 1280, "height": 720}
+    try:
+        import cv2
+    except Exception:
+        return {"frames": 500, "width": 1280, "height": 720}
+    capture = cv2.VideoCapture(str(path))
+    try:
+        if not capture.isOpened():
+            return {"frames": 500, "width": 1280, "height": 720}
+        frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 500)
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 1280)
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 720)
+        return {"frames": max(frames, 1), "width": max(width, 1), "height": max(height, 1)}
+    finally:
+        capture.release()
+
+
+def _read_video_frame(path: Path, frame_index: int) -> dict[str, Any]:
+    if not path.exists():
+        return {"error": f"Video file is not readable: {path}", "src": "", "width": 0, "height": 0}
+    try:
+        import cv2
+    except Exception as exc:
+        return {"error": f"OpenCV is unavailable in this environment: {exc}", "src": "", "width": 0, "height": 0}
+    capture = cv2.VideoCapture(str(path))
+    try:
+        if not capture.isOpened():
+            return {"error": f"OpenCV cannot open video: {path}", "src": "", "width": 0, "height": 0}
+        if frame_index > 0:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        ok, frame = capture.read()
+        if not ok or frame is None:
+            return {"error": f"OpenCV cannot read frame {frame_index} from {path}", "src": "", "width": 0, "height": 0}
+        ok, encoded = cv2.imencode(".jpg", frame)
+        if not ok:
+            return {"error": f"OpenCV cannot encode frame {frame_index} from {path}", "src": "", "width": 0, "height": 0}
+        height, width = frame.shape[:2]
+        data = base64.b64encode(encoded.tobytes()).decode("ascii")
+        return {"error": "", "src": f"data:image/jpeg;base64,{data}", "width": width, "height": height}
+    finally:
+        capture.release()
+
+
+def _read_image_source(path: Path, index: int) -> dict[str, Any]:
+    image_path = _select_image_path(path, index)
+    if image_path is None:
+        return {"error": f"No readable image found at {path}", "src": "", "index": index}
+    try:
+        data = image_path.read_bytes()
+    except OSError as exc:
+        return {"error": f"Cannot read image {image_path}: {exc}", "src": "", "index": index}
+    media_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
+    encoded = base64.b64encode(data).decode("ascii")
+    return {"error": "", "src": f"data:{media_type};base64,{encoded}", "index": index}
+
+
+def _select_image_path(path: Path, index: int) -> Path | None:
+    if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
+        return path
+    if not path.is_dir():
+        return None
+    images = sorted(item for item in path.iterdir() if item.is_file() and item.suffix.lower() in IMAGE_SUFFIXES)
+    if not images:
+        return None
+    return images[max(0, min(index - 1, len(images) - 1))]
+
+
+def _viewer_error_html(target: MatrixRow, source: Path, message: str) -> str:
+    label = html.escape(target.sample_id or Path(target.source_path).stem or "target")
+    detail = html.escape(_friendly_video_error(message))
+    source_label = html.escape(str(source))
     return f"""
-    <div class="mock-viewer">
-      {roi_html}
-      <div class="mock-playhead">{_escape(label)} · frame {frame}</div>
+    <div class="admet-viewer admet-viewer-placeholder">
+      <div class="admet-viewer-message">
+        <div>
+          <div class="admet-viewer-placeholder-title">Preview unavailable</div>
+          <div>{label}</div>
+          <div>{detail}</div>
+          <div class="admet-viewer-placeholder-path">{source_label}</div>
+        </div>
+      </div>
     </div>
     """
 
 
-def _mock_cellpose_preview_html(target: MatrixRow) -> str:
-    label = target.sample_id or Path(target.source_path).stem
-    frame = _row_int(target, "image_frame", 1)
-    shift = (frame % 6) * 2
-    disabled = " mock-droplet-disabled" if _row_int(target, "disabled_droplets", 0) else ""
-    droplets = ""
-    if _row_bool(target, "overlay_masks", True):
-        droplets = f"""
-      <div class="mock-droplet{disabled}" style="left:{20 + shift}%; top:28%;"></div>
-      <div class="mock-droplet" style="left:{52 - shift / 2}%; top:44%; width:92px; height:92px;"></div>
-      <div class="mock-droplet" style="left:70%; top:{20 + shift / 2}%; width:64px; height:64px;"></div>
-        """
-    inclusions = ""
-    if _row_bool(target, "overlay_inclusions", True):
-        inclusions = f"""
-      <div class="mock-inclusion" style="left:{59 - shift / 3}%; top:54%;"></div>
-      <div class="mock-inclusion" style="left:77%; top:{29 + shift / 2}%;"></div>
-        """
-    return f"""
-    <div class="mock-viewer mock-viewer-cellpose">
-      {droplets}
-      {inclusions}
-      <div class="mock-playhead">{_escape(label)} · image {frame}</div>
-    </div>
-    """
+def _preview_frame_index(row: MatrixRow) -> int:
+    return max(0, _row_int(row, "start_frame", 0) + _row_int(row, "preview_frame", 0))
+
+
+def _compact_path(value: str, *, max_parts: int = 4) -> str:
+    path = Path(value)
+    parts = path.parts
+    if len(parts) <= max_parts:
+        return value
+    return str(Path("...").joinpath(*parts[-max_parts:]))
+
+
+def _friendly_video_error(message: str) -> str:
+    if "cannot open video" in message.lower():
+        return "OpenCV cannot open this video. Re-locate the file, verify the codec, or run analyze from the arm64 environment."
+    if "not readable" in message.lower():
+        return "The video path is missing or not readable. Re-locate the source file."
+    return message
+
+
+def _percent(value: Any, denominator: int) -> float:
+    number = _numeric(value) or 0.0
+    return round(max(0.0, min(100.0, number / max(denominator, 1) * 100.0)), 2)
 
 
 def _resolve_project_path(project_path: Path, stored_path: str) -> Path:
@@ -1886,16 +2125,18 @@ def _row_bool(row: MatrixRow, key: str, default: Any) -> bool:
     return bool(value)
 
 
-def _roi_percent(row: MatrixRow, key: str, denominator: int) -> float:
-    value = _row_float(row, key, 0)
-    return round(max(0.0, min(100.0, value / denominator * 100.0)), 2)
-
-
 def _numeric(value: Any) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _format_slider_value(value: Any, step: float) -> str:
+    number = _numeric(value) or 0.0
+    if step >= 1:
+        return str(int(number))
+    return f"{number:.2f}".rstrip("0").rstrip(".")
 
 
 def _is_number(value: Any) -> bool:
@@ -1940,6 +2181,32 @@ def _event_row(event: Any) -> dict[str, Any]:
     if isinstance(args, dict):
         return args
     return {}
+
+
+def _existing_dir(path: Path) -> Path:
+    try:
+        candidate = path.expanduser().resolve()
+    except (OSError, RuntimeError):
+        candidate = Path.cwd()
+    if candidate.is_file():
+        candidate = candidate.parent
+    while not candidate.is_dir() and candidate.parent != candidate:
+        candidate = candidate.parent
+    return candidate if candidate.is_dir() else Path.cwd()
+
+
+def _browser_entries(path: Path, mode: str) -> list[Path]:
+    try:
+        entries = list(path.iterdir())
+    except OSError:
+        return []
+    dirs = [entry for entry in entries if entry.is_dir()]
+    if mode == "project":
+        files = [entry for entry in entries if entry.is_file() and entry.name == "manifest.json"]
+    else:
+        allowed = VIDEO_SUFFIXES | IMAGE_SUFFIXES
+        files = [entry for entry in entries if entry.is_file() and entry.suffix.lower() in allowed]
+    return sorted(dirs, key=lambda item: item.name.lower()) + sorted(files, key=lambda item: item.name.lower())
 
 
 def _dot_class(status: StageStatus, selected: bool) -> str:
@@ -2000,17 +2267,27 @@ def _style() -> str:
     .notification-text { color: #16212b; font-size: 13px; font-weight: 600; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }
     .control-box { background: transparent; border: 0; border-radius: 0; gap: 6px; }
     .control-box-title { font-size: 16px; line-height: 22px; font-weight: 650; color: #16212b; }
-    .process-bar { background: #f0f5f8; border: 1px solid #d7e2ea; border-radius: 8px; min-height: 24px; }
-    .process-bar .q-linear-progress { height: 18px; border-radius: 4px; }
+    .process-bar {
+      background: #f0f5f8;
+      border: 1px solid #d7e2ea;
+      border-radius: 8px 8px 0 0;
+      min-height: 24px;
+    }
+    .process-bar .q-linear-progress {
+      height: 18px;
+      border-radius: 8px 8px 0 0;
+      overflow: hidden;
+    }
     .admet-process {
       background: #f0f5f8;
       border: 1px solid #d7e2ea;
-      border-radius: 8px;
+      border-radius: 8px 8px 0 0;
       min-height: 24px;
     }
     .admet-process .q-linear-progress {
       height: 18px;
-      border-radius: 4px;
+      border-radius: 8px 8px 0 0;
+      overflow: hidden;
     }
     .admet-transport {
       background: transparent;
@@ -2067,7 +2344,70 @@ def _style() -> str:
     .toc-dot-done { background: #185e49; border-color: #185e49; }
     .toc-dot-skipped { background: #9aa7b2; border-color: #9aa7b2; }
     .project-select { min-width: 360px; }
-    .manual-project-input { min-width: 280px; }
+    .root-hint {
+      max-width: 360px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .source-picker {
+      min-width: 0;
+    }
+    .source-display {
+      min-height: 30px;
+      padding: 5px 8px;
+      border: 1px solid #d7e2ea;
+      border-radius: 6px;
+      color: #16212b;
+      background: #ffffff;
+      font-size: 12px;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+    .source-project {
+      min-width: max-content;
+      padding-bottom: 6px;
+    }
+    .source-cell {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .source-cell-name {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      color: #16212b;
+      font-weight: 600;
+    }
+    .browser-card {
+      width: min(760px, 92vw);
+      max-height: 82vh;
+      border-radius: 8px;
+      box-shadow: none;
+      border: 1px solid #d7e2ea;
+      gap: 8px;
+    }
+    .browser-path {
+      color: #52677a;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .browser-list {
+      max-height: 56vh;
+      overflow-y: auto;
+      border-top: 1px solid #d7e2ea;
+      border-bottom: 1px solid #d7e2ea;
+      padding: 6px 0;
+    }
+    .browser-row {
+      justify-content: flex-start !important;
+      width: 100%;
+      border-radius: 4px !important;
+      color: #16212b !important;
+      font-weight: 500 !important;
+    }
     .plot-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2091,74 +2431,82 @@ def _style() -> str:
       min-height: 260px;
       padding: 4px;
     }
-    .mock-editor-grid {
+    .admet-viewer {
+      position: relative;
+      min-height: clamp(180px, 24vw, 360px);
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid #d7e2ea;
+      background: #16212b;
+    }
+    .admet-viewer-placeholder {
+      background:
+        radial-gradient(circle at 18% 34%, rgba(214, 223, 230, 0.78) 0 24px, transparent 25px),
+        radial-gradient(circle at 68% 28%, rgba(224, 231, 236, 0.86) 0 34px, transparent 35px),
+        radial-gradient(circle at 42% 70%, rgba(218, 226, 232, 0.82) 0 28px, transparent 29px),
+        #f4f7f9;
+    }
+    .admet-video-frame {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #16212b;
+    }
+    .admet-viewer-message {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 14px;
+      color: #52677a;
+      background: rgba(244, 247, 249, 0.72);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .admet-viewer-placeholder-title {
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0;
+      color: #16212b;
+      margin-bottom: 6px;
+    }
+    .admet-viewer-placeholder-path {
+      color: #52677a;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 11px;
+      margin-top: 6px;
+    }
+    .admet-roi {
+      position: absolute;
+      border: 2px solid #e5f36a;
+      box-shadow: 0 0 0 999px rgba(0,0,0,0.22);
+    }
+    .admet-playhead {
+      position: absolute;
+      left: 10px;
+      bottom: 10px;
+      background: rgba(12,18,24,0.76);
+      color: white;
+      border-radius: 6px;
+      padding: 4px 7px;
+      font-size: 12px;
+    }
+    .media-editor-grid {
       display: grid;
-      grid-template-columns: minmax(360px, 1.2fr) minmax(280px, 0.8fr);
+      grid-template-columns: minmax(0, 3fr) minmax(260px, 1fr);
       gap: 10px;
+      align-items: start;
     }
     @media (max-width: 980px) {
-      .mock-editor-grid { grid-template-columns: 1fr; }
+      .media-editor-grid { grid-template-columns: 1fr; }
     }
-    .mock-viewer {
-      position: relative;
-      min-height: 300px;
-      border: 1px solid #d7e2ea;
-      border-radius: 8px;
-      overflow: hidden;
-      background:
-        linear-gradient(90deg, rgba(34, 93, 130, 0.14) 0 1px, transparent 1px 64px),
-        linear-gradient(0deg, rgba(34, 93, 130, 0.10) 0 1px, transparent 1px 48px),
-        radial-gradient(circle at 18% 55%, rgba(22, 33, 43, 0.28) 0 22px, transparent 24px),
-        radial-gradient(circle at 42% 48%, rgba(22, 33, 43, 0.24) 0 18px, transparent 20px),
-        radial-gradient(circle at 67% 52%, rgba(22, 33, 43, 0.30) 0 24px, transparent 26px),
-        #edf4f8;
-    }
-    .mock-viewer-cellpose {
-      background:
-        radial-gradient(circle at 28% 42%, rgba(24, 94, 73, 0.42) 0 34px, transparent 36px),
-        radial-gradient(circle at 58% 56%, rgba(24, 94, 73, 0.34) 0 42px, transparent 44px),
-        radial-gradient(circle at 74% 34%, rgba(24, 94, 73, 0.30) 0 28px, transparent 30px),
-        #f2f7f5;
-    }
-    .mock-roi {
-      position: absolute;
-      border: 2px solid #b7791f;
-      box-shadow: 0 0 0 999px rgba(22, 33, 43, 0.18);
-      background: rgba(183, 121, 31, 0.07);
-    }
-    .mock-playhead {
-      position: absolute;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      height: 34px;
-      background: rgba(255, 255, 255, 0.88);
-      border-top: 1px solid #d7e2ea;
-      padding: 8px 10px;
-      color: #52677a;
-      font-size: 12px;
-      font-weight: 650;
-    }
-    .mock-droplet {
-      position: absolute;
-      width: 78px;
-      height: 78px;
-      border: 2px solid #185e49;
-      border-radius: 999px;
-      background: rgba(24, 94, 73, 0.08);
-    }
-    .mock-droplet-disabled {
-      border-color: #742323;
-      background: rgba(116, 35, 35, 0.08);
-    }
-    .mock-inclusion {
-      position: absolute;
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      background: #742323;
-    }
-    .mock-editor-note {
+    .editor-note {
       border: 1px solid #d7e2ea;
       border-left: 4px solid #225d82;
       border-radius: 4px;
@@ -2169,9 +2517,13 @@ def _style() -> str:
       font-weight: 600;
     }
     .editor-control-row { align-items: center; gap: 8px; }
+    .calibration-row > .flat-number {
+      flex: 1 1 0;
+      min-width: 0;
+    }
     .editor-grid {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: 1fr;
       gap: 8px;
     }
     .editor-grid-roi {
@@ -2182,9 +2534,41 @@ def _style() -> str:
     .compact-checkbox .q-checkbox__inner {
       min-height: 30px;
     }
+    .slider-field .q-slider {
+      min-height: 24px;
+      padding: 0 2px;
+    }
+    .slider-label-row {
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .slider-value {
+      color: #16212b;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .slider-field .q-slider__pin,
+    .shell .q-slider__pin {
+      display: none !important;
+    }
+    .shell .q-field__bottom {
+      display: none !important;
+    }
+    .shell .q-field__control {
+      background: #ffffff !important;
+      box-shadow: none !important;
+    }
+    .shell .q-field__control:after,
+    .shell .q-field__control:before {
+      display: none !important;
+    }
     .path-label {
-      white-space: normal;
-      overflow-wrap: anywhere;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
       line-height: 1.3;
     }
     .correction-grid {
@@ -2221,9 +2605,8 @@ def _style() -> str:
       white-space: normal;
       overflow-wrap: anywhere;
     }
-    .target-table .q-table td { height: 42px; }
-    .target-table .q-field__control { min-height: 28px; }
-    .target-table .q-checkbox__inner { font-size: 28px; }
+    .matrix-table .q-table td { height: 42px; }
+    .matrix-table .q-field__control { min-height: 28px; }
     .muted { color: #52677a; }
     .section-title { color: #52677a; font-size: 12px; text-transform: uppercase; font-weight: 700; }
     .q-field__control { min-height: 34px; border-radius: 8px; }

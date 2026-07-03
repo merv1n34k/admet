@@ -20,7 +20,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "px_to_um": 1.14,
     "cache": {
         "enabled": True,
-        "max_frames": 100,
+        "max_entries": 100,
         "strategy": "lru",
         "dir": None,
     },
