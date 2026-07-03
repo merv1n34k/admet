@@ -1,16 +1,16 @@
 import unittest
 
-from admet.engines.analyze import create_analyze_registry
+from admet.engines import create_engine_registry
 
 
 class AnalyzeRegistryTests(unittest.TestCase):
     def test_registry_lists_migrated_analysis_engines(self):
-        registry = create_analyze_registry()
+        registry = create_engine_registry("analyze")
 
         self.assertEqual(registry.ids(), ("cellpose", "opencv"))
 
     def test_registry_creates_real_analysis_engines(self):
-        registry = create_analyze_registry()
+        registry = create_engine_registry("analyze")
 
         opencv = registry.create("opencv")
         self.assertEqual(opencv.id, "opencv")

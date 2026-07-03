@@ -8,8 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from .camera import VideoWorker
-from .fluidics import CsvLogger
+from ._camera import VideoWorker
+from ._fluidics import CsvLogger
 
 
 class RecordingCamera(Protocol):

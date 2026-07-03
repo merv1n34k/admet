@@ -52,10 +52,10 @@ def _main(argv: list[str] | None = None) -> None:
 def run_analyze_ui(port: int, *, native: bool = False) -> None:
     from nicegui import ui
 
-    from admet.engines.analyze import create_analyze_registry
+    from admet.engines import create_engine_registry
 
     workflow = create_analyze_workflow()
-    registry = create_analyze_registry()
+    registry = create_engine_registry("analyze")
 
     from admet.ui.analyze import render_workflow
 
@@ -81,13 +81,13 @@ def run_control_ui() -> None:
 
 def create_engine_api(engine_id: str) -> AdmetAPI:
     if engine_id == "fluidics":
-        from admet.engines.control.registry import create_control_registry
+        from admet.engines import create_engine_registry
 
-        return AdmetAPI(create_control_registry().create(engine_id))
+        return AdmetAPI(create_engine_registry("control").create(engine_id))
     if engine_id in {"opencv", "cellpose"}:
-        from admet.engines.analyze import create_analyze_registry
+        from admet.engines import create_engine_registry
 
-        return AdmetAPI(create_analyze_registry().create(engine_id))
+        return AdmetAPI(create_engine_registry("analyze").create(engine_id))
     raise LookupError(f"unknown engine: {engine_id}")
 
 

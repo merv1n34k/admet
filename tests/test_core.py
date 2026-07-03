@@ -208,9 +208,9 @@ class EngineRegistryTests(unittest.TestCase):
 
 class EngineContractTests(unittest.TestCase):
     def test_builtin_engines_declare_valid_action_catalogs(self):
-        from admet.engines.analyze.cellpose.engine import create_engine as create_cellpose_engine
-        from admet.engines.analyze.opencv.engine import create_engine as create_opencv_engine
-        from admet.engines.control.engine import create_engine as create_control_engine
+        from admet.engines.analyze.cellpose import create_engine as create_cellpose_engine
+        from admet.engines.analyze.opencv import create_engine as create_opencv_engine
+        from admet.engines.control.fluidics import create_engine as create_control_engine
 
         engines = (
             create_opencv_engine(),

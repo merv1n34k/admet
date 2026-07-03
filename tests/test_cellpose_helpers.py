@@ -7,12 +7,12 @@ from unittest.mock import patch
 import numpy as np
 
 from admet.core.run import JsonlRunSink, RunJob
-from admet.engines.analyze.cellpose.cache import Cache
-from admet.engines.analyze.cellpose.config import load_config
-from admet.engines.analyze.cellpose.correction import update_results_with_inclusions
-from admet.engines.analyze.cellpose.detection import CellposeDetection, CellposeUnavailableError
-from admet.engines.analyze.cellpose.engine import create_engine
-from admet.engines.analyze.cellpose.scanprotocol import build_layout, field_cells
+from admet.engines.analyze._cellpose.cache import Cache
+from admet.engines.analyze._cellpose.config import load_config
+from admet.engines.analyze._cellpose.correction import update_results_with_inclusions
+from admet.engines.analyze._cellpose.detection import CellposeDetection, CellposeUnavailableError
+from admet.engines.analyze._cellpose.engine import create_engine
+from admet.engines.analyze._cellpose.scanprotocol import build_layout, field_cells
 
 
 class CellposeHelperTests(unittest.TestCase):

@@ -7,7 +7,7 @@ from typing import Any, Callable
 from admet.core.engine import ActionSpec, validate_action_settings
 from admet.core.run import RunJob, RunResult
 from admet.engines.control.camera import CameraController
-from admet.engines.control.fluidics import (
+from admet.engines.control._fluidics import (
     AcquisitionThread,
     ChannelManager,
     CsvLogger,
@@ -16,7 +16,7 @@ from admet.engines.control.fluidics import (
     HardwareManager,
     SDKAvailability,
 )
-from admet.engines.control.fluidics.config import (
+from admet.engines.control._fluidics.config import (
     FLUIDIC_CHANNELS,
     SENSOR_CALIBRATIONS,
     ProtocolStep,

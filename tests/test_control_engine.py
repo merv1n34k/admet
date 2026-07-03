@@ -6,11 +6,10 @@ from pathlib import Path
 import numpy as np
 
 from admet.core.run import RunJob
-from admet.engines.control.engine import FluidicsControlEngine
-from admet.engines.control.camera import Camera
-from admet.engines.control.camera.camera import CameraAvailability
-from admet.engines.control.fluidics import PressureChannelInfo, SensorChannelInfo
-from admet.engines.control.fluidics.config import (
+from admet.engines.control.camera import Camera, CameraAvailability
+from admet.engines.control.fluidics import FluidicsControlEngine
+from admet.engines.control._fluidics import PressureChannelInfo, SensorChannelInfo
+from admet.engines.control._fluidics.config import (
     ProtocolStep,
     build_dropseq_protocol,
     build_priming_protocol,

@@ -42,7 +42,7 @@ from admet.core.project import ProjectStore
 from admet.core.engine import Param, ParamKind
 from admet.core.session import SessionFile, SessionItem, load_session, new_session, save_session, session_path
 from admet.workflows import Stage, StageControl, StageStatus
-from admet.engines.control.fluidics.config import (
+from admet.engines.control._fluidics.config import (
     FLUIDIC_CHANNEL_LABELS,
     FLUIDIC_CHANNELS,
 )

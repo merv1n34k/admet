@@ -1,5 +1,3 @@
-"""Analysis engines."""
+"""Analysis engine modules."""
 
-from .registry import create_analyze_registry
-
-__all__ = ["create_analyze_registry"]
+__all__: list[str] = []

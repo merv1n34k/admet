@@ -6,7 +6,7 @@ from queue import Queue
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from admet.engines.control.fluidics import (
+from admet.engines.control._fluidics import (
     AcquisitionThread,
     ChannelManager,
     CsvLogger,
@@ -18,7 +18,7 @@ from admet.engines.control.fluidics import (
     SensorChannelInfo,
     vendored_sdk_python_path,
 )
-from admet.engines.control.fluidics.config import SIM_INSTRUMENTS
+from admet.engines.control._fluidics.config import SIM_INSTRUMENTS
 
 
 class FakeFluidicsSDK:

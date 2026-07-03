@@ -5,7 +5,7 @@ __all__ = ["FluidicsControlEngine", "RecordingMetadata", "RecordingRun", "create
 
 def __getattr__(name: str):
     if name in {"FluidicsControlEngine", "create_engine"}:
-        from .engine import FluidicsControlEngine, create_engine
+        from .fluidics import FluidicsControlEngine, create_engine
 
         return {"FluidicsControlEngine": FluidicsControlEngine, "create_engine": create_engine}[name]
     if name in {"RecordingMetadata", "RecordingRun"}:
