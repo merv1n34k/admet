@@ -10,6 +10,7 @@ from statistics import mean, pstdev
 from typing import Any
 
 from admet.analyze import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
+from admet.core.discovery import ProjectRef, discover_projects, projects_root
 from admet.core.engine import EngineRegistry
 from admet.core.project import ProjectStore
 from admet.core.session import session_path
@@ -96,7 +97,10 @@ class AnalyzeWorkflowView:
         self.workflow = workflow
         self.state = state
         self.registry = registry
-        self.project_path = str(Path.cwd() / f"admet_{time.strftime('%Y%m%d_%H%M%S')}.admetp")
+        root = projects_root()
+        self.discovery_root = str(root)
+        self.project_refs = discover_projects(root)
+        self.project_path = str(root / f"admet_{time.strftime('%Y%m%d_%H%M%S')}.admetp")
         self.source_path = ""
         self.selected_uid = ""
         self.matrix: list[MatrixRow] = []
@@ -160,12 +164,21 @@ class AnalyzeWorkflowView:
                 ui.label("admet analyze").classes("text-xl font-semibold")
                 ui.label("Project analysis matrix").classes("muted text-sm")
             with ui.row().classes("items-center gap-2"):
-                ui.input(
-                    "Project",
-                    value=self.project_path,
-                ).bind_value(self, "project_path").classes("project-input")
+                options = self._project_options()
+                selected = self.project_path if self.project_path in options else None
+                ui.select(
+                    options,
+                    label="Project",
+                    value=selected,
+                    on_change=lambda event: self._select_project(event.value),
+                ).classes("project-select")
+                ui.button("Refresh", on_click=self._refresh_projects).props("dense no-caps outline")
                 ui.button("New Project", on_click=self._new_project).props("dense no-caps outline")
                 ui.button("Load Project", on_click=self._load_project).props("dense no-caps outline")
+                ui.input(
+                    "Manual path",
+                    value=self.project_path,
+                ).bind_value(self, "project_path").classes("manual-project-input")
 
     def _render_toc(self) -> None:
         from nicegui import ui
@@ -774,6 +787,7 @@ class AnalyzeWorkflowView:
         self._mark_stage("import", StageStatus.ACTIVE)
         self._notify(f"project ready: {store.path.name}", "success")
         self._log(f"project: created {store.path}")
+        self.project_refs = discover_projects(self.discovery_root)
         self._refresh()
 
     def _load_project(self) -> None:
@@ -794,6 +808,7 @@ class AnalyzeWorkflowView:
         self._mark_stage("import", StageStatus.COMPLETE if self.matrix else StageStatus.ACTIVE)
         self._notify(f"project loaded: {store.path.name}", "success")
         self._log(f"project: loaded {store.path}")
+        self.project_refs = discover_projects(self.discovery_root)
         self._refresh()
 
     def _load_project_files(self, store: ProjectStore) -> None:
@@ -1039,6 +1054,20 @@ class AnalyzeWorkflowView:
     def _set_setting(self, key: str, value: Any) -> None:
         self.settings[key] = value
 
+    def _project_options(self) -> dict[str, str]:
+        return {str(ref.path): _project_ref_label(ref) for ref in self.project_refs}
+
+    def _select_project(self, value: str | None) -> None:
+        if not value:
+            return
+        self.project_path = str(session_path(value))
+        self._refresh()
+
+    def _refresh_projects(self) -> None:
+        self.project_refs = discover_projects(self.discovery_root)
+        self._notify(f"found {len(self.project_refs)} project(s).", "success")
+        self._refresh()
+
     def _activate(self, index: int) -> None:
         index = max(0, min(index, len(WORKFLOW_STAGES) - 1))
         statuses = dict(self.state.statuses)
@@ -1063,9 +1092,12 @@ class AnalyzeWorkflowView:
     def _project_path(self) -> Path:
         value = str(self.project_path or "").strip()
         if not value:
-            value = str(Path.cwd() / f"admet_{time.strftime('%Y%m%d_%H%M%S')}.admetp")
+            value = str(self._default_project_path())
             self.project_path = value
         return session_path(value)
+
+    def _default_project_path(self) -> Path:
+        return projects_root(self.discovery_root) / f"admet_{time.strftime('%Y%m%d_%H%M%S')}.admetp"
 
     def _instruction(self) -> str:
         stage_id = self._stage_id()
@@ -1100,6 +1132,13 @@ def _matrix_columns() -> list[dict[str, Any]]:
         {"name": "cache", "label": "Cache", "field": "cache", "align": "left"},
         {"name": "active", "label": "Active", "field": "active", "align": "left"},
     ]
+
+
+def _project_ref_label(ref: ProjectRef) -> str:
+    return (
+        f"{ref.project_id} · {ref.project_type} · {ref.updated or 'unknown'} · "
+        f"{ref.recording_count} recordings / {ref.run_count} runs"
+    )
 
 
 def _run_plan_rows(engine: str) -> list[dict[str, str]]:
@@ -1523,7 +1562,8 @@ def _style() -> str:
     .toc-dot-active { background: #225d82; border-color: #225d82; }
     .toc-dot-done { background: #185e49; border-color: #185e49; }
     .toc-dot-skipped { background: #9aa7b2; border-color: #9aa7b2; }
-    .project-input { min-width: 360px; }
+    .project-select { min-width: 360px; }
+    .manual-project-input { min-width: 280px; }
     .plot-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));

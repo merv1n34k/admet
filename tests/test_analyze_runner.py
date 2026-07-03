@@ -1,9 +1,12 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from admet.analyze import AnalyzeBatchRunner, AnalyzeTarget, infer_engine
+from admet.core.discovery import ENV_ROOT
 from admet.core.engine import ActionSpec, EngineRegistry, RunJob, RunResult
 from admet.core.project import ProjectStore
 from admet.core.schema import Param, ParamKind, ParamSchema
@@ -133,6 +136,21 @@ class AnalyzeWorkflowViewTests(unittest.TestCase):
             self.assertEqual(Path(view.project_path).name, "study.admetp")
             self.assertEqual(view.notice_kind, "success")
             self.assertTrue((target / "manifest.json").is_file())
+
+    def test_new_project_defaults_to_discovery_root(self):
+        with tempfile.TemporaryDirectory() as tmpdir, patch.dict(os.environ, {ENV_ROOT: tmpdir}):
+            view = AnalyzeWorkflowView(
+                create_analyze_workflow(),
+                create_analyze_workflow().initial_state(),
+                EngineRegistry(),
+            )
+            view._refresh = lambda: None
+
+            view._new_project()
+
+            project_path = Path(view.project_path)
+            self.assertEqual(project_path.parent, Path(tmpdir).resolve())
+            self.assertTrue((project_path / "manifest.json").is_file())
 
     def test_load_project_button_handler_populates_matrix(self):
         with tempfile.TemporaryDirectory() as tmpdir:
