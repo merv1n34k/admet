@@ -19,22 +19,21 @@ from admet.engines.control._fluidics import (
 from admet.engines.control._fluidics.config import (
     FLUIDIC_CHANNELS,
     SENSOR_CALIBRATIONS,
-    ProtocolStep,
-    build_protocol,
-    expand_protocol_steps,
-)
-from admet.engines.control.pipeline import (
-    PipelineEngine,
-    PipelineEvent,
-    PipelineState,
-    PipelineStep,
-    create_trigger,
 )
 from admet.engines.control.recording import (
     RecordingCoordinator,
     WriterFactory,
 )
 from admet.engines.control.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES
+from admet.workflows.control_protocol import (
+    PipelineEngine,
+    PipelineEvent,
+    PipelineState,
+    PipelineStep,
+    ProtocolStep,
+    build_pipeline_steps,
+    build_protocol,
+)
 
 
 ActionHandler = Callable[[dict[str, Any]], dict[str, Any]]
@@ -493,17 +492,7 @@ class FluidicsControlEngine:
         return self.build_pipeline_from_steps(build_protocol(name))
 
     def build_pipeline_from_steps(self, steps: list[ProtocolStep]) -> list[PipelineStep]:
-        return [
-            PipelineStep(
-                name=step.name,
-                sensor_setpoints=dict(step.sensor_setpoints),
-                trigger=create_trigger(step.trigger_type, step.trigger_params),
-                pressure_setpoints=dict(step.pressure_setpoints),
-                on_complete=step.on_complete,
-                confirm_message=step.confirm_message,
-            )
-            for step in expand_protocol_steps(steps)
-        ]
+        return build_pipeline_steps(steps)
 
     def _connect(self, settings: dict[str, Any]) -> dict[str, Any]:
         try:

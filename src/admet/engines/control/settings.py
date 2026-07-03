@@ -3,9 +3,9 @@ from __future__ import annotations
 from admet.core.engine import Param, ParamKind, ParamOption, ParamSchema
 from admet.engines.control._fluidics.config import (
     FLUIDIC_CHANNELS,
-    PIPELINES,
     SENSOR_CALIBRATIONS,
 )
+from admet.workflows.control_protocol import PIPELINES
 
 CORRECTION_PARAM_NAMES = tuple(
     name
