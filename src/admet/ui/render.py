@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import json
 import math
 from dataclasses import dataclass, field
@@ -43,41 +42,6 @@ class RawSummary:
     mean_diameter: float
     cv_percent: float
     inclusions: int
-
-
-@dataclass(frozen=True)
-class FluidicsRun:
-    project: str
-    recording_id: str
-    rows: tuple[dict[str, float], ...]
-    metadata: dict[str, Any]
-
-
-def load_stored_runs(project_paths: list[Path]) -> list[StoredRun]:
-    runs = []
-    for project_path in project_paths:
-        metadata_path = project_path / "analysis" / "metadata.json"
-        if not metadata_path.is_file():
-            continue
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        for run in metadata.get("runs", []):
-            if not isinstance(run, dict):
-                continue
-            raw_path = resolve_project_path(project_path, str(run.get("raw_path") or ""))
-            run_metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
-            jobs = tuple(job for job in run_metadata.get("jobs", ()) if isinstance(job, dict))
-            runs.append(
-                StoredRun(
-                    project_path=project_path,
-                    run_id=str(run.get("run_id") or raw_path.parent.name),
-                    raw_path=raw_path,
-                    jobs=jobs,
-                )
-            )
-    return runs
 
 
 def read_raw_rows(project_path: Path, raw_path: Path, *, limit: int = 50_000) -> list[dict[str, Any]]:
@@ -166,151 +130,6 @@ def summarize_raw_rows(run: StoredRun, rows: list[dict[str, Any]]) -> list[RawSu
     return summaries
 
 
-def load_fluidics_runs(project_paths: list[Path]) -> list[FluidicsRun]:
-    runs = []
-    for project_path in project_paths:
-        metadata_path = project_path / "records" / "metadata.json"
-        if not metadata_path.is_file():
-            continue
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        for recording in metadata.get("recordings", []):
-            if not isinstance(recording, dict):
-                continue
-            csv_path = resolve_project_path(project_path, str(recording.get("fluidics_csv") or ""))
-            rows = tuple(read_fluidics_csv(csv_path))
-            runs.append(
-                FluidicsRun(
-                    project=project_path.name,
-                    recording_id=str(recording.get("recording_id") or recording.get("video_prefix") or csv_path.stem),
-                    rows=rows,
-                    metadata=recording,
-                )
-            )
-    return runs
-
-
-def read_fluidics_csv(csv_path: Path, *, limit: int = 25_000) -> list[dict[str, float]]:
-    if not csv_path.is_file():
-        return []
-    rows = []
-    with csv_path.open("r", encoding="utf-8", newline="") as handle:
-        for row in csv.DictReader(handle):
-            if len(rows) >= limit:
-                break
-            rows.append(
-                {
-                    "elapsed_s": float_or_zero(row.get("elapsed_s")),
-                    "pressure": mean_columns(row, "pressure_"),
-                    "flow": mean_columns(row, "flow_"),
-                }
-            )
-    return rows
-
-
-def summary_table_rows(summaries: list[RawSummary]) -> list[dict[str, Any]]:
-    return [
-        {
-            "sample": summary.sample_id,
-            "rows": summary.rows,
-            "frames": summary.frames,
-            "droplets": summary.droplets,
-            "mean_diameter": f"{summary.mean_diameter:.2f}" if summary.mean_diameter else "",
-            "cv_percent": f"{summary.cv_percent:.2f}" if summary.cv_percent else "",
-        }
-        for summary in summaries
-    ]
-
-
-def fluidics_rows(runs: list[FluidicsRun]) -> list[dict[str, Any]]:
-    rows = []
-    for run in runs:
-        pressures = [row["pressure"] for row in run.rows if math.isfinite(row["pressure"])]
-        flows = [row["flow"] for row in run.rows if math.isfinite(row["flow"])]
-        rows.append(
-            {
-                "project": run.project,
-                "recording": run.recording_id,
-                "rows": len(run.rows),
-                "duration_s": f"{fluidics_duration(run):.1f}",
-                "mean_pressure": f"{mean(pressures):.2f}" if pressures else "",
-                "mean_flow": f"{mean(flows):.2f}" if flows else "",
-            }
-        )
-    return rows
-
-
-def diameter_chart(summaries: list[RawSummary]) -> dict[str, Any]:
-    return bar_chart(
-        "Mean diameter",
-        [summary.sample_id for summary in summaries],
-        [round(summary.mean_diameter, 3) for summary in summaries],
-        "#225d82",
-    )
-
-
-def count_chart(summaries: list[RawSummary]) -> dict[str, Any]:
-    return bar_chart(
-        "Droplet rows",
-        [summary.sample_id for summary in summaries],
-        [summary.droplets for summary in summaries],
-        "#185e49",
-    )
-
-
-def cv_chart(summaries: list[RawSummary]) -> dict[str, Any]:
-    return bar_chart(
-        "CV %",
-        [summary.sample_id for summary in summaries],
-        [round(summary.cv_percent, 3) for summary in summaries],
-        "#742323",
-    )
-
-
-def fluidics_chart(runs: list[FluidicsRun], field: str) -> dict[str, Any]:
-    series = []
-    for run in runs[:8]:
-        points = [
-            [round(row["elapsed_s"], 3), round(row[field], 3)]
-            for row in run.rows
-            if math.isfinite(row["elapsed_s"]) and math.isfinite(row[field])
-        ]
-        if len(points) > 600:
-            step = max(1, len(points) // 600)
-            points = points[::step]
-        series.append({"name": run.recording_id, "type": "line", "showSymbol": False, "data": points})
-    return {
-        "title": {"text": field.title(), "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
-        "tooltip": {"trigger": "axis"},
-        "grid": {"left": 44, "right": 12, "top": 36, "bottom": 34},
-        "xAxis": {"type": "value", "name": "s"},
-        "yAxis": {"type": "value"},
-        "series": series,
-    }
-
-
-def bar_chart(title: str, labels: list[str], values: list[float | int], color: str) -> dict[str, Any]:
-    return {
-        "title": {"text": title, "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
-        "tooltip": {},
-        "grid": {"left": 48, "right": 12, "top": 36, "bottom": 54},
-        "xAxis": {"type": "category", "data": labels, "axisLabel": {"rotate": 25}},
-        "yAxis": {"type": "value"},
-        "series": [{"type": "bar", "data": values, "itemStyle": {"color": color}}],
-    }
-
-
-def preview_frame_index(row: MatrixRow) -> int:
-    return max(0, row_int(row, "start_frame", 0) + row_int(row, "preview_frame", 0))
-
-
-def resolve_project_path(project_path: Path, stored_path: str) -> Path:
-    path = Path(stored_path)
-    return path if path.is_absolute() else project_path / path
-
-
 def row_values(row: dict[str, Any]) -> dict[str, Any]:
     values = row.get("values")
     return values if isinstance(values, dict) else {}
@@ -343,36 +162,9 @@ def numeric(value: Any) -> float | None:
         return None
 
 
-def format_slider_value(value: Any, step: float) -> str:
-    number = numeric(value) or 0.0
-    if step >= 1:
-        return str(int(number))
-    return f"{number:.2f}".rstrip("0").rstrip(".")
-
-
 def is_number(value: Any) -> bool:
     number = numeric(value)
     return number is not None and math.isfinite(number)
-
-
-def float_or_zero(value: Any) -> float:
-    number = numeric(value)
-    return number if number is not None and math.isfinite(number) else 0.0
-
-
-def mean_columns(row: dict[str, Any], prefix: str) -> float:
-    values = [
-        float_or_zero(value)
-        for key, value in row.items()
-        if key.startswith(prefix) and value not in {None, ""}
-    ]
-    return mean(values) if values else 0.0
-
-
-def fluidics_duration(run: FluidicsRun) -> float:
-    if run.rows:
-        return max(row["elapsed_s"] for row in run.rows)
-    return float_or_zero(run.metadata.get("duration_s"))
 
 
 def video_metadata(recording: dict[str, Any]) -> dict[str, Any]:

@@ -1,7 +1,8 @@
 import unittest
 
 from admet.ui.theme import box_padding, button_qss, spacing, stylesheet, text_qss
-from admet.workflows.control import ControlRuntime, control_button_specs, create_control_workflow
+from admet.ui.presenter import build_screen
+from admet.workflows.control import create_control_workflow
 
 
 class ControlThemeTests(unittest.TestCase):
@@ -13,31 +14,27 @@ class ControlThemeTests(unittest.TestCase):
         self.assertIn("QMainWindow", stylesheet())
 
 
-class ControlWorkflowCommandTests(unittest.TestCase):
-    def test_scene_commands_are_owned_by_workflow_runtime(self):
-        stage = create_control_workflow().stages[0]
-        blocked = {spec.label: spec for spec in control_button_specs(stage, ControlRuntime())}
-        ready = {
-            spec.label: spec
-            for spec in control_button_specs(
-                stage,
-                ControlRuntime(project_ready=True, camera_connected=True, camera_live=True),
-            )
-        }
+class ControlWorkflowPresenterTests(unittest.TestCase):
+    def test_scene_surface_commands_come_from_workflow(self):
+        workflow = create_control_workflow()
+        screen = build_screen(workflow, workflow.initial_state())
 
-        self.assertFalse(blocked["Refresh"].enabled)
-        self.assertTrue(ready["Refresh"].enabled)
-        self.assertFalse(ready["Connect"].enabled)
-        self.assertTrue(ready["Disconnect"].enabled)
-        self.assertTrue(ready["Live"].checked)
+        self.assertEqual(screen.workflow_id, "control")
+        self.assertEqual(screen.surfaces[0].kind, "camera")
+        self.assertEqual(
+            [button.command for button in screen.surfaces[0].buttons],
+            ["refresh_cameras", "connect_camera", "start_camera_live", "stop_camera_live"],
+        )
 
-    def test_fluigent_connect_requires_simulation_or_detected_instrument(self):
-        stage = create_control_workflow().stages[1]
-        blocked = {spec.label: spec for spec in control_button_specs(stage, ControlRuntime())}
-        simulated = {spec.label: spec for spec in control_button_specs(stage, ControlRuntime(simulated=True))}
+    def test_fluigent_controls_come_from_workflow(self):
+        workflow = create_control_workflow()
+        state = workflow.complete_current(workflow.initial_state(), confirmed=True)
+        screen = build_screen(workflow, state)
 
-        self.assertFalse(blocked["Connect"].enabled)
-        self.assertTrue(simulated["Connect"].enabled)
+        self.assertEqual(
+            [button.command for button in screen.buttons],
+            ["back", "connect_fluidics", "disconnect_fluidics", "complete"],
+        )
 
 
 if __name__ == "__main__":
