@@ -5,7 +5,7 @@ from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNELS,
     SENSOR_CALIBRATIONS,
 )
-from admet.workflows.control_protocol import PIPELINES
+from admet.engines.acquisition.protocol import PIPELINES
 
 CORRECTION_PARAM_NAMES = tuple(
     name

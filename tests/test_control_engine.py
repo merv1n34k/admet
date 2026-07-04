@@ -8,7 +8,7 @@ from admet.core.run import RunJob
 from admet.engines.acquisition.camera import Camera, CameraAvailability
 from admet.engines.acquisition import AcquisitionEngine
 from admet.engines.acquisition.fluidics import PressureChannelInfo, SensorChannelInfo
-from admet.workflows.control_protocol import (
+from admet.engines.acquisition.protocol import (
     PipelineEngine,
     ProtocolStep,
     build_pipeline_steps,
@@ -17,7 +17,7 @@ from admet.workflows.control_protocol import (
     build_protocol,
     build_wash_protocol,
 )
-from admet.workflows.control_settings import CONTROL_ENGINE_SETTINGS
+from admet.engines.acquisition.settings import CONTROL_ENGINE_SETTINGS
 
 
 def run_engine(

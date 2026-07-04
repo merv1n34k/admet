@@ -13,7 +13,7 @@ from admet.engines.cellpose.correction import update_results_with_inclusions
 from admet.engines.cellpose.detection import CellposeDetection, CellposeUnavailableError
 from admet.engines.cellpose.engine import create_engine
 from admet.engines.cellpose.scanprotocol import build_layout, field_cells
-from admet.workflows.analyze_settings import CELLPOSE_SETTINGS
+from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
 
 
 class CellposeHelperTests(unittest.TestCase):

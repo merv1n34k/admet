@@ -63,7 +63,7 @@ from admet.workflows.control import (
     stage_uses_camera,
     stage_uses_fluidics,
 )
-from admet.workflows.control_settings import CORRECTION_PARAM_NAMES
+from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
 from admet.ui import theme as ui
 from admet.ui.control_widgets import (
     ChannelControlPanel,

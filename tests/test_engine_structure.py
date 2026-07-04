@@ -20,15 +20,19 @@ class EngineStructureTests(unittest.TestCase):
         self.assertFalse((ENGINE_ROOT / "analyze").exists())
         self.assertFalse((ENGINE_ROOT / "control").exists())
 
-    def test_engine_packages_do_not_define_ui_or_workflow_schemas(self):
-        forbidden = ("admet.ui", "admet.workflows", "Param(", "ParamKind", "ParamOption", "ParamSchema(")
+    def test_engine_packages_do_not_import_ui_or_workflows(self):
+        forbidden = ("admet.ui", "admet.workflows")
         for path in ENGINE_ROOT.rglob("*.py"):
-            if path.name == "registry.py":
-                continue
             source = path.read_text(encoding="utf-8")
             for token in forbidden:
                 with self.subTest(path=path.relative_to(ENGINE_ROOT), token=token):
                     self.assertNotIn(token, source)
+
+    def test_engine_packages_own_default_settings(self):
+        self.assertTrue((ENGINE_ROOT / "opencv" / "settings.py").is_file())
+        self.assertTrue((ENGINE_ROOT / "cellpose" / "settings.py").is_file())
+        self.assertTrue((ENGINE_ROOT / "acquisition" / "settings.py").is_file())
+        self.assertTrue((ENGINE_ROOT / "acquisition" / "protocol.py").is_file())
 
 
 if __name__ == "__main__":

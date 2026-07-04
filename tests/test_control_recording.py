@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from admet.core.session import AdmetSession, SessionFile, load_session, new_session, save_session
 from admet.engines.acquisition import RecordingRun
-from admet.workflows.control_settings import CAMERA_SETTINGS, CORRECTION_SETTINGS
+from admet.engines.acquisition.settings import CAMERA_SETTINGS, CORRECTION_SETTINGS
 from admet.ui.control import ControlWindow
 from admet.ui.window import WindowController
 from admet.workflows import StageStatus

@@ -7,6 +7,7 @@ from admet.core.engine import ActionSpec, ParamSchema, validate_action_settings
 from admet.core.run import RunJob, RunResult
 
 from .pipeline import DropletPipeline
+from .settings import OPENCV_SETTINGS
 
 
 class OpenCVAnalysisEngine:
@@ -188,8 +189,8 @@ class OpenCVAnalysisEngine:
             row_count += 1
         return row_count
 
-def create_engine(settings: ParamSchema) -> OpenCVAnalysisEngine:
-    return OpenCVAnalysisEngine(settings)
+def create_engine(settings: ParamSchema | None = None) -> OpenCVAnalysisEngine:
+    return OpenCVAnalysisEngine(settings or OPENCV_SETTINGS)
 
 
 def _job_input(job: RunJob, key: str, setting_key: str) -> Path:

@@ -1,6 +1,6 @@
 import unittest
 
-from admet.workflows.control_protocol import (
+from admet.engines.acquisition.protocol import (
     ConditionTrigger,
     ConfirmationTrigger,
     PipelineStep,

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from admet.core.run import JsonlRunSink
 from admet.core.run import RunJob
-from admet.workflows.analyze_settings import OPENCV_SETTINGS
+from admet.engines.opencv.settings import OPENCV_SETTINGS
 
 try:
     import cv2

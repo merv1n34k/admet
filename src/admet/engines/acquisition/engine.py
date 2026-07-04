@@ -24,6 +24,8 @@ from admet.engines.acquisition.recording import (
     RecordingCoordinator,
     WriterFactory,
 )
+from admet.engines.acquisition.protocol import PipelineEngine, build_pipeline_steps, build_protocol
+from admet.engines.acquisition.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES
 
 ActionHandler = Callable[[dict[str, Any]], dict[str, Any]]
 ActionSettingsPreparer = Callable[[RunJob, dict[str, Any]], dict[str, Any]]
@@ -31,17 +33,6 @@ ActionPrivateSettings = Callable[[RunJob], dict[str, Any]]
 ProtocolBuilder = Callable[[str, dict[str, Any] | None], list[Any]]
 PipelineStepBuilder = Callable[[list[Any]], list[Any]]
 PipelineEngineFactory = Callable[..., Any]
-
-CORRECTION_PARAM_NAMES = tuple(
-    name
-    for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
-    for name in (
-        f"{prefix}_calibration",
-        f"{prefix}_scale",
-        f"{prefix}_offset",
-        f"{prefix}_quadratic",
-    )
-)
 
 CAMERA_CONFIGURATION_PARAMS = (
     "camera_width",
@@ -692,15 +683,15 @@ class AcquisitionEngine:
 
 
 def create_engine(
-    settings: ParamSchema,
+    settings: ParamSchema | None = None,
     *,
-    protocol_builder: ProtocolBuilder,
-    pipeline_step_builder: PipelineStepBuilder,
-    pipeline_engine_factory: PipelineEngineFactory,
+    protocol_builder: ProtocolBuilder = build_protocol,
+    pipeline_step_builder: PipelineStepBuilder = build_pipeline_steps,
+    pipeline_engine_factory: PipelineEngineFactory = PipelineEngine,
     **kwargs: Any,
 ) -> AcquisitionEngine:
     return AcquisitionEngine(
-        settings,
+        settings or CONTROL_ENGINE_SETTINGS,
         protocol_builder=protocol_builder,
         pipeline_step_builder=pipeline_step_builder,
         pipeline_engine_factory=pipeline_engine_factory,

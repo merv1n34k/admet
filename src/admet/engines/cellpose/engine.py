@@ -8,6 +8,7 @@ from admet.core.run import RunJob, RunResult
 
 from .config import load_config
 from .detection import CellposeDetection
+from .settings import CELLPOSE_SETTINGS
 
 
 class CellposeAnalysisEngine:
@@ -120,8 +121,8 @@ class CellposeAnalysisEngine:
         return row_count
 
 
-def create_engine(settings: ParamSchema) -> CellposeAnalysisEngine:
-    return CellposeAnalysisEngine(settings)
+def create_engine(settings: ParamSchema | None = None) -> CellposeAnalysisEngine:
+    return CellposeAnalysisEngine(settings or CELLPOSE_SETTINGS)
 
 
 def _job_input(job: RunJob, key: str, setting_key: str) -> Path:

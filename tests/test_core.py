@@ -208,22 +208,14 @@ class EngineRegistryTests(unittest.TestCase):
 
 class EngineContractTests(unittest.TestCase):
     def test_builtin_engines_declare_valid_action_catalogs(self):
+        from admet.engines.acquisition import create_engine as create_acquisition_engine
         from admet.engines.cellpose import create_engine as create_cellpose_engine
         from admet.engines.opencv import create_engine as create_opencv_engine
-        from admet.engines.acquisition import create_engine as create_acquisition_engine
-        from admet.workflows.analyze_settings import CELLPOSE_SETTINGS, OPENCV_SETTINGS
-        from admet.workflows.control_protocol import PipelineEngine, build_pipeline_steps, build_protocol
-        from admet.workflows.control_settings import CONTROL_ENGINE_SETTINGS
 
         engines = (
-            create_opencv_engine(OPENCV_SETTINGS),
-            create_cellpose_engine(CELLPOSE_SETTINGS),
-            create_acquisition_engine(
-                CONTROL_ENGINE_SETTINGS,
-                protocol_builder=build_protocol,
-                pipeline_step_builder=build_pipeline_steps,
-                pipeline_engine_factory=PipelineEngine,
-            ),
+            create_opencv_engine(),
+            create_cellpose_engine(),
+            create_acquisition_engine(),
         )
         for engine in engines:
             with self.subTest(engine=engine.id):

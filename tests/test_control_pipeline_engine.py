@@ -2,7 +2,7 @@ import time
 import unittest
 from queue import Queue
 
-from admet.workflows.control_protocol import (
+from admet.engines.acquisition.protocol import (
     PipelineEngine,
     PipelineEvent,
     PipelineState,

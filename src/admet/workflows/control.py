@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from admet.workflows.control_settings import (
+from admet.engines.acquisition.settings import (
     CAMERA_SETTINGS,
     CORRECTION_SETTINGS,
     FLUIGENT_SETTINGS,
