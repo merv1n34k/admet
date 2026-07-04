@@ -9,6 +9,7 @@ from admet.core.session import AdmetSession, SessionFile, load_session, new_sess
 from admet.engines.acquisition import RecordingRun
 from admet.workflows.control_settings import CAMERA_SETTINGS, CORRECTION_SETTINGS
 from admet.ui.control import ControlWindow
+from admet.ui.window import WindowController
 from admet.workflows import StageStatus
 
 
@@ -170,7 +171,13 @@ class RecordingRunTests(unittest.TestCase):
         window = ControlWindow.__new__(ControlWindow)
         stage = SimpleNamespace(id="priming")
         calls = []
-        window._mounted_signature = ("priming",)
+        window.prepare_window_stage = lambda: None
+        window.mount_window_stage = lambda: None
+        window.sync_window_stage = lambda: None
+        window.finish_window_stage = lambda _decision: None
+        window.remount_shared_window_stage = lambda: None
+        window._window_controller = WindowController(window)
+        window._window_controller.wiring.render("priming", ("priming",), mount=lambda: None, sync=lambda: None)
         window._refresh_runtime_state = lambda: calls.append("runtime")
         window._structure_signature = lambda refreshed_stage: ("priming",)
         window._sync_action_box = lambda refreshed_stage: calls.append("sync")

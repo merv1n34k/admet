@@ -79,7 +79,7 @@ from admet.ui.render import (
     video_row as _video_row,
 )
 from admet.ui.theme import Theme
-from admet.ui.window import panel_specs, structure_changed, structure_signature
+from admet.ui.window import RenderDecision, WindowController, WindowStageContext, panel_specs, structure_signature
 from admet.workflows import create_control_workflow
 
 
@@ -244,6 +244,9 @@ class ControlWindow(QMainWindow):
         self._notification_kind = "primary"
         self._runs_completion_confirmed = False
         self._completion_pending = False
+        self._window_controller = WindowController(self)
+        self._window_stage: Stage | None = None
+        self._window_page: ControlStagePage | None = None
 
         self.setWindowTitle("admet control")
         self.resize(1440, 920)
@@ -446,6 +449,7 @@ class ControlWindow(QMainWindow):
         self.results_layout = page.results_layout
         self.log_panel = page.log_panel
         self.log_layout = page.log_layout
+        page.mounted_signature = self._window_controller.wiring.signature(stage.id)
         self._load_page_refs(page)
         return page
 
@@ -600,6 +604,9 @@ class ControlWindow(QMainWindow):
     def _render_current_stage(self) -> None:
         if self._camera_ack_pending:
             self._acknowledge_camera_frame()
+        self._window_controller.render_current_stage()
+
+    def prepare_window_stage(self) -> WindowStageContext | None:
         stage = self.workflow.current_stage(self.workflow_state)
         self._refresh_runtime_state()
         if stage.id == "fluigent":
@@ -607,18 +614,38 @@ class ControlWindow(QMainWindow):
         previous_page = self.current_stage_page
         page = self._activate_stage_page(stage)
         stage_changed = previous_page is not None and previous_page is not page
+        self._window_stage = stage
+        self._window_page = page
         signature = self._structure_signature(stage)
-        if structure_changed(page.mounted_signature, signature):
+        return WindowStageContext(
+            stage.id,
+            signature,
+            stage_changed=stage_changed,
+        )
+
+    def mount_window_stage(self) -> None:
+        stage = self._window_stage
+        if stage is not None:
             self._mount_stage(stage)
-            page.mounted_signature = signature
-            self._mounted_signature = signature
-            self._save_page_refs()
-        elif stage_changed:
+
+    def sync_window_stage(self) -> None:
+        stage = self._window_stage
+        if stage is not None:
+            self._sync_stage(stage)
+
+    def remount_shared_window_stage(self) -> None:
+        stage = self._window_stage
+        if stage is not None:
             self._remount_shared_stage_panels(stage)
+
+    def finish_window_stage(self, decision: RenderDecision) -> None:
+        page = self._window_page
+        self._mounted_signature = decision.signature
+        if page is None:
+            return
+        page.mounted_signature = decision.signature
+        if decision.mounted or decision.remounted_shared:
             self._save_page_refs()
-        else:
-            self._mounted_signature = signature
-        self._sync_stage(stage)
 
     def _structure_signature(self, stage: Stage) -> tuple[Any, ...]:
         state = getattr(getattr(self.api.engine, "hardware", None), "state", None)
@@ -1779,9 +1806,10 @@ class ControlWindow(QMainWindow):
     def _refresh_action_box(self, stage: Stage) -> None:
         self._refresh_runtime_state()
         signature = self._structure_signature(stage)
-        if signature != self._mounted_signature:
+        if self._window_controller.needs_mount(stage.id, signature):
             self._render_current_stage()
             return
+        self._mounted_signature = signature
         self._sync_action_box(stage)
         self._sync_toc()
 
