@@ -6,14 +6,16 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QAbstractScrollArea,
     QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -32,7 +34,15 @@ from admet.core.engine import Param, ParamKind
 from admet.core.run import RunJob
 from admet.ui import theme_qt as ui
 from admet.ui.control_runtime import ControlSessionMixin
-from admet.ui.presenter import ActionBoxVM, FieldVM, ResultsVM, ScreenModel, SurfaceVM, build_screen
+from admet.ui.presenter import (
+    ActionBoxVM,
+    FieldVM,
+    ResultsVM,
+    ScreenModel,
+    SettingsTableVM,
+    SurfaceVM,
+    build_screen,
+)
 from admet.ui.project import create_project, save_project, suggested_project_path
 from admet.ui.surfaces import render_qt_surface
 from admet.ui.theme_qt import Theme
@@ -146,11 +156,16 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
         rail_layout.setContentsMargins(0, 0, 0, 0)
         rail_layout.setSpacing(4)
         for index, step in enumerate(screen.steps):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            row.addWidget(_status_dot(step.status.value), 0)
             button = QPushButton(step.label)
             button.setCheckable(True)
             button.setChecked(step.current)
             button.clicked.connect(lambda _checked=False, i=index: self._activate(i))
-            rail_layout.addWidget(button)
+            row.addWidget(button, 1)
+            rail_layout.addLayout(row)
         for instruction in screen.instructions:
             label = QLabel(instruction)
             label.setWordWrap(True)
@@ -172,7 +187,7 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
         layout.setSpacing(8)
         layout.addWidget(_title(screen.title))
         self._render_buttons(layout, screen.action_box)
-        self._render_fields(layout, screen.settings.fields)
+        self._render_settings_table(layout, screen.settings)
         for surface in screen.surfaces:
             self._render_surface(layout, surface)
         self._render_results(layout, screen.results)
@@ -206,6 +221,25 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
             row.addWidget(QLabel(field.label))
             row.addWidget(self._field_widget(field), 1)
             layout.addLayout(row)
+
+    def _render_settings_table(self, layout: QVBoxLayout, settings: SettingsTableVM) -> None:
+        if not settings.fields:
+            return
+        table = QTableWidget(len(settings.fields), 2)
+        table.setHorizontalHeaderLabels(("Field", "Value"))
+        table.verticalHeader().hide()
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
+        for row, field in enumerate(settings.fields):
+            item = QTableWidgetItem(field.label)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            table.setItem(row, 0, item)
+            table.setCellWidget(row, 1, self._field_widget(field))
+        table.resizeRowsToContents()
+        layout.addWidget(table)
 
     def _render_surface(self, layout: QVBoxLayout, surface: SurfaceVM) -> None:
         layout.addWidget(_title(surface.title or surface.kind))
@@ -368,6 +402,9 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
     def project_label(self) -> str:
         return self._project_text()
 
+    def result_rows(self) -> list[dict[str, str]]:
+        return self._video_rows()
+
     def _sync_project_badge(self) -> None:
         if self.project_badge is not None:
             self.project_badge.setText(self._project_text())
@@ -386,3 +423,11 @@ def _title(text: str) -> QLabel:
     label = QLabel(text)
     label.setStyleSheet(f"font-weight:650; color:{Theme.TEXT_WHITE};")
     return label
+
+
+def _status_dot(status: str) -> QLabel:
+    dot = QLabel()
+    dot.setFixedSize(8, 8)
+    color = ui.status_color(status)
+    dot.setStyleSheet(f"background:{color}; border:1px solid {color}; border-radius:4px;")
+    return dot

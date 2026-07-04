@@ -43,6 +43,42 @@ def stylesheet() -> str:
         border-radius: {RADII.control}px;
         color: {PALETTE.text_step};
       }}
+      .admet-step-row {{
+        width: 100%;
+        min-height: 24px;
+        border-radius: {RADII.control}px;
+        cursor: pointer;
+      }}
+      .admet-step-dot {{
+        width: 8px;
+        height: 8px;
+        border-radius: {RADII.round}px;
+        background: {STATUS_COLORS["pending"]};
+        border: 1px solid {PALETTE.border};
+      }}
+      .admet-step-dot-active {{ background: {STATUS_COLORS["active"]}; border-color: {STATUS_COLORS["active"]}; }}
+      .admet-step-dot-complete {{ background: {STATUS_COLORS["complete"]}; border-color: {STATUS_COLORS["complete"]}; }}
+      .admet-step-dot-skipped {{ background: {STATUS_COLORS["skipped"]}; border-color: {STATUS_COLORS["skipped"]}; }}
+      .admet-settings-table {{
+        border: 1px solid {PALETTE.border};
+        border-radius: {RADII.control}px;
+        overflow: hidden;
+      }}
+      .admet-settings-row {{
+        border-bottom: 1px solid {PALETTE.border};
+        min-height: 34px;
+      }}
+      .admet-settings-row:last-child {{ border-bottom: 0; }}
+      .admet-settings-label {{
+        width: 220px;
+        color: {PALETTE.text_muted};
+        font-size: {TYPOGRAPHY.body}px;
+        padding: 4px {SPACING.default}px;
+      }}
+      .admet-settings-value {{
+        min-width: 0;
+        padding: 2px {SPACING.default}px;
+      }}
       .admet-step-current {{ background: {PALETTE.control_pressed}; }}
       .admet-step-complete {{ color: {STATUS_COLORS["complete"]}; }}
       .admet-step-skipped, .admet-step-pending {{ color: {STATUS_COLORS["pending"]}; }}

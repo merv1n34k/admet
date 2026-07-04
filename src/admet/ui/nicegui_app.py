@@ -78,13 +78,15 @@ class NiceGuiWorkflowApp:
     def _render_sidebar(self, ui: Any, screen: ScreenModel) -> None:
         with ui.column().classes("admet-sidebar"):
             for index, step in enumerate(screen.steps):
-                classes = f"admet-step admet-step-{step.status.value}"
+                classes = f"admet-step-row admet-step-{step.status.value} items-center gap-2"
                 if step.current:
                     classes += " admet-step-current"
-                ui.button(
-                    step.label,
-                    on_click=lambda _event=None, i=index: self.runtime.activate(i),
-                ).props("flat no-caps dense").classes(classes)
+                with ui.row().classes(classes).on("click", lambda _event=None, i=index: self.runtime.activate(i)):
+                    dot = f"admet-step-dot admet-step-dot-{step.status.value}"
+                    if step.current:
+                        dot += " admet-step-dot-active"
+                    ui.element("span").classes(dot)
+                    ui.label(step.label).classes("text-sm")
             notice_kind = screen.notice.kind if screen.notice is not None else "primary"
             with ui.column().classes(f"admet-notice admet-notice-{notice_kind}"):
                 ui.label(screen.title).classes("text-sm font-semibold")
@@ -99,7 +101,7 @@ class NiceGuiWorkflowApp:
             with ui.column().classes("admet-panel"):
                 self._render_buttons(ui, screen.action_box)
             with ui.column().classes("admet-panel"):
-                self._render_fields(ui, screen.settings.fields)
+                self._render_settings_table(ui, screen.settings.fields)
             with ui.column().classes("admet-panel"):
                 for surface in screen.surfaces:
                     self._render_surface(ui, surface)
@@ -128,6 +130,17 @@ class NiceGuiWorkflowApp:
         with ui.grid(columns=2).classes("admet-field-grid w-full"):
             for field in fields:
                 self._render_field(ui, field)
+
+    def _render_settings_table(self, ui: Any, fields: tuple[FieldVM, ...]) -> None:
+        if not fields:
+            ui.label("No stage-level settings.").classes("text-xs text-gray-500")
+            return
+        with ui.column().classes("admet-settings-table w-full gap-0"):
+            for field in fields:
+                with ui.row().classes("admet-settings-row w-full items-center no-wrap"):
+                    ui.label(field.label).classes("admet-settings-label")
+                    with ui.column().classes("admet-settings-value grow"):
+                        self._render_field(ui, field)
 
     def _render_field(self, ui: Any, field: FieldVM) -> None:
         value = field.value

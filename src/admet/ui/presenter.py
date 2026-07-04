@@ -166,7 +166,7 @@ def build_screen(
         ),
         settings=settings,
         surfaces=tuple(_surface_vm(surface, presenter_runtime) for surface in stage.surfaces),
-        results=_results_for_runtime(presenter_runtime),
+        results=_results_for_runtime(workflow, presenter_runtime),
         log=_log_for_runtime(presenter_runtime),
     )
 
@@ -276,14 +276,19 @@ def _project_for_runtime(workflow: Workflow, runtime: PresenterRuntime) -> Proje
     )
 
 
-def _results_for_runtime(runtime: PresenterRuntime) -> ResultsVM:
+def _results_for_runtime(workflow: Workflow, runtime: PresenterRuntime) -> ResultsVM:
     rows = _runtime_call(runtime, "result_rows", [])
     if not isinstance(rows, list):
         rows = []
+    empty_message = (
+        "No completed analysis jobs yet."
+        if workflow.id == "analyze"
+        else "No stored recordings yet."
+    )
     return ResultsVM(
         title="Results",
         rows=tuple(dict(row) for row in rows),
-        empty_message="No completed analysis jobs yet.",
+        empty_message=empty_message,
     )
 
 
