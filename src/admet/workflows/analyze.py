@@ -13,7 +13,7 @@ from admet.core.project import ProjectStore
 from admet.core.run import JsonlRunSink, RunJob, RunResult
 from admet.core.session import content_cache_key, session_path
 
-from .model import Stage, StageControl, Workflow
+from .model import Stage, StageControl, StageSurface, Workflow
 
 
 VIDEO_SUFFIXES = {".avi", ".mp4", ".mov", ".mkv"}
@@ -40,6 +40,22 @@ def create_analyze_workflow() -> Workflow:
                         Param("source_path", "Source Path", ParamKind.PATH, default=""),
                     )
                 ),
+                surfaces=(
+                    StageSurface(
+                        "matrix",
+                        "Batch Matrix",
+                        options={
+                            "columns": (
+                                "project",
+                                "source",
+                                "engine",
+                                "sample_id",
+                                "cache",
+                                "active",
+                            )
+                        },
+                    ),
+                ),
                 controls=(StageControl("Add Target", completes=True, variant="success"),),
             ),
             Stage(
@@ -52,6 +68,13 @@ def create_analyze_workflow() -> Workflow:
                         Param("microns_per_pixel", "Microns Per Pixel", ParamKind.FLOAT, default=1.0),
                         Param("fps", "FPS", ParamKind.FLOAT, default=0.0, minimum=0.0),
                     )
+                ),
+                surfaces=(
+                    StageSurface(
+                        "video_preview",
+                        "Video Preview",
+                        options={"engine": "opencv"},
+                    ),
                 ),
                 controls=(StageControl("Run OpenCV", "analyze", completes=True),),
             ),
@@ -69,6 +92,13 @@ def create_analyze_workflow() -> Workflow:
                         Param("detect_inclusions", "Detect Inclusions", ParamKind.BOOLEAN, default=True),
                     )
                 ),
+                surfaces=(
+                    StageSurface(
+                        "matrix",
+                        "Imaging Matrix",
+                        options={"engine": "cellpose", "columns": ("project", "source", "sample_id", "cache")},
+                    ),
+                ),
                 controls=(StageControl("Run Cellpose", "analyze", completes=True),),
             ),
             Stage(
@@ -78,6 +108,13 @@ def create_analyze_workflow() -> Workflow:
                 instructions=(
                     "Views use raw JSONL and project run metadata.",
                     "Skipped rows remain available through prior stored project runs.",
+                ),
+                surfaces=(
+                    StageSurface(
+                        "charts",
+                        "Analysis Results",
+                        options={"charts": ("diameter", "cv", "count")},
+                    ),
                 ),
                 controls=(StageControl("Refresh View", completes=True, variant="success"),),
             ),

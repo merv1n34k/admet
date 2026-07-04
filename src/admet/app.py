@@ -57,7 +57,7 @@ def run_analyze_ui(port: int, *, native: bool = False) -> None:
     workflow = create_analyze_workflow()
     registry = create_engine_registry("analyze")
 
-    from admet.ui.analyze import render_workflow
+    from admet.ui.nicegui_app import render_workflow
 
     def root() -> None:
         render_workflow(workflow, workflow.initial_state(), registry=registry)

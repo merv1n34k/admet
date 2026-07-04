@@ -10,7 +10,7 @@ from admet.core.engine import ActionSpec, EngineRegistry, Param, ParamKind, Para
 from admet.core.project import ProjectStore
 from admet.core.run import RunJob, RunResult
 from admet.core.session import load_session
-from admet.ui.analyze import AnalyzeWorkflowView
+from admet.ui.analyze_runtime import NiceGuiAnalyzeRuntime
 from admet.ui.render import MatrixRow, StoredRun, read_raw_rows, summarize_raw_rows
 from admet.workflows import create_analyze_workflow
 from admet.workflows.analyze import AnalyzeBatchRunner, AnalyzeTarget, infer_engine
@@ -121,19 +121,18 @@ class AnalyzeBatchRunnerTests(unittest.TestCase):
         self.assertEqual(metadata["runs"][0]["metadata"]["jobs"][0]["status"], "skipped")
 
 
-class AnalyzeWorkflowViewTests(unittest.TestCase):
+class NiceGuiAnalyzeRuntimeTests(unittest.TestCase):
     def test_new_project_button_handler_creates_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             target = Path(tmpdir) / "study.admetp"
-            view = AnalyzeWorkflowView(
+            view = NiceGuiAnalyzeRuntime(
                 create_analyze_workflow(),
                 create_analyze_workflow().initial_state(),
                 EngineRegistry(),
             )
             view.project_path = str(target)
-            view._refresh = lambda: None
 
-            view._new_project()
+            view.new_project()
 
             self.assertEqual(Path(view.project_path).name, "study.admetp")
             self.assertEqual(view.notice_kind, "success")
@@ -141,14 +140,13 @@ class AnalyzeWorkflowViewTests(unittest.TestCase):
 
     def test_new_project_defaults_to_discovery_root(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch.dict(os.environ, {ENV_ROOT: tmpdir}):
-            view = AnalyzeWorkflowView(
+            view = NiceGuiAnalyzeRuntime(
                 create_analyze_workflow(),
                 create_analyze_workflow().initial_state(),
                 EngineRegistry(),
             )
-            view._refresh = lambda: None
 
-            view._new_project()
+            view.new_project()
 
             project_path = Path(view.project_path)
             self.assertEqual(project_path.parent, Path(tmpdir).resolve())
@@ -163,22 +161,21 @@ class AnalyzeWorkflowViewTests(unittest.TestCase):
             store = ProjectStore.create(project, "study")
             store.register_analysis_file(source, engine="opencv", sample_id="set01")
             store.save()
-            view = AnalyzeWorkflowView(
+            view = NiceGuiAnalyzeRuntime(
                 create_analyze_workflow(),
                 create_analyze_workflow().initial_state(),
                 EngineRegistry(),
             )
             view.project_path = str(project)
-            view._refresh = lambda: None
 
-            view._load_project()
+            view.load_project()
 
         self.assertEqual(view.notice_kind, "success")
         self.assertEqual(len(view.matrix), 1)
         self.assertEqual(view.matrix[0].sample_id, "set01")
 
     def test_target_to_run_uses_row_specific_engine_settings(self):
-        view = AnalyzeWorkflowView(
+        view = NiceGuiAnalyzeRuntime(
             create_analyze_workflow(),
             create_analyze_workflow().initial_state(),
             EngineRegistry(),
@@ -201,7 +198,7 @@ class AnalyzeWorkflowViewTests(unittest.TestCase):
             },
         )
 
-        target = view._target_to_run(row)
+        target = view.target_to_run(row)
 
         self.assertEqual(target.settings["microns_per_pixel"], 2.5)
         self.assertEqual(target.settings["fps"], 150.0)
@@ -213,7 +210,7 @@ class AnalyzeWorkflowViewTests(unittest.TestCase):
         self.assertEqual(target.settings["roi_height"], 720)
 
     def test_target_to_run_uses_row_specific_cellpose_settings(self):
-        view = AnalyzeWorkflowView(
+        view = NiceGuiAnalyzeRuntime(
             create_analyze_workflow(),
             create_analyze_workflow().initial_state(),
             EngineRegistry(),
@@ -233,7 +230,7 @@ class AnalyzeWorkflowViewTests(unittest.TestCase):
             },
         )
 
-        target = view._target_to_run(row)
+        target = view.target_to_run(row)
 
         self.assertEqual(target.settings["config_path"], "/tmp/cellpose.json")
         self.assertEqual(target.settings["px_to_um"], 1.9)
