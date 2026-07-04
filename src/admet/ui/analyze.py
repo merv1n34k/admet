@@ -637,6 +637,7 @@ class AnalyzeWorkflowView:
             """
             <q-td :props="props">
               <q-input dense outlined v-model="props.row.sample_id"
+                @click.stop @mousedown.stop
                 @blur="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'sample_id', value: props.row.sample_id})"
                 @keyup.enter="$event.target.blur()" />
             </q-td>
@@ -651,6 +652,7 @@ class AnalyzeWorkflowView:
                 {label: 'Discard', value: 'discard'},
                 {label: 'Skip', value: 'skip'}
               ]" v-model="props.row.cache"
+                @click.stop @mousedown.stop
                 @update:model-value="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'cache_policy', value: props.row.cache})" />
             </q-td>
             """,
