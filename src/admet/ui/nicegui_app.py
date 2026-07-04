@@ -6,6 +6,7 @@ from admet.core.engine import EngineRegistry, ParamKind
 from admet.ui.analyze_runtime import NiceGuiAnalyzeRuntime
 from admet.ui.presenter import FieldVM, ScreenModel, SurfaceVM, build_screen
 from admet.ui.surfaces import render_nicegui_surface
+from admet.ui.theme_web import stylesheet
 from admet.workflows import Workflow, WorkflowState
 
 
@@ -32,7 +33,7 @@ class NiceGuiWorkflowApp:
     def render(self) -> None:
         from nicegui import ui
 
-        ui.add_head_html(_style())
+        ui.add_head_html(stylesheet())
         self._refreshable = ui.refreshable(self._render_screen)
         self.runtime.refresh = self._refresh
         self._refreshable()
@@ -189,36 +190,3 @@ class NiceGuiWorkflowApp:
     def _refresh(self) -> None:
         if self._refreshable is not None:
             self._refreshable.refresh()
-
-
-def _style() -> str:
-    return """
-    <style>
-      body { background: #f7f8fa; color: #1f2933; font-family: Inter, system-ui, sans-serif; }
-      .admet-shell { min-height: 100vh; gap: 0; }
-      .admet-topbar { background: #ffffff; border-bottom: 1px solid #dde3ea; padding: 10px 14px; }
-      .admet-body { gap: 14px; padding: 14px; }
-      .admet-sidebar { width: 250px; position: sticky; top: 14px; gap: 6px; }
-      .admet-content { min-width: 0; gap: 10px; }
-      .admet-panel { background: #ffffff; border: 1px solid #dde3ea; border-radius: 10px; padding: 10px; gap: 8px; }
-      .admet-panel-title { font-size: 13px; font-weight: 650; color: #28323f; }
-      .admet-step { width: 100%; justify-content: flex-start; border-radius: 8px; color: #334155; }
-      .admet-step-current { background: #e8eef5; }
-      .admet-step-complete { color: #137a4b; }
-      .admet-step-skipped, .admet-step-pending { color: #6b7280; }
-      .admet-notice { background: #ffffff; border: 1px solid #dde3ea; border-radius: 10px; padding: 10px; margin-top: 8px; }
-      .admet-notice-success { border-color: #9ed4b4; }
-      .admet-notice-warning { border-color: #f4bf71; }
-      .admet-notice-danger { border-color: #ee9b9b; }
-      .admet-actions { gap: 6px; flex-wrap: wrap; }
-      .admet-field-grid { gap: 8px; }
-      .admet-surface { gap: 8px; }
-      .admet-surface-placeholder { min-height: 140px; justify-content: center; align-items: center; border: 1px dashed #cfd8e3; border-radius: 10px; }
-      .admet-video-placeholder { width: 100%; min-height: 260px; position: relative; overflow: hidden; background: #f1f4f8; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
-      .admet-video-bubbles::before, .admet-video-bubbles::after { content: ""; position: absolute; border-radius: 999px; background: rgba(148, 163, 184, 0.22); }
-      .admet-video-bubbles::before { width: 180px; height: 180px; left: 20%; top: 15%; }
-      .admet-video-bubbles::after { width: 110px; height: 110px; right: 24%; bottom: 18%; }
-      .admet-video-caption { position: relative; max-width: 80%; color: #64748b; font-size: 12px; word-break: break-word; }
-      .admet-project-select { min-width: 300px; }
-    </style>
-    """

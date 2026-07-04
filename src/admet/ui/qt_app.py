@@ -28,11 +28,11 @@ from admet.core.api import AdmetAPI
 from admet.core.engine import Param, ParamKind
 from admet.core.run import RunJob
 from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNELS
-from admet.ui import theme as ui
+from admet.ui import theme_qt as ui
 from admet.ui.control_runtime import ControlSessionMixin
 from admet.ui.presenter import FieldVM, ScreenModel, SurfaceVM, build_screen
 from admet.ui.project import create_project, save_project, suggested_project_path
-from admet.ui.theme import Theme
+from admet.ui.theme_qt import Theme
 from admet.ui.window import WindowController
 from admet.workflows import Stage, StageStatus, create_control_workflow
 

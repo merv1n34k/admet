@@ -1,6 +1,6 @@
 import unittest
 
-from admet.ui.theme import box_padding, button_qss, spacing, stylesheet, text_qss
+from admet.ui.theme_qt import box_padding, button_qss, spacing, stylesheet, text_qss
 from admet.ui.presenter import build_screen
 from admet.workflows.control import create_control_workflow
 
