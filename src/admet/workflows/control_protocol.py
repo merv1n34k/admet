@@ -10,7 +10,7 @@ from enum import StrEnum
 from queue import Queue
 from typing import Protocol
 
-from admet.engines.control._fluidics.config import (
+from admet.engines.acquisition.fluidics.config import (
     BEADS_M_SENSOR,
     CELLS_M_SENSOR,
     DROPSEQ_OIL_FLOW_UL_MIN,

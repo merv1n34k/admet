@@ -7,7 +7,7 @@ import json
 from admet.core.api import AdmetAPI
 from admet.workflows import create_analyze_workflow
 
-HEADLESS_ENGINES = ("fluidics", "opencv", "cellpose")
+HEADLESS_ENGINES = ("acquisition", "opencv", "cellpose")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,12 +75,12 @@ def run_analyze_ui(port: int, *, native: bool = False) -> None:
 def run_control_ui() -> None:
     from admet.ui.control import run_control_app
 
-    api = create_engine_api("fluidics")
+    api = create_engine_api("acquisition")
     raise SystemExit(run_control_app(api))
 
 
 def create_engine_api(engine_id: str) -> AdmetAPI:
-    if engine_id == "fluidics":
+    if engine_id == "acquisition":
         from admet.engines import create_engine_registry
 
         return AdmetAPI(create_engine_registry("control").create(engine_id))

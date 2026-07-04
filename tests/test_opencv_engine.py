@@ -5,6 +5,7 @@ from pathlib import Path
 
 from admet.core.run import JsonlRunSink
 from admet.core.run import RunJob
+from admet.workflows.analyze_settings import OPENCV_SETTINGS
 
 try:
     import cv2
@@ -31,9 +32,9 @@ def write_synthetic_video(path: Path, frames=30):
 @unittest.skipIf(cv2 is None, "OpenCV is not installed")
 class OpenCVEngineTests(unittest.TestCase):
     def test_engine_rejects_missing_video_input(self):
-        from admet.engines.analyze.opencv import create_engine
+        from admet.engines.opencv import create_engine
 
-        engine = create_engine()
+        engine = create_engine(OPENCV_SETTINGS)
 
         with self.assertRaisesRegex(ValueError, "requires input 'video'"):
             engine.run(
@@ -50,12 +51,12 @@ class OpenCVEngineTests(unittest.TestCase):
             )
 
     def test_config_includes_frame_range_and_roi(self):
-        from admet.engines.analyze.opencv import create_engine
+        from admet.engines.opencv import create_engine
 
         with tempfile.TemporaryDirectory() as tmpdir:
             video_path = Path(tmpdir) / "droplets.avi"
             write_synthetic_video(video_path)
-            config = create_engine()._config_from_settings(
+            config = create_engine(OPENCV_SETTINGS)._config_from_settings(
                 {
                     "video_path": str(video_path),
                     "microns_per_pixel": 1.5,
@@ -76,7 +77,7 @@ class OpenCVEngineTests(unittest.TestCase):
         self.assertEqual(config["analysis"]["fps"], 100.0)
 
     def test_engine_writes_raw_rows_to_job_sink(self):
-        from admet.engines.analyze.opencv import create_engine
+        from admet.engines.opencv import create_engine
 
         with tempfile.TemporaryDirectory() as tmpdir:
             video_path = Path(tmpdir) / "droplets.avi"
@@ -84,7 +85,7 @@ class OpenCVEngineTests(unittest.TestCase):
             cache_dir = Path(tmpdir) / "cache" / "opencv"
             write_synthetic_video(video_path)
 
-            engine = create_engine()
+            engine = create_engine(OPENCV_SETTINGS)
             with JsonlRunSink(raw_path) as sink:
                 result = engine.run(
                     RunJob(

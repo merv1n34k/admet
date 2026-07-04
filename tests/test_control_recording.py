@@ -6,8 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from admet.core.session import AdmetSession, SessionFile, load_session, new_session, save_session
-from admet.engines.control import RecordingRun
-from admet.engines.control.settings import CAMERA_SETTINGS, CORRECTION_SETTINGS
+from admet.engines.acquisition import RecordingRun
+from admet.workflows.control_settings import CAMERA_SETTINGS, CORRECTION_SETTINGS
 from admet.ui.control import ControlWindow
 from admet.workflows import StageStatus
 
@@ -307,7 +307,7 @@ class RecordingRunTests(unittest.TestCase):
             window = ControlWindow.__new__(ControlWindow)
             window.api = SimpleNamespace(
                 session=load_session(session),
-                engine=SimpleNamespace(id="fluidics"),
+                engine=SimpleNamespace(id="acquisition"),
                 workdir=str(session),
             )
             window.project_path = session
@@ -394,7 +394,7 @@ class RecordingRunTests(unittest.TestCase):
             window = ControlWindow.__new__(ControlWindow)
             window.api = SimpleNamespace(
                 session=load_session(session),
-                engine=SimpleNamespace(id="fluidics", recording_metadata_sources=lambda: []),
+                engine=SimpleNamespace(id="acquisition", recording_metadata_sources=lambda: []),
                 workdir=str(session),
             )
             window.project_path = session

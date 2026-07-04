@@ -1,4 +1,4 @@
-from admet.engines.control.settings import (
+from admet.workflows.control_settings import (
     CAMERA_SETTINGS,
     CORRECTION_SETTINGS,
     FLUIGENT_SETTINGS,

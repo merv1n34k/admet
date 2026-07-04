@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from admet.core.engine import ActionSpec, Param, ParamKind, ParamSchema, validate_action_settings
+from admet.core.engine import ActionSpec, ParamSchema, validate_action_settings
 from admet.core.run import RunJob, RunResult
 
 from .pipeline import DropletPipeline
@@ -12,27 +12,17 @@ from .pipeline import DropletPipeline
 class OpenCVAnalysisEngine:
     id = "opencv"
     name = "OpenCV Video Analysis"
-    settings = ParamSchema(
-        (
-            Param("video_path", "Video Path", ParamKind.PATH, default="", required=True),
-            Param("microns_per_pixel", "Microns Per Pixel", ParamKind.FLOAT, default=1.0),
-            Param("fps", "FPS", ParamKind.FLOAT, default=0.0, minimum=0.0),
-            Param("start_frame", "Start Frame", ParamKind.INTEGER, default=0, minimum=0),
-            Param("end_frame", "End Frame", ParamKind.INTEGER, default=None, minimum=0),
-            Param("roi_x", "ROI X", ParamKind.INTEGER, default=0, minimum=0),
-            Param("roi_y", "ROI Y", ParamKind.INTEGER, default=0, minimum=0),
-            Param("roi_width", "ROI Width", ParamKind.INTEGER, default=0, minimum=0),
-            Param("roi_height", "ROI Height", ParamKind.INTEGER, default=0, minimum=0),
+
+    def __init__(self, settings: ParamSchema) -> None:
+        self.settings = settings
+        self.actions = (
+            ActionSpec(
+                "analyze",
+                "Analyze",
+                "analysis",
+                params=tuple(param.name for param in settings.params),
+            ),
         )
-    )
-    actions = (
-        ActionSpec(
-            "analyze",
-            "Analyze",
-            "analysis",
-            params=tuple(param.name for param in settings.params),
-        ),
-    )
 
     def run(self, job: RunJob) -> RunResult:
         if job.action != "analyze":
@@ -198,8 +188,8 @@ class OpenCVAnalysisEngine:
             row_count += 1
         return row_count
 
-def create_engine() -> OpenCVAnalysisEngine:
-    return OpenCVAnalysisEngine()
+def create_engine(settings: ParamSchema) -> OpenCVAnalysisEngine:
+    return OpenCVAnalysisEngine(settings)
 
 
 def _job_input(job: RunJob, key: str, setting_key: str) -> Path:

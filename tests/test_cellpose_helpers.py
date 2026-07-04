@@ -7,12 +7,13 @@ from unittest.mock import patch
 import numpy as np
 
 from admet.core.run import JsonlRunSink, RunJob
-from admet.engines.analyze._cellpose.cache import Cache
-from admet.engines.analyze._cellpose.config import load_config
-from admet.engines.analyze._cellpose.correction import update_results_with_inclusions
-from admet.engines.analyze._cellpose.detection import CellposeDetection, CellposeUnavailableError
-from admet.engines.analyze._cellpose.engine import create_engine
-from admet.engines.analyze._cellpose.scanprotocol import build_layout, field_cells
+from admet.engines.cellpose.cache import Cache
+from admet.engines.cellpose.config import load_config
+from admet.engines.cellpose.correction import update_results_with_inclusions
+from admet.engines.cellpose.detection import CellposeDetection, CellposeUnavailableError
+from admet.engines.cellpose.engine import create_engine
+from admet.engines.cellpose.scanprotocol import build_layout, field_cells
+from admet.workflows.analyze_settings import CELLPOSE_SETTINGS
 
 
 class CellposeHelperTests(unittest.TestCase):
@@ -163,7 +164,7 @@ class CellposeHelperTests(unittest.TestCase):
 
     def test_cellpose_engine_rejects_missing_input_dir(self):
         with self.assertRaisesRegex(ValueError, "requires input 'input_dir'"):
-            create_engine().run(
+            create_engine(CELLPOSE_SETTINGS).run(
                 RunJob(
                     id="job-cellpose",
                     engine="cellpose",
@@ -180,7 +181,7 @@ class CellposeHelperTests(unittest.TestCase):
             input_dir.mkdir()
 
             with JsonlRunSink(raw_path) as sink:
-                result = create_engine().run(
+                result = create_engine(CELLPOSE_SETTINGS).run(
                     RunJob(
                         id="job-cellpose",
                         engine="cellpose",

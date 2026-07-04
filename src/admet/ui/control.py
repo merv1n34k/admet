@@ -44,11 +44,11 @@ from admet.core.project import ProjectStore
 from admet.core.engine import Param, ParamKind
 from admet.core.session import SessionFile, SessionItem, load_session, new_session, save_session, session_path
 from admet.workflows import Stage, StageControl, StageStatus
-from admet.engines.control._fluidics.config import (
+from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNEL_LABELS,
     FLUIDIC_CHANNELS,
 )
-from admet.engines.control.settings import CORRECTION_PARAM_NAMES
+from admet.workflows.control_settings import CORRECTION_PARAM_NAMES
 from admet.ui import theme as ui
 from admet.ui.render import structure_changed, structure_signature
 from admet.ui.scaffold import panel_specs

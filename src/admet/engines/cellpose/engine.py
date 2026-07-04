@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from admet.core.engine import ActionSpec, Param, ParamKind, ParamSchema, validate_action_settings
+from admet.core.engine import ActionSpec, ParamSchema, validate_action_settings
 from admet.core.run import RunJob, RunResult
 
 from .config import load_config
@@ -13,24 +13,17 @@ from .detection import CellposeDetection
 class CellposeAnalysisEngine:
     id = "cellpose"
     name = "Cellpose Image Analysis"
-    settings = ParamSchema(
-        (
-            Param("input_dir", "Input Directory", ParamKind.PATH, default="", required=True),
-            Param("config_path", "Config Path", ParamKind.PATH, default=""),
-            Param("px_to_um", "Pixels To Microns", ParamKind.FLOAT, default=1.14, minimum=0.0),
-            Param("frame_limit", "Frame Limit", ParamKind.INTEGER, default=None),
-            Param("use_cache", "Use Cache", ParamKind.BOOLEAN, default=True),
-            Param("detect_inclusions", "Detect Inclusions", ParamKind.BOOLEAN, default=True),
+
+    def __init__(self, settings: ParamSchema) -> None:
+        self.settings = settings
+        self.actions = (
+            ActionSpec(
+                "analyze",
+                "Analyze",
+                "analysis",
+                params=tuple(param.name for param in settings.params),
+            ),
         )
-    )
-    actions = (
-        ActionSpec(
-            "analyze",
-            "Analyze",
-            "analysis",
-            params=tuple(param.name for param in settings.params),
-        ),
-    )
 
     def run(self, job: RunJob) -> RunResult:
         if job.action != "analyze":
@@ -127,8 +120,8 @@ class CellposeAnalysisEngine:
         return row_count
 
 
-def create_engine() -> CellposeAnalysisEngine:
-    return CellposeAnalysisEngine()
+def create_engine(settings: ParamSchema) -> CellposeAnalysisEngine:
+    return CellposeAnalysisEngine(settings)
 
 
 def _job_input(job: RunJob, key: str, setting_key: str) -> Path:

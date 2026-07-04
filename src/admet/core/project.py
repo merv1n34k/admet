@@ -236,7 +236,7 @@ class ProjectStore:
         item = SessionItem(
             id="acq-records",
             project_type="control_acquisition",
-            engine="fluidics",
+            engine="acquisition",
             files=tuple(item_files),
             metadata={"recording_count": len(item_files) // 2, "report_dir": "records"},
         )

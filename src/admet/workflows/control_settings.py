@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from admet.core.engine import Param, ParamKind, ParamOption, ParamSchema
-from admet.engines.control._fluidics.config import (
+from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNELS,
     SENSOR_CALIBRATIONS,
 )

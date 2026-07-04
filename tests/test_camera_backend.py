@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from admet.engines.control.camera import (
+from admet.engines.acquisition.camera import (
     Camera,
     CameraAcquisitionThread,
     PypylonUnavailableError,

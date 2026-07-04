@@ -4,10 +4,10 @@ from dataclasses import asdict
 from queue import Queue
 from typing import Any, Callable
 
-from admet.core.engine import ActionSpec, validate_action_settings
+from admet.core.engine import ActionSpec, ParamSchema, validate_action_settings
 from admet.core.run import RunJob, RunResult
-from admet.engines.control.camera import CameraController
-from admet.engines.control._fluidics import (
+from admet.engines.acquisition.camera import CameraController
+from admet.engines.acquisition.fluidics import (
     AcquisitionThread,
     ChannelManager,
     CsvLogger,
@@ -16,29 +16,32 @@ from admet.engines.control._fluidics import (
     HardwareManager,
     SDKAvailability,
 )
-from admet.engines.control._fluidics.config import (
+from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNELS,
     SENSOR_CALIBRATIONS,
 )
-from admet.engines.control.recording import (
+from admet.engines.acquisition.recording import (
     RecordingCoordinator,
     WriterFactory,
 )
-from admet.engines.control.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES
-from admet.workflows.control_protocol import (
-    PipelineEngine,
-    PipelineEvent,
-    PipelineState,
-    PipelineStep,
-    ProtocolStep,
-    build_pipeline_steps,
-    build_protocol,
-)
-
 
 ActionHandler = Callable[[dict[str, Any]], dict[str, Any]]
 ActionSettingsPreparer = Callable[[RunJob, dict[str, Any]], dict[str, Any]]
 ActionPrivateSettings = Callable[[RunJob], dict[str, Any]]
+ProtocolBuilder = Callable[[str, dict[str, Any] | None], list[Any]]
+PipelineStepBuilder = Callable[[list[Any]], list[Any]]
+PipelineEngineFactory = Callable[..., Any]
+
+CORRECTION_PARAM_NAMES = tuple(
+    name
+    for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
+    for name in (
+        f"{prefix}_calibration",
+        f"{prefix}_scale",
+        f"{prefix}_offset",
+        f"{prefix}_quadratic",
+    )
+)
 
 CAMERA_CONFIGURATION_PARAMS = (
     "camera_width",
@@ -58,7 +61,7 @@ CAMERA_CONFIGURATION_PARAMS = (
     "camera_waterfall",
 )
 
-CONTROL_ACTIONS = (
+ACQUISITION_ACTIONS = (
     ActionSpec("connect_fluidics", "Connect Fluidics", "connection", params=("simulated", "start_polling")),
     ActionSpec("disconnect_fluidics", "Disconnect Fluidics", "connection"),
     ActionSpec("verify_backend", "Verify Backend", "diagnostics"),
@@ -148,26 +151,33 @@ CONTROL_ACTIONS = (
 )
 
 
-class FluidicsControlEngine:
-    id = "fluidics"
-    name = "Fluigent Fluidics Control"
-    settings = CONTROL_ENGINE_SETTINGS
-    actions = CONTROL_ACTIONS
+class AcquisitionEngine:
+    id = "acquisition"
+    name = "Synchronized Acquisition"
+    actions = ACQUISITION_ACTIONS
 
     def __init__(
         self,
-        sdk: FluigentSDK | None = None,
+        settings: ParamSchema,
         *,
+        protocol_builder: ProtocolBuilder,
+        pipeline_step_builder: PipelineStepBuilder,
+        pipeline_engine_factory: PipelineEngineFactory,
+        sdk: FluigentSDK | None = None,
         video_writer_factory: WriterFactory | None = None,
     ):
+        self.settings = settings
+        self._build_protocol = protocol_builder
+        self._build_pipeline_steps = pipeline_step_builder
+        self._pipeline_engine_factory = pipeline_engine_factory
         self.sdk = sdk or FluigentSDK()
         self.hardware = HardwareManager(self.sdk)
         self.channel_manager = ChannelManager(self.sdk)
         self.data_queue: Queue = Queue(maxsize=50)
-        self.pipeline_queue: Queue[PipelineEvent] = Queue(maxsize=50)
+        self.pipeline_queue: Queue = Queue(maxsize=50)
         self._camera = CameraController()
         self._acquisition: AcquisitionThread | None = None
-        self._pipeline: PipelineEngine | None = None
+        self._pipeline: Any | None = None
         self._recordings = RecordingCoordinator(
             csv_logger=CsvLogger(),
             hardware_state=lambda: self.hardware.state,
@@ -275,7 +285,7 @@ class FluidicsControlEngine:
         missing = sorted(declared - handled)
         extra = sorted(handled - declared)
         if missing or extra:
-            raise RuntimeError(f"control action handler mismatch: missing={missing}, extra={extra}")
+            raise RuntimeError(f"acquisition action handler mismatch: missing={missing}, extra={extra}")
 
     def run(self, job: RunJob) -> RunResult:
         settings = self._prepare_action_settings(job)
@@ -283,7 +293,7 @@ class FluidicsControlEngine:
         normalized.update(self._private_settings_for_job(job))
         handler = self._action_handlers.get(job.action)
         if handler is None:
-            raise ValueError(f"unsupported fluidics action: {job.action}")
+            raise ValueError(f"unsupported acquisition action: {job.action}")
         metadata = handler(normalized)
         return RunResult(
             job_id=job.id,
@@ -360,10 +370,11 @@ class FluidicsControlEngine:
         return self._recordings.csv_logger
 
     @property
-    def pipeline_state(self) -> PipelineState:
+    def pipeline_state(self) -> str:
         if self._pipeline:
-            return self._pipeline.state
-        return PipelineState.IDLE
+            state = self._pipeline.state
+            return str(getattr(state, "value", state))
+        return "idle"
 
     def start_polling(self) -> None:
         if self.polling_active:
@@ -451,12 +462,12 @@ class FluidicsControlEngine:
     ) -> None:
         if self._pipeline and self._pipeline.is_alive():
             return
-        steps = self.build_pipeline_from_steps(build_protocol(name, settings))
+        steps = self.build_pipeline_from_steps(self._build_protocol(name, settings))
         sensor_to_channel = {
             channel.sensor_index: channel_index
             for channel_index, channel in enumerate(self.channel_manager.channels)
         }
-        self._pipeline = PipelineEngine(
+        self._pipeline = self._pipeline_engine_factory(
             steps,
             self.channel_manager,
             self._acquisition,
@@ -488,11 +499,11 @@ class FluidicsControlEngine:
         if self._pipeline:
             self._pipeline.confirm_pending()
 
-    def build_pipeline(self, name: str) -> list[PipelineStep]:
-        return self.build_pipeline_from_steps(build_protocol(name))
+    def build_pipeline(self, name: str) -> list[Any]:
+        return self.build_pipeline_from_steps(self._build_protocol(name, None))
 
-    def build_pipeline_from_steps(self, steps: list[ProtocolStep]) -> list[PipelineStep]:
-        return build_pipeline_steps(steps)
+    def build_pipeline_from_steps(self, steps: list[Any]) -> list[Any]:
+        return self._build_pipeline_steps(steps)
 
     def _connect(self, settings: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -670,7 +681,7 @@ class FluidicsControlEngine:
             "sensor_channels": len(state.sensor_channels),
             "polling_active": self.polling_active,
             "recording_active": self.recording_active,
-            "pipeline_state": self.pipeline_state.value,
+            "pipeline_state": self.pipeline_state,
             "queued_snapshots": self.data_queue.qsize(),
             "queued_pipeline_events": self.pipeline_queue.qsize(),
         }
@@ -680,8 +691,21 @@ class FluidicsControlEngine:
         return metadata
 
 
-def create_engine() -> FluidicsControlEngine:
-    return FluidicsControlEngine()
+def create_engine(
+    settings: ParamSchema,
+    *,
+    protocol_builder: ProtocolBuilder,
+    pipeline_step_builder: PipelineStepBuilder,
+    pipeline_engine_factory: PipelineEngineFactory,
+    **kwargs: Any,
+) -> AcquisitionEngine:
+    return AcquisitionEngine(
+        settings,
+        protocol_builder=protocol_builder,
+        pipeline_step_builder=pipeline_step_builder,
+        pipeline_engine_factory=pipeline_engine_factory,
+        **kwargs,
+    )
 
 
 def _pair_channels(state: Any) -> list[tuple[int, int]]:
