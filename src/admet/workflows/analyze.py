@@ -184,7 +184,7 @@ class AnalyzeBatchRunner:
         cache_root: str | Path | None = None,
     ) -> None:
         self.registry = registry
-        self.cache_root = Path(cache_root) if cache_root is not None else Path.home() / ".admet-cache" / "admet2"
+        self.cache_root = Path(cache_root) if cache_root is not None else Path.home() / ".admet-cache"
 
     def run(self, targets: list[AnalyzeTarget] | tuple[AnalyzeTarget, ...]) -> AnalyzeBatchReport:
         grouped: dict[Path, list[AnalyzeTarget]] = {}
@@ -285,8 +285,6 @@ class AnalyzeBatchRunner:
                     if key in set(action.params) - {"video_path", "input_dir"}
                 }
                 cache_dir = self._cache_dir(
-                    project_id=store.session.project_id,
-                    engine_id=engine_id,
                     source_path=target.source_path,
                     settings=action_settings,
                 )
@@ -343,12 +341,11 @@ class AnalyzeBatchRunner:
     def _cache_dir(
         self,
         *,
-        project_id: str,
-        engine_id: str,
         source_path: Path,
         settings: dict[str, Any],
     ) -> Path:
-        return self.cache_root / "analysis" / _safe(project_id) / engine_id / _content_key(source_path, settings)
+        cache_settings = {key: settings[key] for key in _CACHE_KEY_FIELDS if key in settings}
+        return self.cache_root / _content_key(source_path, cache_settings) / "cache"
 
 
 def infer_engine(path: str | Path) -> str:
@@ -402,6 +399,21 @@ def _skipped_matrix_row(
         "status": "skipped",
         "reason": reason,
     }
+
+
+# Cache is keyed by raw file content plus only the settings that change the
+# detected result: the ROI crop and the frame range. Display/derived settings
+# (microns_per_pixel, fps) and all metadata (sample id, project, etc.) are excluded.
+_CACHE_KEY_FIELDS = (
+    "start_frame",
+    "end_frame",
+    "max_frames",
+    "frame_limit",
+    "roi_x",
+    "roi_y",
+    "roi_width",
+    "roi_height",
+)
 
 
 def _content_key(source_path: Path, settings: dict[str, Any]) -> str:
