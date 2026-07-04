@@ -18,9 +18,9 @@ def suggested_project_path(root: Path | None = None) -> Path:
     return session_path(base / f"admet_{time.strftime('%Y%m%d_%H%M%S')}")
 
 
-def create_project(path: str | Path, *, project_type: str = "combined") -> ProjectSelection:
+def create_project(path: str | Path) -> ProjectSelection:
     target = session_path(path)
-    session = new_session(target.stem, project_type)
+    session = new_session(target.stem)
     saved = save_session(target, session)
     return ProjectSelection(saved, session)
 

@@ -491,7 +491,7 @@ class ControlWindow(QMainWindow):
             return
         target = session_path(Path(path))
         project_id = target.stem
-        session = new_session(project_id, "combined")
+        session = new_session(project_id)
         try:
             self.project_path = save_session(target, session)
         except Exception as exc:

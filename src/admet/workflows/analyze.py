@@ -367,7 +367,7 @@ def _open_project(project_path: Path) -> ProjectStore:
     path = session_path(project_path)
     if (path / "manifest.json").is_file():
         return ProjectStore(path)
-    return ProjectStore.create(path, path.stem, "combined")
+    return ProjectStore.create(path, path.stem)
 
 
 def _cache_policy(value: str) -> str:

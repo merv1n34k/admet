@@ -21,7 +21,7 @@ FIELD_SETTING_KEYS = {
 
 def project_ref_label(ref: ProjectRef) -> str:
     return (
-        f"{ref.project_id} · {ref.project_type} · {ref.updated or 'unknown'} · "
+        f"{ref.project_id} · {(ref.updated or 'unknown')[:10]} · "
         f"{ref.recording_count} recordings / {ref.run_count} runs"
     )
 

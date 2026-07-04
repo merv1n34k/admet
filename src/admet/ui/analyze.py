@@ -1366,7 +1366,7 @@ class AnalyzeWorkflowView:
     def _new_project(self) -> None:
         path = self._project_path()
         try:
-            store = ProjectStore.create(path, path.stem, "combined")
+            store = ProjectStore.create(path, path.stem)
         except Exception as exc:
             self._notify(f"project create failed: {exc}", "danger")
             self._refresh()
@@ -1721,7 +1721,7 @@ def _engine_matrix_columns() -> list[dict[str, Any]]:
 
 def _project_ref_label(ref: ProjectRef) -> str:
     return (
-        f"{ref.project_id} · {ref.project_type} · {ref.updated or 'unknown'} · "
+        f"{ref.project_id} · {(ref.updated or 'unknown')[:10]} · "
         f"{ref.recording_count} recordings / {ref.run_count} runs"
     )
 

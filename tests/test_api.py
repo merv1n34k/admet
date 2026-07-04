@@ -22,7 +22,7 @@ class CapturingEngine:
 
 class AdmetAPITests(unittest.TestCase):
     def test_describe_exposes_engine_contract(self):
-        api = AdmetAPI(CapturingEngine(), session=new_session("project-1", "analysis"))
+        api = AdmetAPI(CapturingEngine(), session=new_session("project-1"))
 
         description = api.describe()
 
@@ -33,7 +33,7 @@ class AdmetAPITests(unittest.TestCase):
 
     def test_run_injects_session_and_workdir_metadata(self):
         engine = CapturingEngine()
-        api = AdmetAPI(engine, session=new_session("project-1", "analysis"), workdir="/tmp/work")
+        api = AdmetAPI(engine, session=new_session("project-1"), workdir="/tmp/work")
 
         result = api.run(
             RunJob(

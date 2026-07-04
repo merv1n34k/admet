@@ -269,7 +269,7 @@ class RecordingRunTests(unittest.TestCase):
     def test_recording_artifact_registers_video_csv_and_acquisition_item(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project = Path(tmpdir) / "study.admetp"
-            session = save_session(project, new_session("study", "combined"))
+            session = save_session(project, new_session("study"))
             acq_dir = session / "records"
             video_path = acq_dir / "camera" / "set01_rep02_20260701_120000.avi"
             csv_path = acq_dir / "fluidics" / "set01_rep02_20260701_120000.csv"
@@ -337,7 +337,7 @@ class RecordingRunTests(unittest.TestCase):
     def test_project_open_loads_existing_recording_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project = Path(tmpdir) / "study.admetp"
-            session = save_session(project, new_session("study", "combined"))
+            session = save_session(project, new_session("study"))
             acq_dir = session / "records"
             video_path = acq_dir / "camera" / "set01_rep02_20260701_120000.avi"
             csv_path = acq_dir / "fluidics" / "set01_rep02_20260701_120000.csv"
@@ -399,7 +399,6 @@ class RecordingRunTests(unittest.TestCase):
         window.api = SimpleNamespace(
             session=AdmetSession(
                 project_id="study",
-                project_type="combined",
                 files=(
                     SessionFile(
                         id="video-set01",

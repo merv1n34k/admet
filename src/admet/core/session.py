@@ -33,7 +33,6 @@ class SessionItem:
 @dataclass(frozen=True)
 class AdmetSession:
     project_id: str
-    project_type: str
     files: tuple[SessionFile, ...] = ()
     items: tuple[SessionItem, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -47,7 +46,6 @@ class AdmetSession:
     def from_dict(cls, data: dict[str, Any]) -> AdmetSession:
         session = cls(
             project_id=str(data.get("project_id") or data.get("id") or "project"),
-            project_type=str(data.get("project_type") or "combined"),
             files=tuple(
                 _session_file_from_dict(item, index)
                 for index, item in enumerate(data.get("files", ()), start=1)
@@ -71,14 +69,12 @@ class AdmetSession:
 
 def new_session(
     project_id: str,
-    project_type: str,
     *,
     metadata: dict[str, Any] | None = None,
 ) -> AdmetSession:
     now = _now()
     return AdmetSession(
         project_id=project_id,
-        project_type=project_type,
         metadata=dict(metadata or {}),
         created_at=now,
         updated_at=now,
@@ -151,8 +147,6 @@ def content_cache_key(file_path: str | Path, settings: dict[str, Any] | None = N
 def validate_session(session: AdmetSession) -> None:
     if not session.project_id:
         raise ValueError("project_id is required")
-    if not session.project_type:
-        raise ValueError("project_type is required")
 
     file_ids = _unique_ids("files", (item.id for item in session.files))
     _unique_ids("items", (item.id for item in session.items))

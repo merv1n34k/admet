@@ -29,7 +29,6 @@ class SessionProjectTests(unittest.TestCase):
     def test_save_and_load_session_round_trip(self):
         session = AdmetSession(
             project_id="project-1",
-            project_type="analysis",
             files=(
                 SessionFile(
                     id="video-1",
@@ -66,10 +65,9 @@ class SessionProjectTests(unittest.TestCase):
         self.assertTrue(loaded.updated_at)
 
     def test_session_validates_references(self):
-        session = new_session("project-1", "analysis")
+        session = new_session("project-1")
         broken = AdmetSession(
             project_id=session.project_id,
-            project_type=session.project_type,
             items=(SessionItem("sample-1", "analysis", "opencv", files=("missing",)),),
         )
 
@@ -96,7 +94,6 @@ class SessionProjectTests(unittest.TestCase):
             media_path = project_root / "records" / "video.avi"
             session = AdmetSession(
                 project_id="study",
-                project_type="combined",
                 files=(SessionFile("video-1", str(media_path), "input"),),
             )
 
@@ -108,7 +105,6 @@ class SessionProjectTests(unittest.TestCase):
     def test_absolute_external_path_requires_metadata(self):
         session = AdmetSession(
             project_id="study",
-            project_type="combined",
             files=(SessionFile("video-1", "/nas/video.avi", "input"),),
         )
 
@@ -118,7 +114,6 @@ class SessionProjectTests(unittest.TestCase):
 
             external = AdmetSession(
                 project_id="study",
-                project_type="combined",
                 files=(
                     SessionFile(
                         "video-1",
@@ -136,7 +131,6 @@ class SessionProjectTests(unittest.TestCase):
     def test_missing_files_reports_unavailable_media(self):
         session = AdmetSession(
             project_id="study",
-            project_type="combined",
             files=(
                 SessionFile("present", "media/present.avi", "input"),
                 SessionFile("missing", "media/missing.avi", "input"),
@@ -160,7 +154,6 @@ class SessionProjectTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(loaded.project_type, "combined")
         self.assertEqual(loaded.files[0].id, "file-1")
         self.assertEqual(loaded.files[0].role, "media")
 

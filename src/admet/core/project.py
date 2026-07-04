@@ -46,9 +46,8 @@ class ProjectStore:
         cls,
         project_path: str | Path,
         project_id: str,
-        project_type: str = "combined",
     ) -> ProjectStore:
-        path = save_session(project_path, new_session(project_id, project_type))
+        path = save_session(project_path, new_session(project_id))
         return cls(path)
 
     def save(self) -> None:

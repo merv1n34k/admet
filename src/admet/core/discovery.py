@@ -16,7 +16,6 @@ ENV_ROOT = "ADMET_PROJECTS_ROOT"
 class ProjectRef:
     path: Path
     project_id: str
-    project_type: str
     updated: str
     recording_count: int
     run_count: int
@@ -52,7 +51,6 @@ def _ref_from_manifest(project_path: Path, manifest: Path) -> ProjectRef:
     return ProjectRef(
         path=project_path.resolve(),
         project_id=str(data.get("project_id") or project_path.stem),
-        project_type=str(data.get("project_type") or "combined"),
         updated=str(data.get("updated_at") or ""),
         recording_count=_recording_count(project_path, data),
         run_count=_run_count(project_path, data),

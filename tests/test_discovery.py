@@ -31,7 +31,6 @@ class DiscoveryTests(unittest.TestCase):
             _write_project(
                 root / "old.admetp",
                 project_id="old",
-                project_type="combined",
                 updated="2026-07-01T00:00:00",
                 recording_count=2,
                 run_count=1,
@@ -39,7 +38,6 @@ class DiscoveryTests(unittest.TestCase):
             _write_project(
                 root / "new.admetp",
                 project_id="new",
-                project_type="analysis",
                 updated="2026-07-02T00:00:00",
                 recording_count=0,
                 run_count=3,
@@ -50,7 +48,6 @@ class DiscoveryTests(unittest.TestCase):
             refs = discover_projects(root)
 
         self.assertEqual([ref.project_id for ref in refs], ["new", "old"])
-        self.assertEqual(refs[0].project_type, "analysis")
         self.assertEqual(refs[0].recording_count, 0)
         self.assertEqual(refs[0].run_count, 3)
         self.assertEqual(refs[1].recording_count, 2)
@@ -61,7 +58,6 @@ def _write_project(
     path: Path,
     *,
     project_id: str,
-    project_type: str,
     updated: str,
     recording_count: int,
     run_count: int,
@@ -71,7 +67,6 @@ def _write_project(
         json.dumps(
             {
                 "project_id": project_id,
-                "project_type": project_type,
                 "updated_at": updated,
             }
         ),
