@@ -9,7 +9,7 @@ import mimetypes
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from statistics import mean, pstdev
+from statistics import mean, median, pstdev
 from typing import Any
 
 from admet.core.discovery import ProjectRef, discover_projects, projects_root
@@ -63,8 +63,16 @@ class RawSummary:
     frames: int
     droplets: int
     mean_diameter: float
+    median_diameter: float
+    std_diameter: float
     cv_percent: float
     inclusions: int
+    volume_nl: float
+    true_count: float
+    frequency_hz: float
+    threshold: float
+    diameters: tuple[float, ...] = ()
+    points: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -315,14 +323,7 @@ class AnalyzeWorkflowView:
                 ui.label("Run summary").classes("section-title")
                 rows = self._result_rows()
                 table = ui.table(
-                    columns=[
-                        {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
-                        {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
-                        {"name": "status", "label": "Status", "field": "status", "align": "left"},
-                        {"name": "rows", "label": "Rows", "field": "rows", "align": "right"},
-                        {"name": "frames", "label": "Frames", "field": "frames", "align": "right"},
-                        {"name": "cache", "label": "Cache", "field": "cache", "align": "left"},
-                    ],
+                    columns=_result_columns(),
                     rows=rows,
                 ).classes("w-full").props("dense flat hide-bottom")
                 self._register_table("run_summary", table)
@@ -350,6 +351,7 @@ class AnalyzeWorkflowView:
                 [summary for summary in self._raw_summaries() if summary.engine == "cellpose"]
             ),
             "view_fluidics": lambda: _fluidics_rows(self._fluidics_runs()),
+            "view_summary": lambda: _view_summary_rows(self._raw_summaries()),
             "analysis_runs": self._analysis_run_rows,
             "run_summary": self._result_rows,
         }
@@ -707,13 +709,22 @@ class AnalyzeWorkflowView:
 
         summaries = self._raw_summaries()
         with ui.column().classes("panel w-full gap-2 p-3"):
-            ui.label("1. Analysis files").classes("section-title")
-            self._render_matrix_table(self.matrix)
+            ui.label("1. Analysis summary").classes("section-title")
+            table = ui.table(
+                columns=_view_summary_columns(),
+                rows=_view_summary_rows(summaries),
+            ).classes("w-full").props("dense flat hide-bottom")
+            self._register_table("view_summary", table)
+            if not summaries:
+                ui.label("No stored analysis yet. Run OpenCV or Cellpose first.").classes("muted text-xs")
         with ui.column().classes("panel w-full gap-2 p-3"):
-            ui.label("2. Summary plots").classes("section-title")
+            ui.label("2. Droplet plots").classes("section-title")
             with ui.element("div").classes("comparison-grid w-full"):
+                _plot_card(_diameter_hist_chart(summaries))
                 _plot_card(_diameter_chart(summaries))
                 _plot_card(_cv_chart(summaries))
+                _plot_card(_frequency_chart(summaries))
+            _plot_card(_position_scatter(summaries))
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("3. Fluidics summary").classes("section-title")
             fluidics = self._fluidics_runs()
@@ -1605,14 +1616,22 @@ class AnalyzeWorkflowView:
         rows = []
         for job in self.last_report.jobs:
             metadata = job.metadata
+            true_stats = metadata.get("true_stats") if isinstance(metadata.get("true_stats"), dict) else {}
+            mean_d = _numeric(metadata.get("mean_diameter_um"))
+            std_d = _numeric(metadata.get("std_diameter_um"))
+            cv = (std_d / mean_d * 100.0) if mean_d and std_d else None
             rows.append(
                 {
                     "sample": job.sample_id,
                     "engine": job.engine,
                     "status": job.status,
-                    "rows": metadata.get("row_count", ""),
-                    "frames": metadata.get("frames_processed", ""),
-                    "cache": Path(str(metadata.get("cache_dir") or "")).name,
+                    "droplets": metadata.get("total_droplets", ""),
+                    "mean_um": _fmt(mean_d),
+                    "cv": _fmt(cv),
+                    "speed": _fmt(metadata.get("mean_speed_mm_s")),
+                    "freq": _fmt(metadata.get("frequency_hz")),
+                    "volume_nl": _fmt(true_stats.get("droplet_volume_nl"), 3),
+                    "threshold": metadata.get("threshold", ""),
                 }
             )
         return rows
@@ -1906,33 +1925,76 @@ def read_raw_rows(project_path: Path, raw_path: Path, *, limit: int = 50_000) ->
     return rows
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _job_metadata_by_sample(run: StoredRun) -> dict[tuple[str, str], dict[str, Any]]:
+    result: dict[tuple[str, str], dict[str, Any]] = {}
+    for job in run.jobs:
+        engine = str(job.get("engine") or "")
+        sample_id = str(job.get("sample_id") or "sample")
+        result[(engine, sample_id)] = _as_dict(job.get("metadata"))
+    return result
+
+
 def summarize_raw_rows(run: StoredRun, rows: list[dict[str, Any]]) -> list[RawSummary]:
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    contexts: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
         engine = str(row.get("engine") or "")
         sample_id = str(row.get("item_id") or row.get("sample_id") or row.get("file_id") or "sample")
-        groups.setdefault((engine, sample_id), []).append(row)
+        key = (engine, sample_id)
+        if row.get("kind") == "run_context":
+            contexts[key] = _row_values(row)
+            continue
+        groups.setdefault(key, []).append(row)
 
+    job_meta = _job_metadata_by_sample(run)
     summaries = []
-    for (engine, sample_id), group_rows in sorted(groups.items()):
+    seen: set[tuple[str, str]] = set()
+    for key, group_rows in sorted(groups.items()):
+        engine, sample_id = key
+        seen.add(key)
+        context = contexts.get(key, {})
+        analysis = _as_dict(context.get("analysis"))
+        meta = job_meta.get(key, {})
+        true_stats = _as_dict(meta.get("true_stats")) or _as_dict(context.get("true_stats"))
+        scale = _numeric(analysis.get("microns_per_pixel")) or _numeric(true_stats.get("scale_um_px")) or 1.0
+
         frames = {
             int(float(values.get("frame")))
             for values in (_row_values(row) for row in group_rows)
             if _is_number(values.get("frame"))
         }
-        diameters = [
-            _numeric(values.get("diameter_um") or values.get("diameter"))
-            for values in (_row_values(row) for row in group_rows)
-        ]
-        diameters = [value for value in diameters if value is not None and math.isfinite(value)]
-        droplets = sum(1 for row in group_rows if row.get("kind") in {"detection", "droplet", "track"})
+        diameters: list[float] = []
+        points: list[tuple[float, float]] = []
+        for row in group_rows:
+            if row.get("kind") not in {"detection", "droplet", "track"}:
+                continue
+            values = _row_values(row)
+            diameter = _numeric(values.get("diameter_um"))
+            if diameter is None:
+                pixels = _numeric(values.get("equivalent_diameter") or values.get("diameter"))
+                diameter = pixels * scale if pixels is not None else None
+            if diameter is not None and math.isfinite(diameter) and diameter > 0:
+                diameters.append(diameter)
+            cx = _numeric(values.get("centroid_x"))
+            cy = _numeric(values.get("centroid_y"))
+            if cx is not None and cy is not None and len(points) < 4000:
+                points.append((round(cx, 1), round(cy, 1)))
+
+        tracks = sum(1 for row in group_rows if row.get("kind") == "track")
+        detections = sum(1 for row in group_rows if row.get("kind") in {"detection", "droplet"})
+        droplets = int(_numeric(meta.get("total_droplets")) or 0) or tracks or detections
         inclusions = sum(
             int(_numeric(_row_values(row).get("inclusions")) or 0)
             for row in group_rows
             if row.get("kind") == "droplet"
         )
-        avg = mean(diameters) if diameters else 0.0
-        cv = (pstdev(diameters) / avg * 100.0) if len(diameters) > 1 and avg else 0.0
+        mean_d = float(_numeric(meta.get("mean_diameter_um")) or (mean(diameters) if diameters else 0.0))
+        median_d = median(diameters) if diameters else mean_d
+        std_d = float(_numeric(meta.get("std_diameter_um")) or (pstdev(diameters) if len(diameters) > 1 else 0.0))
         summaries.append(
             RawSummary(
                 project=run.project_path.name,
@@ -1942,27 +2004,45 @@ def summarize_raw_rows(run: StoredRun, rows: list[dict[str, Any]]) -> list[RawSu
                 rows=len(group_rows),
                 frames=len(frames),
                 droplets=droplets,
-                mean_diameter=avg,
-                cv_percent=cv,
+                mean_diameter=mean_d,
+                median_diameter=median_d,
+                std_diameter=std_d,
+                cv_percent=(std_d / mean_d * 100.0) if mean_d else 0.0,
                 inclusions=inclusions,
+                volume_nl=float(_numeric(true_stats.get("droplet_volume_nl")) or 0.0),
+                true_count=float(_numeric(true_stats.get("true_count")) or 0.0),
+                frequency_hz=float(_numeric(meta.get("frequency_hz") or true_stats.get("true_frequency_hz")) or 0.0),
+                threshold=float(_numeric(meta.get("threshold") or context.get("threshold")) or 0.0),
+                diameters=tuple(diameters),
+                points=tuple(points),
             )
         )
-    for job in run.jobs:
-        if any(summary.sample_id == str(job.get("sample_id")) and summary.engine == str(job.get("engine")) for summary in summaries):
+
+    for key, meta in sorted(job_meta.items()):
+        if key in seen:
             continue
-        metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+        engine, sample_id = key
+        true_stats = _as_dict(meta.get("true_stats"))
+        mean_d = float(_numeric(meta.get("mean_diameter_um")) or 0.0)
+        std_d = float(_numeric(meta.get("std_diameter_um")) or 0.0)
         summaries.append(
             RawSummary(
                 project=run.project_path.name,
                 run_id=run.run_id,
-                sample_id=str(job.get("sample_id") or "sample"),
-                engine=str(job.get("engine") or ""),
-                rows=int(_numeric(metadata.get("row_count")) or 0),
-                frames=int(_numeric(metadata.get("frames_processed")) or 0),
-                droplets=int(_numeric(metadata.get("total_droplets") or metadata.get("total_detections")) or 0),
-                mean_diameter=float(_numeric(metadata.get("mean_diameter_um")) or 0.0),
-                cv_percent=0.0,
+                sample_id=sample_id,
+                engine=engine,
+                rows=int(_numeric(meta.get("row_count")) or 0),
+                frames=int(_numeric(meta.get("frames_processed")) or 0),
+                droplets=int(_numeric(meta.get("total_droplets") or meta.get("total_detections")) or 0),
+                mean_diameter=mean_d,
+                median_diameter=mean_d,
+                std_diameter=std_d,
+                cv_percent=(std_d / mean_d * 100.0) if mean_d else 0.0,
                 inclusions=0,
+                volume_nl=float(_numeric(true_stats.get("droplet_volume_nl")) or 0.0),
+                true_count=float(_numeric(true_stats.get("true_count")) or 0.0),
+                frequency_hz=float(_numeric(meta.get("frequency_hz") or true_stats.get("true_frequency_hz")) or 0.0),
+                threshold=float(_numeric(meta.get("threshold")) or 0.0),
             )
         )
     return summaries
@@ -2010,6 +2090,28 @@ def _read_fluidics_csv(csv_path: Path, *, limit: int = 25_000) -> list[dict[str,
                 }
             )
     return rows
+
+
+def _fmt(value: Any, digits: int = 2) -> str:
+    number = _numeric(value)
+    if number is None or not math.isfinite(number) or number == 0:
+        return ""
+    return f"{number:.{digits}f}"
+
+
+def _result_columns() -> list[dict[str, Any]]:
+    return [
+        {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
+        {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
+        {"name": "status", "label": "Status", "field": "status", "align": "left"},
+        {"name": "droplets", "label": "Droplets", "field": "droplets", "align": "right"},
+        {"name": "mean_um", "label": "Mean Ø µm", "field": "mean_um", "align": "right"},
+        {"name": "cv", "label": "CV %", "field": "cv", "align": "right"},
+        {"name": "speed", "label": "Speed mm/s", "field": "speed", "align": "right"},
+        {"name": "freq", "label": "Freq Hz", "field": "freq", "align": "right"},
+        {"name": "volume_nl", "label": "Vol nL", "field": "volume_nl", "align": "right"},
+        {"name": "threshold", "label": "Thr", "field": "threshold", "align": "right"},
+    ]
 
 
 def _summary_table_rows(summaries: list[RawSummary]) -> list[dict[str, Any]]:
@@ -2069,6 +2171,95 @@ def _cv_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         [round(summary.cv_percent, 3) for summary in summaries],
         "#742323",
     )
+
+
+def _frequency_chart(summaries: list[RawSummary]) -> dict[str, Any]:
+    return _bar_chart(
+        "Frequency (Hz)",
+        [summary.sample_id for summary in summaries],
+        [round(summary.frequency_hz, 2) for summary in summaries],
+        "#b7791f",
+    )
+
+
+def _diameter_hist_chart(summaries: list[RawSummary]) -> dict[str, Any]:
+    values = [value for summary in summaries for value in summary.diameters]
+    if not values:
+        return _bar_chart("Diameter distribution (µm)", [], [], "#225d82")
+    low = min(values)
+    high = max(values)
+    if high <= low:
+        high = low + 1.0
+    bins = 24
+    width = (high - low) / bins
+    counts = [0] * bins
+    for value in values:
+        index = min(bins - 1, int((value - low) / width))
+        counts[index] += 1
+    labels = [f"{low + (index + 0.5) * width:.1f}" for index in range(bins)]
+    return {
+        "title": {"text": "Diameter distribution (µm)", "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
+        "tooltip": {"trigger": "axis"},
+        "grid": {"left": 48, "right": 12, "top": 36, "bottom": 46},
+        "xAxis": {"type": "category", "data": labels, "axisLabel": {"rotate": 45, "fontSize": 9}},
+        "yAxis": {"type": "value", "name": "count"},
+        "series": [{"type": "bar", "data": counts, "itemStyle": {"color": "#225d82"}}],
+    }
+
+
+def _position_scatter(summaries: list[RawSummary]) -> dict[str, Any]:
+    series = []
+    for summary in summaries[:6]:
+        if not summary.points:
+            continue
+        series.append(
+            {
+                "name": summary.sample_id,
+                "type": "scatter",
+                "symbolSize": 4,
+                "data": [[x, y] for x, y in summary.points],
+            }
+        )
+    return {
+        "title": {"text": "Droplet positions (px)", "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
+        "tooltip": {},
+        "legend": {"top": 4, "right": 8, "textStyle": {"fontSize": 9}},
+        "grid": {"left": 48, "right": 12, "top": 36, "bottom": 34},
+        "xAxis": {"type": "value", "name": "x"},
+        "yAxis": {"type": "value", "name": "y", "inverse": True},
+        "series": series,
+    }
+
+
+def _view_summary_columns() -> list[dict[str, Any]]:
+    return [
+        {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
+        {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
+        {"name": "droplets", "label": "Droplets", "field": "droplets", "align": "right"},
+        {"name": "mean_um", "label": "Mean Ø µm", "field": "mean_um", "align": "right"},
+        {"name": "median_um", "label": "Median µm", "field": "median_um", "align": "right"},
+        {"name": "std_um", "label": "Std µm", "field": "std_um", "align": "right"},
+        {"name": "cv", "label": "CV %", "field": "cv", "align": "right"},
+        {"name": "freq", "label": "Freq Hz", "field": "freq", "align": "right"},
+        {"name": "volume_nl", "label": "Vol nL", "field": "volume_nl", "align": "right"},
+    ]
+
+
+def _view_summary_rows(summaries: list[RawSummary]) -> list[dict[str, Any]]:
+    return [
+        {
+            "sample": summary.sample_id,
+            "engine": summary.engine,
+            "droplets": summary.droplets,
+            "mean_um": _fmt(summary.mean_diameter),
+            "median_um": _fmt(summary.median_diameter),
+            "std_um": _fmt(summary.std_diameter),
+            "cv": _fmt(summary.cv_percent),
+            "freq": _fmt(summary.frequency_hz),
+            "volume_nl": _fmt(summary.volume_nl, 3),
+        }
+        for summary in summaries
+    ]
 
 
 def _fluidics_chart(runs: list[FluidicsRun], field: str) -> dict[str, Any]:
