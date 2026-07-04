@@ -751,40 +751,42 @@ class AnalyzeWorkflowView:
                 _preview_frame_index(target),
             )
             preview_ok = not bool(preview["error"])
-            ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
-            ui.label(_compact_path(target.source_path)).classes("muted text-xs path-label").props(
-                f'title="{html.escape(target.source_path)}"'
-            )
-            self._refs["opencv_preview"] = ui.html(self._opencv_preview_html(target, preview)).classes(
-                "opencv-preview w-full"
-            )
-            with ui.row().classes("calibration-row w-full gap-2"):
-                self._number_editor(
-                    target,
-                    "microns_per_pixel",
-                    "Microns / px",
-                    float(self.settings["opencv_microns_per_pixel"]),
-                    step=0.01,
-                )
-                self._number_editor(
-                    target,
-                    "fps",
-                    "FPS",
-                    int(self.settings["opencv_fps"]),
-                    step=1,
-                )
-            if not preview_ok:
-                ui.label("Preview unavailable. Relocate the source or use the arm64 analyze environment before editing crop/frame values.").classes(
-                    "editor-note"
-                )
-            with ui.column().classes("editor-sliders w-full gap-3"):
-                self._slider_editor(target, "preview_frame", "Preview frame", 0, frame_max, 1, 0)
-                self._slider_editor(target, "start_frame", "Start frame", 0, frame_max, 1, 0)
-                self._slider_editor(target, "end_frame", "End frame", 0, frame_max + 1, 1, frame_max)
-                self._slider_editor(target, "roi_x", "ROI X", 0, width_max, 1, 0)
-                self._slider_editor(target, "roi_y", "ROI Y", 0, height_max, 1, 0)
-                self._slider_editor(target, "roi_width", "ROI W", 0, width_max, 1, 0)
-                self._slider_editor(target, "roi_height", "ROI H", 0, height_max, 1, 0)
+            with ui.element("div").classes("media-editor-grid w-full"):
+                with ui.column().classes("media-editor-video min-w-0 gap-2"):
+                    ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
+                    ui.label(_compact_path(target.source_path)).classes("muted text-xs path-label").props(
+                        f'title="{html.escape(target.source_path)}"'
+                    )
+                    self._refs["opencv_preview"] = ui.html(self._opencv_preview_html(target, preview)).classes(
+                        "opencv-preview w-full"
+                    )
+                    with ui.row().classes("calibration-row w-full gap-2"):
+                        self._number_editor(
+                            target,
+                            "microns_per_pixel",
+                            "Microns / px",
+                            float(self.settings["opencv_microns_per_pixel"]),
+                            step=0.01,
+                        )
+                        self._number_editor(
+                            target,
+                            "fps",
+                            "FPS",
+                            int(self.settings["opencv_fps"]),
+                            step=1,
+                        )
+                with ui.column().classes("media-editor-controls min-w-0 gap-3"):
+                    if not preview_ok:
+                        ui.label("Preview unavailable. Relocate the source or use the arm64 analyze environment before editing crop/frame values.").classes(
+                            "editor-note"
+                        )
+                    self._slider_editor(target, "preview_frame", "Preview frame", 0, frame_max, 1, 0)
+                    self._slider_editor(target, "start_frame", "Start frame", 0, frame_max, 1, 0)
+                    self._slider_editor(target, "end_frame", "End frame", 0, frame_max + 1, 1, frame_max)
+                    self._slider_editor(target, "roi_x", "ROI X", 0, width_max, 1, 0)
+                    self._slider_editor(target, "roi_y", "ROI Y", 0, height_max, 1, 0)
+                    self._slider_editor(target, "roi_width", "ROI W", 0, width_max, 1, 0)
+                    self._slider_editor(target, "roi_height", "ROI H", 0, height_max, 1, 0)
 
     def _slider_editor(
         self,
@@ -2570,10 +2572,10 @@ def _style() -> str:
     .opencv-preview {
       display: block;
       width: 100%;
-      max-width: 760px;
     }
-    .editor-sliders { width: 100%; }
-    .editor-sliders .slider-field { width: 100%; }
+    .media-editor-controls { min-width: 0; }
+    .media-editor-controls .slider-field { width: 100%; }
+    .media-editor-controls .q-slider { width: 100% !important; }
     .admet-viewer-placeholder {
       background:
         radial-gradient(circle at 18% 34%, rgba(214, 223, 230, 0.78) 0 24px, transparent 25px),
@@ -2634,10 +2636,11 @@ def _style() -> str:
     }
     .media-editor-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.6fr) minmax(360px, 1fr);
-      gap: 10px;
+      grid-template-columns: 3fr 1fr;
+      gap: 12px;
       align-items: start;
     }
+    .media-editor-video { min-width: 0; }
     @media (max-width: 980px) {
       .media-editor-grid { grid-template-columns: 1fr; }
     }
