@@ -617,11 +617,7 @@ class AnalyzeWorkflowView:
             "body-cell-source",
             """
             <q-td :props="props">
-              <div class="source-cell">
-                <div class="source-cell-name">{{ props.row.source }}</div>
-                <q-btn dense flat no-caps label="Browse"
-                  @click.stop="$parent.$emit('browse-source', {uid: props.row.uid})" />
-              </div>
+              <div class="source-cell-name">{{ props.row.source }}</div>
             </q-td>
             """,
         )
@@ -645,7 +641,6 @@ class AnalyzeWorkflowView:
             """,
         )
         table.on("matrix-change", self._handle_matrix_change)
-        table.on("browse-source", self._browse_matrix_source)
 
     def _render_import_inventory(self) -> None:
         from nicegui import ui
@@ -1829,7 +1824,6 @@ _OPENCV_SETTING_FIELDS = {setting for _, setting in _OPENCV_EDIT_FIELDS}
 
 def _opencv_matrix_columns() -> list[dict[str, Any]]:
     return [
-        {"name": "selected", "label": "", "field": "selected", "align": "left"},
         {"name": "sample_id", "label": "Sample", "field": "sample_id", "align": "left"},
         {"name": "source", "label": "Source", "field": "source", "align": "left"},
         {"name": "microns", "label": "µm/px", "field": "microns", "align": "right"},
