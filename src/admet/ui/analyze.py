@@ -281,10 +281,11 @@ class AnalyzeWorkflowView:
             if self._stage_id() == "import":
                 self._render_matrix()
                 return
+            if self._stage_id() == "video":
+                self._render_engine_matrix("opencv")
+                return
             with ui.column().classes("panel w-full gap-2 p-2"):
-                if self._stage_id() == "video":
-                    self._render_opencv_settings()
-                elif self._stage_id() == "imaging":
+                if self._stage_id() == "imaging":
                     self._render_cellpose_settings()
                 elif self._stage_id() == "view":
                     self._render_view_settings()
@@ -340,7 +341,7 @@ class AnalyzeWorkflowView:
             "matrix": lambda: [self._matrix_row(row) for row in self.matrix],
             "project_files": self._project_file_rows,
             "recording_inventory": self._recording_inventory_rows,
-            "opencv_matrix": lambda: [self._engine_matrix_row(row) for row in self._targets("opencv")],
+            "opencv_matrix": lambda: [self._opencv_matrix_row(row) for row in self._targets("opencv")],
             "cellpose_matrix": lambda: [self._engine_matrix_row(row) for row in self._targets("cellpose")],
             "opencv_summary": lambda: _summary_table_rows(
                 [summary for summary in self._raw_summaries() if summary.engine == "opencv"]
@@ -681,11 +682,13 @@ class AnalyzeWorkflowView:
         from nicegui import ui
 
         rows = [row for row in self.matrix if row.active and row.engine == engine]
+        columns = _opencv_matrix_columns() if engine == "opencv" else _engine_matrix_columns()
+        build = self._opencv_matrix_row if engine == "opencv" else self._engine_matrix_row
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label(f"{engine.title()} files").classes("section-title")
             table = ui.table(
-                columns=_engine_matrix_columns(),
-                rows=[self._engine_matrix_row(row) for row in rows],
+                columns=columns,
+                rows=[build(row) for row in rows],
                 row_key="uid",
             ).classes("slim-table matrix-table w-full").props("dense flat hide-bottom")
             self._register_table(f"{engine}_matrix", table)
@@ -694,7 +697,6 @@ class AnalyzeWorkflowView:
                 ui.label(f"No active {engine} files.").classes("muted text-xs")
 
     def _render_video_stage(self) -> None:
-        self._render_engine_matrix("opencv")
         self._render_opencv_editor()
         self._render_engine_plots("opencv")
 
@@ -776,18 +778,18 @@ class AnalyzeWorkflowView:
                             step=1,
                         )
                     with ui.element("div").classes("editor-grid"):
-                        self._number_editor(target, "preview_frame", "Preview frame", 0, step=1, maximum=frame_max)
-                        self._number_editor(target, "start_frame", "Start frame", 0, step=1, maximum=frame_max)
-                        self._number_editor(target, "end_frame", "End frame", frame_max, step=1, maximum=frame_max + 1)
+                        self._slider_editor(target, "preview_frame", "Preview frame", 0, frame_max, 1, 0)
+                        self._slider_editor(target, "start_frame", "Start frame", 0, frame_max, 1, 0)
+                        self._slider_editor(target, "end_frame", "End frame", 0, frame_max + 1, 1, frame_max)
                     with ui.element("div").classes("editor-grid editor-grid-roi"):
                         if not preview_ok:
                             ui.label("Preview unavailable. Relocate the source or use the arm64 analyze environment before editing crop/frame values.").classes(
                                 "editor-note"
                             )
-                        self._number_editor(target, "roi_x", "ROI X", 0, step=1, maximum=width_max, enabled=preview_ok)
-                        self._number_editor(target, "roi_y", "ROI Y", 0, step=1, maximum=height_max, enabled=preview_ok)
-                        self._number_editor(target, "roi_width", "ROI W", 0, step=1, maximum=width_max, enabled=preview_ok)
-                        self._number_editor(target, "roi_height", "ROI H", 0, step=1, maximum=height_max, enabled=preview_ok)
+                        self._slider_editor(target, "roi_x", "ROI X", 0, width_max, 1, 0)
+                        self._slider_editor(target, "roi_y", "ROI Y", 0, height_max, 1, 0)
+                        self._slider_editor(target, "roi_width", "ROI W", 0, width_max, 1, 0)
+                        self._slider_editor(target, "roi_height", "ROI H", 0, height_max, 1, 0)
 
     def _slider_editor(
         self,
@@ -910,7 +912,7 @@ class AnalyzeWorkflowView:
         if roi_width_raw or roi_height_raw:
             roi = f'<div class="admet-roi" style="left:{left}%; top:{top}%; width:{width}%; height:{height}%;"></div>'
         return f"""
-        <div class="admet-viewer" style="aspect-ratio:{width_px} / {height_px};">
+        <div class="admet-viewer">
           <img class="admet-video-frame" src="{frame['src']}" alt="{html.escape(target.sample_id)} frame {frame_index}">
           {roi}
           <div class="admet-playhead">{html.escape(target.sample_id or Path(target.source_path).stem)} - frame {frame_index}</div>
@@ -1640,6 +1642,25 @@ class AnalyzeWorkflowView:
             "sample_id": row.sample_id,
         }
 
+    def _opencv_matrix_row(self, row: MatrixRow) -> dict[str, Any]:
+        microns = _row_float(row, "microns_per_pixel", float(self.settings["opencv_microns_per_pixel"]))
+        fps = _row_float(row, "fps", float(self.settings["opencv_fps"]))
+        roi_w = _row_int(row, "roi_width", 0)
+        roi_h = _row_int(row, "roi_height", 0)
+        roi = f'{_row_int(row, "roi_x", 0)},{_row_int(row, "roi_y", 0)} · {roi_w}×{roi_h}' if (roi_w or roi_h) else "full"
+        end = _row_int(row, "end_frame", 0)
+        return {
+            "uid": row.uid,
+            "selected": "●" if row.uid == self.selected_uid else "",
+            "sample_id": row.sample_id,
+            "source": Path(row.source_path).name or row.source_path,
+            "microns": f"{microns:.2f}",
+            "fps": f"{fps:.0f}" if fps else "auto",
+            "start": _row_int(row, "start_frame", 0),
+            "end": end or "end",
+            "roi": roi,
+        }
+
     def _targets(self, engine: str | None = None) -> list[MatrixRow]:
         return [
             row
@@ -1768,6 +1789,19 @@ def _engine_matrix_columns() -> list[dict[str, Any]]:
         {"name": "project", "label": "Project", "field": "project", "align": "left"},
         {"name": "source", "label": "Source", "field": "source", "align": "left"},
         {"name": "sample_id", "label": "Sample ID", "field": "sample_id", "align": "left"},
+    ]
+
+
+def _opencv_matrix_columns() -> list[dict[str, Any]]:
+    return [
+        {"name": "selected", "label": "", "field": "selected", "align": "left"},
+        {"name": "sample_id", "label": "Sample", "field": "sample_id", "align": "left"},
+        {"name": "source", "label": "Source", "field": "source", "align": "left"},
+        {"name": "microns", "label": "µm/px", "field": "microns", "align": "right"},
+        {"name": "fps", "label": "FPS", "field": "fps", "align": "right"},
+        {"name": "start", "label": "Start", "field": "start", "align": "right"},
+        {"name": "end", "label": "End", "field": "end", "align": "right"},
+        {"name": "roi", "label": "ROI", "field": "roi", "align": "left"},
     ]
 
 
@@ -2481,7 +2515,9 @@ def _style() -> str:
     }
     .admet-viewer {
       position: relative;
-      min-height: clamp(180px, 24vw, 360px);
+      width: 100%;
+      max-width: 100%;
+      height: clamp(220px, 42vh, 460px);
       overflow: hidden;
       border-radius: 8px;
       border: 1px solid #d7e2ea;
@@ -2547,7 +2583,7 @@ def _style() -> str:
     }
     .media-editor-grid {
       display: grid;
-      grid-template-columns: minmax(0, 3fr) minmax(260px, 1fr);
+      grid-template-columns: minmax(0, 1.6fr) minmax(360px, 1fr);
       gap: 10px;
       align-items: start;
     }
@@ -2582,9 +2618,13 @@ def _style() -> str:
     .compact-checkbox .q-checkbox__inner {
       min-height: 30px;
     }
+    .slider-field {
+      width: 100%;
+    }
     .slider-field .q-slider {
       min-height: 24px;
-      padding: 0 2px;
+      width: 100%;
+      padding: 0 6px;
     }
     .slider-label-row {
       align-items: center;
