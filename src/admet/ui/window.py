@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -31,3 +32,10 @@ CONTROL_PANELS = (
 def panel_specs(*, channel_manager: bool = False) -> tuple[PanelSpec, ...]:
     return CONTROL_PANELS if channel_manager else CORE_PANELS
 
+
+def structure_signature(*parts: Any) -> tuple[Any, ...]:
+    return tuple(parts)
+
+
+def structure_changed(current: tuple[Any, ...] | None, next_signature: tuple[Any, ...]) -> bool:
+    return current != next_signature

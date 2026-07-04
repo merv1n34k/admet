@@ -1,23 +1,43 @@
 from __future__ import annotations
 
 import base64
-import csv
 import html
 import json
-import math
 import mimetypes
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
-from statistics import mean, pstdev
 from typing import Any
 
 from admet.core.discovery import ProjectRef, discover_projects, projects_root
 from admet.core.engine import EngineRegistry
 from admet.core.project import ProjectStore
 from admet.core.session import session_path
-from admet.ui.render import structure_signature
-from admet.ui.scaffold import panel_specs
+from admet.ui.render import (
+    FluidicsRun,
+    MatrixRow,
+    RawSummary,
+    StoredRun,
+    count_chart as _count_chart,
+    cv_chart as _cv_chart,
+    diameter_chart as _diameter_chart,
+    fluidics_duration as _fluidics_duration,
+    fluidics_chart as _fluidics_chart,
+    fluidics_rows as _fluidics_rows,
+    format_slider_value as _format_slider_value,
+    load_fluidics_runs as _load_fluidics_runs,
+    load_stored_runs as _load_stored_runs,
+    numeric as _numeric,
+    preview_frame_index as _preview_frame_index,
+    read_raw_rows,
+    row_bool as _row_bool,
+    row_float as _row_float,
+    row_int as _row_int,
+    row_setting as _row_setting,
+    summarize_raw_rows,
+    summary_table_rows as _summary_table_rows,
+)
+from admet.ui.window import panel_specs, structure_signature
 from admet.workflows import StageStatus, Workflow, WorkflowState
 from admet.workflows.analyze import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 
@@ -31,49 +51,6 @@ WORKFLOW_STAGES = (
 )
 VIDEO_SUFFIXES = {".avi", ".mp4", ".mov", ".mkv"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
-
-
-@dataclass
-class MatrixRow:
-    uid: str
-    project_path: str
-    source_path: str
-    engine: str
-    sample_id: str
-    cache_policy: str = "use"
-    active: bool = True
-    settings: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class StoredRun:
-    project_path: Path
-    run_id: str
-    raw_path: Path
-    jobs: tuple[dict[str, Any], ...]
-
-
-@dataclass(frozen=True)
-class RawSummary:
-    project: str
-    run_id: str
-    sample_id: str
-    engine: str
-    rows: int
-    frames: int
-    droplets: int
-    mean_diameter: float
-    cv_percent: float
-    inclusions: int
-
-
-@dataclass(frozen=True)
-class FluidicsRun:
-    project: str
-    recording_id: str
-    rows: tuple[dict[str, float], ...]
-    metadata: dict[str, Any]
-
 
 def render_workflow(
     workflow: Workflow,
@@ -425,46 +402,6 @@ class AnalyzeWorkflowView:
             ui.label("Notification").classes("notification-title")
             ui.label(self.notice).classes("notification-text")
 
-    def _render_action_box(self) -> None:
-        from nicegui import ui
-
-        stage_id = self._stage_id()
-        progress = self.stage_progress.get(stage_id, 0)
-        with ui.column().classes("control-box w-full"):
-            ui.label("Action Box").classes("control-box-title")
-            with ui.column().classes("process-bar w-full gap-0 overflow-hidden"):
-                ui.linear_progress(value=progress / 100.0).classes("w-full")
-                with ui.row().classes("transport-buttons w-full items-center gap-0"):
-                    for index, spec in enumerate(self._action_specs(stage_id)):
-                        if index:
-                            ui.element("span").classes("transport-separator")
-                        button = ui.button(spec["label"], on_click=spec["handler"]).props(
-                            "unelevated dense no-caps"
-                        )
-                        classes = "transport-btn grow"
-                        if spec.get("active"):
-                            classes += " transport-btn-active"
-                        if spec.get("warning"):
-                            classes += " transport-btn-warning"
-                        button.classes(classes)
-
-    def _render_action_panel(self) -> None:
-        from nicegui import ui
-
-        with ui.column().classes("control-box w-full"):
-            ui.label("Action Panel").classes("control-box-title")
-            with ui.column().classes("panel w-full gap-2 p-2"):
-                if self._stage_id() == "import":
-                    self._render_import_controls()
-                elif self._stage_id() == "video":
-                    self._render_opencv_settings()
-                elif self._stage_id() == "imaging":
-                    self._render_cellpose_settings()
-                elif self._stage_id() == "view":
-                    self._render_view_settings()
-                else:
-                    ui.label("Export will use stored raw analysis data.").classes("muted text-xs")
-
     def _render_import_controls(self) -> None:
         from nicegui import ui
 
@@ -577,23 +514,6 @@ class AnalyzeWorkflowView:
                 int(float(event.value or 0)) if use_int else float(event.value or 0),
             ),
         ).classes("flat-number grow")
-
-    def _render_main_window(self) -> None:
-        from nicegui import ui
-
-        with ui.column().classes("control-box w-full"):
-            ui.label("Main Window").classes("control-box-title")
-            if self._stage_id() == "import":
-                self._render_matrix()
-                self._render_import_inventory()
-            elif self._stage_id() == "video":
-                self._render_video_stage()
-            elif self._stage_id() == "imaging":
-                self._render_imaging_stage()
-            elif self._stage_id() == "view":
-                self._render_view_results()
-            else:
-                self._render_analysis_runs()
 
     def _render_matrix(self) -> None:
         from nicegui import ui
@@ -1068,36 +988,6 @@ class AnalyzeWorkflowView:
             self._register_table("analysis_runs", table)
             if not rows:
                 ui.label("No stored analysis runs found for the matrix projects.").classes("muted text-xs")
-
-    def _render_results(self) -> None:
-        from nicegui import ui
-
-        with ui.column().classes("control-box w-full"):
-            ui.label("Results").classes("control-box-title")
-            with ui.column().classes("panel w-full gap-2 p-3"):
-                ui.label("Run summary").classes("section-title")
-                rows = self._result_rows()
-                table = ui.table(
-                    columns=[
-                        {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
-                        {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
-                        {"name": "status", "label": "Status", "field": "status", "align": "left"},
-                        {"name": "rows", "label": "Rows", "field": "rows", "align": "right"},
-                        {"name": "frames", "label": "Frames", "field": "frames", "align": "right"},
-                        {"name": "cache", "label": "Cache", "field": "cache", "align": "left"},
-                    ],
-                    rows=rows,
-                ).classes("w-full").props("dense flat hide-bottom")
-                self._register_table("run_summary", table)
-                if not rows:
-                    ui.label("No results yet. Run OpenCV, Cellpose, or Run All.").classes("muted text-xs")
-
-    def _render_log(self) -> None:
-        from nicegui import ui
-
-        with ui.column().classes("control-box w-full"):
-            ui.label("Action Log").classes("control-box-title")
-            ui.html("<br>".join(self.action_log[-80:])).classes("log-text w-full")
 
     def _project_file_rows(self) -> list[dict[str, str]]:
         rows = []
@@ -1726,252 +1616,6 @@ def _project_ref_label(ref: ProjectRef) -> str:
     )
 
 
-def _load_stored_runs(project_paths: list[Path]) -> list[StoredRun]:
-    runs = []
-    for project_path in project_paths:
-        metadata_path = project_path / "analysis" / "metadata.json"
-        if not metadata_path.is_file():
-            continue
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        for run in metadata.get("runs", []):
-            if not isinstance(run, dict):
-                continue
-            raw_path = _resolve_project_path(project_path, str(run.get("raw_path") or ""))
-            run_metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
-            jobs = tuple(job for job in run_metadata.get("jobs", ()) if isinstance(job, dict))
-            runs.append(
-                StoredRun(
-                    project_path=project_path,
-                    run_id=str(run.get("run_id") or raw_path.parent.name),
-                    raw_path=raw_path,
-                    jobs=jobs,
-                )
-            )
-    return runs
-
-
-def read_raw_rows(project_path: Path, raw_path: Path, *, limit: int = 50_000) -> list[dict[str, Any]]:
-    path = raw_path if raw_path.is_absolute() else project_path / raw_path
-    if not path.is_file():
-        return []
-    rows = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if len(rows) >= limit:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(value, dict):
-                rows.append(value)
-    return rows
-
-
-def summarize_raw_rows(run: StoredRun, rows: list[dict[str, Any]]) -> list[RawSummary]:
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for row in rows:
-        engine = str(row.get("engine") or "")
-        sample_id = str(row.get("item_id") or row.get("sample_id") or row.get("file_id") or "sample")
-        groups.setdefault((engine, sample_id), []).append(row)
-
-    summaries = []
-    for (engine, sample_id), group_rows in sorted(groups.items()):
-        frames = {
-            int(float(values.get("frame")))
-            for values in (_row_values(row) for row in group_rows)
-            if _is_number(values.get("frame"))
-        }
-        diameters = [
-            _numeric(values.get("diameter_um") or values.get("diameter"))
-            for values in (_row_values(row) for row in group_rows)
-        ]
-        diameters = [value for value in diameters if value is not None and math.isfinite(value)]
-        droplets = sum(1 for row in group_rows if row.get("kind") in {"detection", "droplet", "track"})
-        inclusions = sum(
-            int(_numeric(_row_values(row).get("inclusions")) or 0)
-            for row in group_rows
-            if row.get("kind") == "droplet"
-        )
-        avg = mean(diameters) if diameters else 0.0
-        cv = (pstdev(diameters) / avg * 100.0) if len(diameters) > 1 and avg else 0.0
-        summaries.append(
-            RawSummary(
-                project=run.project_path.name,
-                run_id=run.run_id,
-                sample_id=sample_id,
-                engine=engine,
-                rows=len(group_rows),
-                frames=len(frames),
-                droplets=droplets,
-                mean_diameter=avg,
-                cv_percent=cv,
-                inclusions=inclusions,
-            )
-        )
-    for job in run.jobs:
-        if any(summary.sample_id == str(job.get("sample_id")) and summary.engine == str(job.get("engine")) for summary in summaries):
-            continue
-        metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
-        summaries.append(
-            RawSummary(
-                project=run.project_path.name,
-                run_id=run.run_id,
-                sample_id=str(job.get("sample_id") or "sample"),
-                engine=str(job.get("engine") or ""),
-                rows=int(_numeric(metadata.get("row_count")) or 0),
-                frames=int(_numeric(metadata.get("frames_processed")) or 0),
-                droplets=int(_numeric(metadata.get("total_droplets") or metadata.get("total_detections")) or 0),
-                mean_diameter=float(_numeric(metadata.get("mean_diameter_um")) or 0.0),
-                cv_percent=0.0,
-                inclusions=0,
-            )
-        )
-    return summaries
-
-
-def _load_fluidics_runs(project_paths: list[Path]) -> list[FluidicsRun]:
-    runs = []
-    for project_path in project_paths:
-        metadata_path = project_path / "records" / "metadata.json"
-        if not metadata_path.is_file():
-            continue
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        for recording in metadata.get("recordings", []):
-            if not isinstance(recording, dict):
-                continue
-            csv_path = _resolve_project_path(project_path, str(recording.get("fluidics_csv") or ""))
-            rows = tuple(_read_fluidics_csv(csv_path))
-            runs.append(
-                FluidicsRun(
-                    project=project_path.name,
-                    recording_id=str(recording.get("recording_id") or recording.get("video_prefix") or csv_path.stem),
-                    rows=rows,
-                    metadata=recording,
-                )
-            )
-    return runs
-
-
-def _read_fluidics_csv(csv_path: Path, *, limit: int = 25_000) -> list[dict[str, float]]:
-    if not csv_path.is_file():
-        return []
-    rows = []
-    with csv_path.open("r", encoding="utf-8", newline="") as handle:
-        for row in csv.DictReader(handle):
-            if len(rows) >= limit:
-                break
-            rows.append(
-                {
-                    "elapsed_s": float_or_zero(row.get("elapsed_s")),
-                    "pressure": _mean_columns(row, "pressure_"),
-                    "flow": _mean_columns(row, "flow_"),
-                }
-            )
-    return rows
-
-
-def _summary_table_rows(summaries: list[RawSummary]) -> list[dict[str, Any]]:
-    return [
-        {
-            "sample": summary.sample_id,
-            "rows": summary.rows,
-            "frames": summary.frames,
-            "droplets": summary.droplets,
-            "mean_diameter": f"{summary.mean_diameter:.2f}" if summary.mean_diameter else "",
-            "cv_percent": f"{summary.cv_percent:.2f}" if summary.cv_percent else "",
-        }
-        for summary in summaries
-    ]
-
-
-def _fluidics_rows(runs: list[FluidicsRun]) -> list[dict[str, Any]]:
-    rows = []
-    for run in runs:
-        pressures = [row["pressure"] for row in run.rows if math.isfinite(row["pressure"])]
-        flows = [row["flow"] for row in run.rows if math.isfinite(row["flow"])]
-        rows.append(
-            {
-                "project": run.project,
-                "recording": run.recording_id,
-                "rows": len(run.rows),
-                "duration_s": f"{_fluidics_duration(run):.1f}",
-                "mean_pressure": f"{mean(pressures):.2f}" if pressures else "",
-                "mean_flow": f"{mean(flows):.2f}" if flows else "",
-            }
-        )
-    return rows
-
-
-def _diameter_chart(summaries: list[RawSummary]) -> dict[str, Any]:
-    return _bar_chart(
-        "Mean diameter",
-        [summary.sample_id for summary in summaries],
-        [round(summary.mean_diameter, 3) for summary in summaries],
-        "#225d82",
-    )
-
-
-def _count_chart(summaries: list[RawSummary]) -> dict[str, Any]:
-    return _bar_chart(
-        "Droplet rows",
-        [summary.sample_id for summary in summaries],
-        [summary.droplets for summary in summaries],
-        "#185e49",
-    )
-
-
-def _cv_chart(summaries: list[RawSummary]) -> dict[str, Any]:
-    return _bar_chart(
-        "CV %",
-        [summary.sample_id for summary in summaries],
-        [round(summary.cv_percent, 3) for summary in summaries],
-        "#742323",
-    )
-
-
-def _fluidics_chart(runs: list[FluidicsRun], field: str) -> dict[str, Any]:
-    series = []
-    for run in runs[:8]:
-        points = [
-            [round(row["elapsed_s"], 3), round(row[field], 3)]
-            for row in run.rows
-            if math.isfinite(row["elapsed_s"]) and math.isfinite(row[field])
-        ]
-        if len(points) > 600:
-            step = max(1, len(points) // 600)
-            points = points[::step]
-        series.append({"name": run.recording_id, "type": "line", "showSymbol": False, "data": points})
-    return {
-        "title": {"text": field.title(), "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
-        "tooltip": {"trigger": "axis"},
-        "grid": {"left": 44, "right": 12, "top": 36, "bottom": 34},
-        "xAxis": {"type": "value", "name": "s"},
-        "yAxis": {"type": "value"},
-        "series": series,
-    }
-
-
-def _bar_chart(title: str, labels: list[str], values: list[float | int], color: str) -> dict[str, Any]:
-    return {
-        "title": {"text": title, "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
-        "tooltip": {},
-        "grid": {"left": 48, "right": 12, "top": 36, "bottom": 54},
-        "xAxis": {"type": "category", "data": labels, "axisLabel": {"rotate": 25}},
-        "yAxis": {"type": "value"},
-        "series": [{"type": "bar", "data": values, "itemStyle": {"color": color}}],
-    }
-
-
 def _plot_card(options: dict[str, Any]) -> None:
     from nicegui import ui
 
@@ -2066,10 +1710,6 @@ def _viewer_error_html(target: MatrixRow, source: Path, message: str) -> str:
     """
 
 
-def _preview_frame_index(row: MatrixRow) -> int:
-    return max(0, _row_int(row, "start_frame", 0) + _row_int(row, "preview_frame", 0))
-
-
 def _compact_path(value: str, *, max_parts: int = 4) -> str:
     path = Path(value)
     parts = path.parts
@@ -2089,75 +1729,6 @@ def _friendly_video_error(message: str) -> str:
 def _percent(value: Any, denominator: int) -> float:
     number = _numeric(value) or 0.0
     return round(max(0.0, min(100.0, number / max(denominator, 1) * 100.0)), 2)
-
-
-def _resolve_project_path(project_path: Path, stored_path: str) -> Path:
-    path = Path(stored_path)
-    return path if path.is_absolute() else project_path / path
-
-
-def _row_values(row: dict[str, Any]) -> dict[str, Any]:
-    values = row.get("values")
-    return values if isinstance(values, dict) else {}
-
-
-def _row_setting(row: MatrixRow, key: str, default: Any) -> Any:
-    value = row.settings.get(key, default)
-    return default if value in {None, ""} else value
-
-
-def _row_int(row: MatrixRow, key: str, default: Any) -> int:
-    return int(_numeric(_row_setting(row, key, default)) or 0)
-
-
-def _row_float(row: MatrixRow, key: str, default: Any) -> float:
-    return float(_numeric(_row_setting(row, key, default)) or 0.0)
-
-
-def _row_bool(row: MatrixRow, key: str, default: Any) -> bool:
-    value = _row_setting(row, key, default)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
-
-
-def _numeric(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _format_slider_value(value: Any, step: float) -> str:
-    number = _numeric(value) or 0.0
-    if step >= 1:
-        return str(int(number))
-    return f"{number:.2f}".rstrip("0").rstrip(".")
-
-
-def _is_number(value: Any) -> bool:
-    number = _numeric(value)
-    return number is not None and math.isfinite(number)
-
-
-def float_or_zero(value: Any) -> float:
-    number = _numeric(value)
-    return number if number is not None and math.isfinite(number) else 0.0
-
-
-def _mean_columns(row: dict[str, Any], prefix: str) -> float:
-    values = [
-        float_or_zero(value)
-        for key, value in row.items()
-        if key.startswith(prefix) and value not in {None, ""}
-    ]
-    return mean(values) if values else 0.0
-
-
-def _fluidics_duration(run: FluidicsRun) -> float:
-    if run.rows:
-        return max(row["elapsed_s"] for row in run.rows)
-    return float_or_zero(run.metadata.get("duration_s"))
 
 
 def _escape(value: str) -> str:
