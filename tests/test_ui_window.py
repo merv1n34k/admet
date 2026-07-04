@@ -35,37 +35,44 @@ class WindowWiringTests(unittest.TestCase):
 
 
 class WindowControllerTests(unittest.TestCase):
-    def test_controller_uses_adapter_hooks(self):
-        adapter = FakeAdapter()
-        controller = WindowController(adapter)
+    def test_controller_uses_context_hooks(self):
+        hooks = FakeHooks()
+        controller = WindowController()
 
-        decision = controller.render_current_stage()
+        decision = controller.render_current_stage(hooks.prepare)
 
         self.assertIsNotNone(decision)
-        self.assertEqual(adapter.calls, ["prepare", "mount", "sync", "finish"])
-        self.assertEqual(adapter.finished, decision)
+        self.assertEqual(hooks.calls, ["prepare", "mount", "sync", "finish"])
+        self.assertEqual(hooks.finished, decision)
 
 
-class FakeAdapter:
+class FakeHooks:
     def __init__(self):
         self.calls = []
         self.finished: RenderDecision | None = None
 
-    def prepare_window_stage(self) -> WindowStageContext:
+    def prepare(self) -> WindowStageContext:
         self.calls.append("prepare")
-        return WindowStageContext("stage", ("signature",))
+        return WindowStageContext(
+            "stage",
+            ("signature",),
+            mount=self.mount,
+            sync=self.sync,
+            finish=self.finish,
+            remount_shared=self.remount_shared,
+        )
 
-    def mount_window_stage(self) -> None:
+    def mount(self) -> None:
         self.calls.append("mount")
 
-    def sync_window_stage(self) -> None:
+    def sync(self) -> None:
         self.calls.append("sync")
 
-    def finish_window_stage(self, decision: RenderDecision) -> None:
+    def finish(self, decision: RenderDecision) -> None:
         self.calls.append("finish")
         self.finished = decision
 
-    def remount_shared_window_stage(self) -> None:
+    def remount_shared(self) -> None:
         self.calls.append("shared")
 
 

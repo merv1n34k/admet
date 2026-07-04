@@ -13,6 +13,7 @@ from admet.core.discovery import ProjectRef, discover_projects, projects_root
 from admet.core.engine import EngineRegistry
 from admet.core.project import ProjectStore
 from admet.core.session import session_path
+from admet.ui.project import create_project, load_project
 from admet.ui.render import (
     FluidicsRun,
     MatrixRow,
@@ -110,7 +111,7 @@ class AnalyzeWorkflowView:
         self.notice = "Create or select a project, then add files to the batch matrix."
         self.notice_kind = "primary"
         self.action_log: list[str] = ["Analyze UI ready."]
-        self._window_controller = WindowController(self)
+        self._window_controller = WindowController()
         self._mounted_signature: tuple[Any, ...] | None = None
         self._refs: dict[str, Any] = {}
         self._table_refs: dict[str, list[Any]] = {}
@@ -181,27 +182,21 @@ class AnalyzeWorkflowView:
                 self._refs[f"{spec.key}_body"] = body
 
     def _render_current_stage(self, *, force_mount: bool = False) -> None:
-        self._window_controller.render_current_stage(force_mount=force_mount)
+        self._window_controller.render_current_stage(self._prepare_window_stage, force_mount=force_mount)
 
-    def prepare_window_stage(self) -> WindowStageContext | None:
+    def _prepare_window_stage(self) -> WindowStageContext | None:
         if "main_body" not in self._refs:
             return None
         return WindowStageContext(
             "analyze",
             self._structure_signature(),
+            mount=self._mount_stage,
+            sync=self._sync_stage,
+            finish=self._finish_window_stage,
         )
 
-    def mount_window_stage(self) -> None:
-        self._mount_stage()
-
-    def sync_window_stage(self) -> None:
-        self._sync_stage()
-
-    def finish_window_stage(self, decision: RenderDecision) -> None:
+    def _finish_window_stage(self, decision: RenderDecision) -> None:
         self._mounted_signature = decision.signature
-
-    def remount_shared_window_stage(self) -> None:
-        return
 
     def _structure_signature(self) -> tuple[Any, ...]:
         return structure_signature(
@@ -1271,11 +1266,12 @@ class AnalyzeWorkflowView:
     def _new_project(self) -> None:
         path = self._project_path()
         try:
-            store = ProjectStore.create(path, path.stem, "combined")
+            project = create_project(path)
         except Exception as exc:
             self._notify(f"project create failed: {exc}", "danger")
             self._refresh()
             return
+        store = ProjectStore(project.path, project.session)
         self.project_path = str(store.path)
         self.stage_progress["import"] = max(self.stage_progress["import"], 30)
         self._mark_stage("import", StageStatus.ACTIVE)
@@ -1293,11 +1289,12 @@ class AnalyzeWorkflowView:
             self._refresh()
             return
         try:
-            store = ProjectStore(path)
+            project = load_project(path)
         except Exception as exc:
             self._notify(f"project load failed: {exc}", "danger")
             self._refresh()
             return
+        store = ProjectStore(project.path, project.session)
         self.project_path = str(store.path)
         self._load_project_files(store)
         self.stage_progress["import"] = 100 if self.matrix else 45

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -22,24 +22,11 @@ class RenderDecision:
 class WindowStageContext:
     key: str
     signature: tuple[Any, ...]
+    mount: Callable[[], None]
+    sync: Callable[[], None]
     stage_changed: bool = False
-
-
-class WindowAdapter(Protocol):
-    def prepare_window_stage(self) -> WindowStageContext | None:
-        ...
-
-    def mount_window_stage(self) -> None:
-        ...
-
-    def sync_window_stage(self) -> None:
-        ...
-
-    def finish_window_stage(self, decision: RenderDecision) -> None:
-        ...
-
-    def remount_shared_window_stage(self) -> None:
-        ...
+    finish: Callable[[RenderDecision], None] | None = None
+    remount_shared: Callable[[], None] | None = None
 
 
 CORE_PANELS = (
@@ -111,24 +98,29 @@ class WindowWiring:
 
 
 class WindowController:
-    def __init__(self, adapter: WindowAdapter) -> None:
-        self.adapter = adapter
+    def __init__(self) -> None:
         self.wiring = WindowWiring()
 
-    def render_current_stage(self, *, force_mount: bool = False) -> RenderDecision | None:
-        context = self.adapter.prepare_window_stage()
+    def render_current_stage(
+        self,
+        prepare: Callable[[], WindowStageContext | None],
+        *,
+        force_mount: bool = False,
+    ) -> RenderDecision | None:
+        context = prepare()
         if context is None:
             return None
         decision = self.wiring.render(
             context.key,
             context.signature,
-            mount=self.adapter.mount_window_stage,
-            sync=self.adapter.sync_window_stage,
+            mount=context.mount,
+            sync=context.sync,
             force_mount=force_mount,
             stage_changed=context.stage_changed,
-            remount_shared=self.adapter.remount_shared_window_stage,
+            remount_shared=context.remount_shared,
         )
-        self.adapter.finish_window_stage(decision)
+        if context.finish is not None:
+            context.finish(decision)
         return decision
 
     def needs_mount(self, key: str, signature: tuple[Any, ...]) -> bool:

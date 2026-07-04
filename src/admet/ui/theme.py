@@ -55,6 +55,15 @@ class Theme:
     WINDOW_PADDING = SPACE_4
     RADIUS = 8
     SPLITTER_HANDLE_WIDTH = 8
+    LEFT_RAIL_WIDTH = 246
+
+
+STATUS_COLORS = {
+    "done": Theme.SUCCESS,
+    "processing": Theme.WARNING,
+    "error": Theme.DANGER,
+    "inactive": Theme.TEXT_SUBTLE,
+}
 
 
 _SIZES = {
@@ -95,6 +104,10 @@ _BUTTON_COLORS = {
 
 def control_size(size: ControlSize = "default") -> _ControlSize:
     return _SIZES.get(size, _SIZES["default"])
+
+
+def status_color(status: str) -> str:
+    return STATUS_COLORS[status]
 
 
 def spacing(value: str | int | None = "default") -> int:

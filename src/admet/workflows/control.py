@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import re
+
 from admet.workflows.control_settings import (
     CAMERA_SETTINGS,
     CORRECTION_SETTINGS,
@@ -8,6 +13,98 @@ from admet.workflows.control_settings import (
 )
 
 from .model import Stage, StageControl, StageSurface, Workflow
+
+
+PIPELINE_STAGE_IDS = frozenset({"priming", "runs", "wash"})
+
+CAMERA_AUTO_APPLY_PARAMS = frozenset(
+    {
+        "camera_width",
+        "camera_height",
+        "camera_offset_x",
+        "camera_offset_y",
+        "camera_binning_h",
+        "camera_binning_v",
+        "camera_exposure_us",
+        "camera_gain",
+        "camera_pixel_format",
+        "camera_readout",
+        "camera_framerate_enabled",
+        "camera_framerate_hz",
+        "camera_throughput_enabled",
+        "camera_throughput_mbps",
+        "camera_waterfall",
+    }
+)
+
+CAMERA_MAIN_SETTINGS = (
+    "camera_width",
+    "camera_height",
+    "camera_exposure_us",
+    "camera_gain",
+    "camera_pixel_format",
+    "camera_readout",
+)
+
+FLUIDICS_MAIN_SETTINGS = (
+    "simulated",
+)
+
+PROJECT_REQUIRED_ACTIONS = frozenset(
+    {
+        "refresh_cameras",
+        "connect_camera",
+        "disconnect_camera",
+        "start_camera_live",
+        "stop_camera_live",
+        "apply_camera_settings",
+        "start_recording",
+    }
+)
+
+FLUIGENT_REQUIRED_ACTIONS = frozenset(
+    {
+        "apply_corrections",
+        "set_channel_flow",
+        "set_channel_pressure",
+        "stop_channel",
+        "set_channel_response",
+        "start_recording",
+        "run_protocol",
+        "pause_protocol",
+        "resume_protocol",
+        "confirm_protocol",
+        "skip_protocol",
+        "wash",
+    }
+)
+
+CAMERA_LIVE_REQUIRED_ACTIONS = frozenset()
+
+
+@dataclass(frozen=True)
+class ControlRuntime:
+    project_ready: bool = False
+    camera_connected: bool = False
+    camera_live: bool = False
+    fluidics_connected: bool = False
+    simulated: bool = False
+    fluigent_instrument_count: int = 0
+    pipeline_state: str = "idle"
+    pending_confirmation: str = ""
+
+
+@dataclass(frozen=True)
+class ControlCommandSpec:
+    label: str
+    command: str
+    action: str | None = None
+    off_action: str | None = None
+    state_key: str = ""
+    enabled: bool = True
+    checked: bool = False
+    toggle: bool = False
+    control: StageControl | None = None
 
 
 CAMERA_SURFACE_OPTIONS = {
@@ -145,3 +242,203 @@ def create_control_workflow() -> Workflow:
             ),
         ),
     )
+
+
+def stage_uses_camera(stage: Stage) -> bool:
+    return any(surface.kind == "camera" for surface in stage.surfaces)
+
+
+def stage_uses_fluidics(stage: Stage) -> bool:
+    return stage.id != "scene"
+
+
+def action_requires_camera_live(action: str) -> bool:
+    return action in CAMERA_LIVE_REQUIRED_ACTIONS
+
+
+def action_requires_project(action: str) -> bool:
+    return action in PROJECT_REQUIRED_ACTIONS
+
+
+def action_requires_fluigent(action: str) -> bool:
+    return action in FLUIGENT_REQUIRED_ACTIONS
+
+
+def action_enabled(action: str | None, runtime: ControlRuntime) -> bool:
+    if action is None:
+        return True
+    if action_requires_camera_live(action) and not runtime.camera_live:
+        return False
+    if action == "connect_fluidics":
+        if runtime.fluidics_connected:
+            return False
+        if runtime.simulated:
+            return True
+        return runtime.fluigent_instrument_count > 0
+    if action == "disconnect_fluidics":
+        return runtime.fluidics_connected
+    if action_requires_fluigent(action) and not runtime.fluidics_connected:
+        return False
+    return True
+
+
+def control_button_specs(stage: Stage, runtime: ControlRuntime) -> tuple[ControlCommandSpec, ...]:
+    controls: list[ControlCommandSpec] = []
+    if stage_uses_camera(stage):
+        controls.extend(
+            (
+                ControlCommandSpec(
+                    "Refresh",
+                    "run_action",
+                    action="refresh_cameras",
+                    enabled=runtime.project_ready,
+                ),
+                ControlCommandSpec(
+                    "Connect",
+                    "run_action",
+                    action="connect_camera",
+                    enabled=runtime.project_ready and not runtime.camera_connected,
+                ),
+                ControlCommandSpec(
+                    "Disconnect",
+                    "run_action",
+                    action="disconnect_camera",
+                    enabled=runtime.project_ready and runtime.camera_connected,
+                ),
+                ControlCommandSpec(
+                    "Live",
+                    "toggle_action",
+                    action="start_camera_live",
+                    off_action="stop_camera_live",
+                    state_key="camera_live",
+                    enabled=runtime.project_ready and runtime.camera_connected,
+                    checked=runtime.camera_live,
+                    toggle=True,
+                ),
+            )
+        )
+    if stage.id in PIPELINE_STAGE_IDS:
+        controls.extend(pipeline_button_specs(stage, runtime))
+    for control in stage.controls or default_controls(stage):
+        spec = stage_control_button_spec(stage, control, runtime)
+        if spec is not None:
+            controls.append(spec)
+    controls.append(ControlCommandSpec("E-STOP", "emergency_stop"))
+    return tuple(controls)
+
+
+def pipeline_button_specs(stage: Stage, runtime: ControlRuntime) -> tuple[ControlCommandSpec, ...]:
+    state = runtime.pipeline_state
+    active = pipeline_active(runtime)
+    can_start = runtime.fluidics_connected and not active
+    confirmation = runtime.pending_confirmation
+    return (
+        ControlCommandSpec(pipeline_start_label(stage), "pipeline_start", enabled=can_start),
+        ControlCommandSpec(
+            "Pause" if state != "paused" else "Resume",
+            "pipeline_pause_toggle",
+            enabled=state in {"running", "paused"},
+            checked=state == "paused",
+            toggle=True,
+        ),
+        ControlCommandSpec("Stop", "pipeline_stop", enabled=active),
+        ControlCommandSpec("Skip", "pipeline_skip", enabled=state == "running"),
+        ControlCommandSpec(
+            "Proceed",
+            "pipeline_confirm",
+            enabled=bool(confirmation) and state == "running",
+        ),
+    )
+
+
+def stage_control_button_spec(
+    stage: Stage,
+    control: StageControl,
+    runtime: ControlRuntime,
+) -> ControlCommandSpec | None:
+    action = control.action
+    if action in {"stop_camera_live", "stop_recording", "stop_protocol", "resume_protocol"}:
+        return None
+    if control.completes and action is None:
+        return None
+    if action == "run_protocol":
+        return ControlCommandSpec(
+            short_control_label(control.label),
+            "pipeline_toggle",
+            action="run_protocol",
+            enabled=action_enabled("run_protocol", runtime),
+            checked=pipeline_active(runtime),
+            toggle=True,
+            control=control,
+        )
+    if action == "pause_protocol":
+        return ControlCommandSpec(
+            "Pause",
+            "pipeline_pause_toggle",
+            action="pause_protocol",
+            enabled=action_enabled("pause_protocol", runtime),
+            checked=runtime.pipeline_state == "paused",
+            toggle=True,
+            control=control,
+        )
+    return ControlCommandSpec(
+        short_control_label(control.label),
+        "stage_control",
+        action=action,
+        enabled=action_enabled(action, runtime),
+        control=control,
+    )
+
+
+def default_controls(stage: Stage) -> tuple[StageControl, ...]:
+    if stage.id == "corrections" or stage.id in PIPELINE_STAGE_IDS:
+        return ()
+    controls: list[StageControl] = []
+    if stage.action:
+        controls.append(StageControl("Run Stage", stage.action, completes=True))
+    if stage.skippable:
+        controls.append(StageControl("Skip", skippable=True, variant="secondary"))
+    if not controls:
+        controls.append(StageControl("Complete", completes=True, variant="success"))
+    return tuple(controls)
+
+
+def pipeline_active(runtime: ControlRuntime) -> bool:
+    return runtime.pipeline_state in {"running", "paused", "stopping"}
+
+
+def short_control_label(label: str) -> str:
+    replacements = {
+        "Disconnect": "Disconnect",
+        "Continue": "Next",
+        "Run Priming": "Prime",
+        "Confirm Step": "Confirm",
+        "Priming Done": "Done",
+        "Run Protocol": "Run",
+        "Stop Protocol": "Stop",
+        "Runs Done": "Done",
+        "Run Wash": "Wash",
+        "Skip Wash": "Skip",
+        "Workflow Done": "Done",
+    }
+    return replacements.get(label, label)
+
+
+def pipeline_start_label(stage: Stage) -> str:
+    if stage.id == "priming":
+        return "Run Priming"
+    if stage.id == "runs":
+        return "Start Runs"
+    if stage.id == "wash":
+        return "Run Wash"
+    return "Start"
+
+
+def run_start_label(message: str) -> str:
+    match = re.search(r"\bStart\s+(set\d{2}_rep\d{2})\b", message)
+    return match.group(1) if match else ""
+
+
+def run_complete_label(message: str) -> str:
+    match = re.search(r"\b(set\d{2}_rep\d{2})\s+complete\b", message)
+    return match.group(1) if match else ""

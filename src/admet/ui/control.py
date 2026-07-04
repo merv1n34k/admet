@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import signal
 import sys
 import time
@@ -40,11 +39,29 @@ from admet.core.api import AdmetAPI
 from admet.core.run import RunJob, RunResult
 from admet.core.project import ProjectStore
 from admet.core.engine import Param, ParamKind
-from admet.core.session import SessionFile, SessionItem, load_session, new_session, save_session, session_path
-from admet.workflows import Stage, StageControl, StageStatus
+from admet.core.session import SessionFile, SessionItem, session_path
+from admet.workflows import Stage, StageStatus
 from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNEL_LABELS,
     FLUIDIC_CHANNELS,
+)
+from admet.workflows.control import (
+    CAMERA_AUTO_APPLY_PARAMS,
+    CAMERA_MAIN_SETTINGS,
+    FLUIDICS_MAIN_SETTINGS,
+    PIPELINE_STAGE_IDS,
+    ControlCommandSpec,
+    ControlRuntime,
+    action_requires_camera_live,
+    action_requires_fluigent,
+    action_requires_project,
+    control_button_specs,
+    pipeline_active,
+    pipeline_start_label,
+    run_complete_label,
+    run_start_label,
+    stage_uses_camera,
+    stage_uses_fluidics,
 )
 from admet.workflows.control_settings import CORRECTION_PARAM_NAMES
 from admet.ui import theme as ui
@@ -78,6 +95,7 @@ from admet.ui.render import (
     video_metadata as _video_metadata,
     video_row as _video_row,
 )
+from admet.ui.project import create_project, load_project, save_project, suggested_project_path
 from admet.ui.theme import Theme
 from admet.ui.window import RenderDecision, WindowController, WindowStageContext, panel_specs, structure_signature
 from admet.workflows import create_control_workflow
@@ -119,46 +137,6 @@ def run_control_app(api: AdmetAPI, argv: list[str] | None = None) -> int:
     return 0
 
 
-STATUS_COLORS = {
-    "done": Theme.SUCCESS,
-    "processing": Theme.WARNING,
-    "error": Theme.DANGER,
-    "inactive": Theme.TEXT_SUBTLE,
-}
-
-CAMERA_AUTO_APPLY_PARAMS = {
-    "camera_width",
-    "camera_height",
-    "camera_offset_x",
-    "camera_offset_y",
-    "camera_binning_h",
-    "camera_binning_v",
-    "camera_exposure_us",
-    "camera_gain",
-    "camera_pixel_format",
-    "camera_readout",
-    "camera_framerate_enabled",
-    "camera_framerate_hz",
-    "camera_throughput_enabled",
-    "camera_throughput_mbps",
-    "camera_waterfall",
-}
-
-CAMERA_MAIN_SETTINGS = (
-    "camera_width",
-    "camera_height",
-    "camera_exposure_us",
-    "camera_gain",
-    "camera_pixel_format",
-    "camera_readout",
-)
-
-FLUIDICS_MAIN_SETTINGS = (
-    "simulated",
-)
-
-PIPELINE_STAGE_IDS = {"priming", "runs", "wash"}
-LEFT_RAIL_WIDTH = 246
 def _panel_box(title: str, object_name: str = "Panel") -> tuple[QFrame, QVBoxLayout]:
     panel = QFrame()
     panel.setObjectName(object_name)
@@ -244,7 +222,7 @@ class ControlWindow(QMainWindow):
         self._notification_kind = "primary"
         self._runs_completion_confirmed = False
         self._completion_pending = False
-        self._window_controller = WindowController(self)
+        self._window_controller = WindowController()
         self._window_stage: Stage | None = None
         self._window_page: ControlStagePage | None = None
 
@@ -321,7 +299,7 @@ class ControlWindow(QMainWindow):
         workspace_layout.setSpacing(14)
 
         left_rail = QWidget()
-        left_rail.setFixedWidth(LEFT_RAIL_WIDTH)
+        left_rail.setFixedWidth(Theme.LEFT_RAIL_WIDTH)
         left_rail.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         left_layout = QVBoxLayout(left_rail)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -331,7 +309,7 @@ class ControlWindow(QMainWindow):
         left_layout.addWidget(self.workflow_toc_panel, 0, Qt.AlignmentFlag.AlignTop)
         self.notification_host = QWidget()
         self.notification_host.setObjectName("NotificationHost")
-        self.notification_host.setFixedWidth(LEFT_RAIL_WIDTH)
+        self.notification_host.setFixedWidth(Theme.LEFT_RAIL_WIDTH)
         self.notification_host.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
         self.notification_layout = QVBoxLayout(self.notification_host)
         self.notification_layout.setContentsMargins(0, 0, 0, 0)
@@ -502,21 +480,19 @@ class ControlWindow(QMainWindow):
         path, _filter = QFileDialog.getSaveFileName(
             self,
             "New admet project",
-            str(session_path(Path.cwd() / f"admet_{time.strftime('%Y%m%d_%H%M%S')}")),
+            str(suggested_project_path()),
             "admet projects (*.admetp)",
         )
         if not path:
             return
-        target = session_path(Path(path))
-        project_id = target.stem
-        session = new_session(project_id, "combined")
         try:
-            self.project_path = save_session(target, session)
+            project = create_project(path)
         except Exception as exc:
             self._set_status("Project create failed", "danger")
             self._notify(f"Project create failed: {exc}", "danger", timeout_ms=0)
             return
-        self.api.session = session
+        self.project_path = project.path
+        self.api.session = project.session
         self.api.workdir = str(self.project_path)
         self._control_recording_dir = None
         self._sync_project_badge()
@@ -534,12 +510,13 @@ class ControlWindow(QMainWindow):
         if not path:
             return
         try:
-            self.api.session = load_session(path)
+            project = load_project(path)
         except Exception as exc:
             self._set_status("Project load failed", "danger")
             self._notify(f"Project load failed: {exc}", "danger", timeout_ms=0)
             return
-        self.project_path = session_path(Path(path))
+        self.project_path = project.path
+        self.api.session = project.session
         self.api.workdir = str(self.project_path)
         self._control_recording_dir = None
         self._load_project_recordings()
@@ -565,11 +542,13 @@ class ControlWindow(QMainWindow):
                 return
             target = Path(path)
         try:
-            self.project_path = save_session(target, self.api.session)
+            project = save_project(target, self.api.session)
         except Exception as exc:
             self._set_status("Project save failed", "danger")
             self._notify(f"Project save failed: {exc}", "danger", timeout_ms=0)
             return
+        self.project_path = project.path
+        self.api.session = project.session
         self.api.workdir = str(self.project_path)
         self._sync_project_badge()
         self._set_status("Project saved", "success")
@@ -604,9 +583,9 @@ class ControlWindow(QMainWindow):
     def _render_current_stage(self) -> None:
         if self._camera_ack_pending:
             self._acknowledge_camera_frame()
-        self._window_controller.render_current_stage()
+        self._window_controller.render_current_stage(self._prepare_window_stage)
 
-    def prepare_window_stage(self) -> WindowStageContext | None:
+    def _prepare_window_stage(self) -> WindowStageContext | None:
         stage = self.workflow.current_stage(self.workflow_state)
         self._refresh_runtime_state()
         if stage.id == "fluigent":
@@ -620,25 +599,14 @@ class ControlWindow(QMainWindow):
         return WindowStageContext(
             stage.id,
             signature,
+            mount=lambda: self._mount_stage(stage),
+            sync=lambda: self._sync_stage(stage),
             stage_changed=stage_changed,
+            finish=self._finish_window_stage,
+            remount_shared=lambda: self._remount_shared_stage_panels(stage),
         )
 
-    def mount_window_stage(self) -> None:
-        stage = self._window_stage
-        if stage is not None:
-            self._mount_stage(stage)
-
-    def sync_window_stage(self) -> None:
-        stage = self._window_stage
-        if stage is not None:
-            self._sync_stage(stage)
-
-    def remount_shared_window_stage(self) -> None:
-        stage = self._window_stage
-        if stage is not None:
-            self._remount_shared_stage_panels(stage)
-
-    def finish_window_stage(self, decision: RenderDecision) -> None:
+    def _finish_window_stage(self, decision: RenderDecision) -> None:
         page = self._window_page
         self._mounted_signature = decision.signature
         if page is None:
@@ -731,58 +699,55 @@ class ControlWindow(QMainWindow):
         self.action_box_layout.addWidget(action_box)
 
     def _action_button_specs(self, stage: Stage) -> list[tuple[str, Any, bool, bool, bool]]:
-        controls: list[tuple[str, Any, bool, bool, bool]] = []
-        if any(surface.kind == "camera" for surface in stage.surfaces):
-            project_ready = self.runtime_state["project"]
-            camera_connected = self.runtime_state["camera"]
-            camera_live = self.runtime_state["camera_live"]
-            controls.extend(
-                (
-                    (
-                        "Refresh",
-                        lambda _checked=False: self._run("refresh_cameras"),
-                        project_ready,
-                        False,
-                        False,
-                    ),
-                    (
-                        "Connect",
-                        lambda _checked=False: self._run("connect_camera"),
-                        project_ready and not camera_connected,
-                        False,
-                        False,
-                    ),
-                    (
-                        "Disconnect",
-                        lambda _checked=False: self._run("disconnect_camera"),
-                        project_ready and camera_connected,
-                        False,
-                        False,
-                    ),
-                    (
-                        "Live",
-                        lambda _checked=False: self._toggle_action(
-                            "camera_live",
-                            "start_camera_live",
-                            "stop_camera_live",
-                        ),
-                        project_ready and camera_connected,
-                        camera_live,
-                        True,
-                    ),
-                )
+        return [
+            (
+                spec.label,
+                self._command_callback(stage, spec),
+                spec.enabled,
+                spec.checked,
+                spec.toggle,
             )
-        if stage.id in PIPELINE_STAGE_IDS:
-            controls.extend(self._pipeline_controls(stage))
-        for control in stage.controls or self._default_controls(stage):
-            if control.completes and control.action is None:
-                continue
-            spec = self._command_spec(stage, control)
-            if spec is None:
-                continue
-            controls.append((spec[0], spec[1], spec[2], spec[3], spec[4]))
-        controls.append(("E-STOP", lambda _checked=False: self._emergency_stop(), True, False, False))
-        return controls
+            for spec in control_button_specs(stage, self._control_runtime())
+        ]
+
+    def _control_runtime(self) -> ControlRuntime:
+        return ControlRuntime(
+            project_ready=self.runtime_state["project"],
+            camera_connected=self.runtime_state["camera"],
+            camera_live=self.runtime_state["camera_live"],
+            fluidics_connected=self.runtime_state["fluidics"],
+            simulated=bool(self.values.get("simulated")),
+            fluigent_instrument_count=int(self.last_metadata.get("fluigent_instrument_count") or 0),
+            pipeline_state=str(self.last_metadata.get("pipeline_state") or "idle"),
+            pending_confirmation=self._pending_pipeline_confirmation(),
+        )
+
+    def _command_callback(self, stage: Stage, spec: ControlCommandSpec) -> Callable[[bool], None]:
+        if spec.command == "run_action" and spec.action is not None:
+            return lambda _checked=False, action=spec.action: self._run(action)
+        if spec.command == "toggle_action" and spec.action is not None and spec.off_action is not None:
+            return lambda _checked=False, item=spec: self._toggle_action(
+                item.state_key,
+                item.action or "",
+                item.off_action or "",
+            )
+        if spec.command == "pipeline_start":
+            return lambda _checked=False, s=stage: self._start_pipeline_stage(s)
+        if spec.command == "pipeline_pause_toggle":
+            return lambda _checked=False: self._toggle_pause()
+        if spec.command == "pipeline_stop":
+            return lambda _checked=False: self._stop_pipeline_stage()
+        if spec.command == "pipeline_skip":
+            return lambda _checked=False, s=stage: self._skip_pipeline_step(s)
+        if spec.command == "pipeline_confirm":
+            return lambda _checked=False, s=stage: self._confirm_pipeline_step(s)
+        if spec.command == "pipeline_toggle":
+            return lambda _checked=False, s=stage: self._toggle_pipeline(s)
+        if spec.command == "stage_control" and spec.control is not None:
+            return lambda _checked=False, c=spec.control: self._handle_control(stage, c)
+        if spec.command == "emergency_stop":
+            return lambda _checked=False: self._emergency_stop()
+        return lambda _checked=False: None
 
     def _render_main(self, stage: Stage) -> None:
         display = QWidget()
@@ -803,7 +768,7 @@ class ControlWindow(QMainWindow):
         preview_layout = QVBoxLayout(preview_column)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(8)
-        if self._stage_uses_camera(stage) and self._project_ready():
+        if stage_uses_camera(stage) and self._project_ready():
             preview_layout.addWidget(self._camera_selector_row())
         if self.preview is None:
             self.preview = PreviewDisplay()
@@ -922,85 +887,10 @@ class ControlWindow(QMainWindow):
                 button.style().unpolish(button)
                 button.style().polish(button)
 
-    def _pipeline_controls(self, stage: Stage) -> list[tuple[str, Any, bool, bool, bool]]:
-        state = str(self.last_metadata.get("pipeline_state") or "idle")
-        active = state in {"running", "paused", "stopping"}
-        confirmation = self._pending_pipeline_confirmation()
-        can_start = self._fluigent_ready() and not active
-        return [
-            (
-                _pipeline_start_label(stage),
-                lambda _checked=False, s=stage: self._start_pipeline_stage(s),
-                can_start,
-                False,
-                False,
-            ),
-            (
-                "Pause" if state != "paused" else "Resume",
-                lambda _checked=False: self._toggle_pause(),
-                state in {"running", "paused"},
-                state == "paused",
-                True,
-            ),
-            (
-                "Stop",
-                lambda _checked=False: self._stop_pipeline_stage(),
-                active,
-                False,
-                False,
-            ),
-            (
-                "Skip",
-                lambda _checked=False, s=stage: self._skip_pipeline_step(s),
-                state == "running",
-                False,
-                False,
-            ),
-            (
-                "Proceed",
-                lambda _checked=False, s=stage: self._confirm_pipeline_step(s),
-                bool(confirmation) and state == "running",
-                False,
-                False,
-            ),
-        ]
-
-    def _command_spec(
-        self,
-        stage: Stage,
-        control: StageControl,
-    ) -> tuple[str, Any, bool, bool, bool] | None:
-        action = control.action
-        if action in {"stop_camera_live", "stop_recording", "stop_protocol", "resume_protocol"}:
-            return None
-        if action == "run_protocol":
-            return (
-                _short_control_label(control.label),
-                lambda _checked=False, s=stage: self._toggle_pipeline(s),
-                self._action_enabled("run_protocol"),
-                self._pipeline_active(),
-                True,
-            )
-        if action == "pause_protocol":
-            return (
-                "Pause",
-                lambda _checked=False: self._toggle_pause(),
-                self._action_enabled("pause_protocol"),
-                self.last_metadata.get("pipeline_state") == "paused",
-                True,
-            )
-        return (
-            _short_control_label(control.label),
-            lambda _checked=False, c=control: self._handle_control(stage, c),
-            self._action_enabled(action) if action is not None else True,
-            False,
-            False,
-        )
-
     def _render_channel_manager(self, stage: Stage) -> None:
         if self.channel_manager_panel is not None:
-            self.channel_manager_panel.setVisible(self._stage_uses_fluidics(stage))
-        if not self._stage_uses_fluidics(stage):
+            self.channel_manager_panel.setVisible(stage_uses_fluidics(stage))
+        if not stage_uses_fluidics(stage):
             return
         channels = self._channel_states()
         if not channels:
@@ -1094,7 +984,7 @@ class ControlWindow(QMainWindow):
     def _main_settings(self, stage: Stage) -> list[Param]:
         visible_names = {param.name for param in self._stage_params(stage)}
         names: list[str] = []
-        if self._stage_uses_camera(stage):
+        if stage_uses_camera(stage):
             names.extend(name for name in CAMERA_MAIN_SETTINGS if name in visible_names)
         if stage.id == "priming":
             names.extend(
@@ -1128,7 +1018,7 @@ class ControlWindow(QMainWindow):
                 )
                 if name in visible_names and name not in names
             )
-        if self._stage_uses_fluidics(stage):
+        if stage_uses_fluidics(stage):
             names.extend(
                 name
                 for name in FLUIDICS_MAIN_SETTINGS
@@ -1205,7 +1095,7 @@ class ControlWindow(QMainWindow):
         return table
 
     def _render_results(self, stage: Stage) -> None:
-        if self._stage_uses_fluidics(stage):
+        if stage_uses_fluidics(stage):
             if self.monitor_table is None:
                 self.monitor_table = FluidicsMonitorTable()
             state = getattr(getattr(self.api.engine, "hardware", None), "state", None)
@@ -1295,7 +1185,7 @@ class ControlWindow(QMainWindow):
         if self.log_label is not None:
             self.log_label.setText("\n".join(self.log_entries[-80:]))
 
-    def _handle_control(self, stage: Stage, control: StageControl) -> None:
+    def _handle_control(self, stage: Stage, control: Any) -> None:
         if control.action is not None:
             result = self._run(control.action)
             if control.completes:
@@ -1398,17 +1288,17 @@ class ControlWindow(QMainWindow):
         action: str,
         settings: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        if self._action_requires_project(action) and not self._project_ready():
+        if action_requires_project(action) and not self._project_ready():
             self._set_status("Project required", "warning")
             self._notify("Create or select a project before camera setup.", "warning", timeout_ms=0)
             return None
         if action == "start_recording" and not self._ensure_recording_project():
             return None
-        if self._action_requires_camera_live(action) and not self._camera_scene_ready():
+        if action_requires_camera_live(action) and not self._camera_scene_ready():
             self._set_status("Camera live preview required", "warning")
             self._notify("Connect camera and start live preview first.", "warning", timeout_ms=0)
             return None
-        if self._action_requires_fluigent(action) and not self._fluigent_ready():
+        if action_requires_fluigent(action) and not self._fluigent_ready():
             self._set_status("Fluigent connection required", "warning")
             self._notify("Connect Fluigent first.", "warning", timeout_ms=0)
             return None
@@ -1487,7 +1377,7 @@ class ControlWindow(QMainWindow):
         self._run(off_action if self.last_metadata.get(metadata_key) else on_action)
 
     def _toggle_pipeline(self, stage: Stage) -> None:
-        if self._pipeline_active():
+        if pipeline_active(self._control_runtime()):
             self._run("stop_protocol", refresh=False)
             if stage.id == "runs" and self.last_metadata.get("recording_active"):
                 self._run("stop_recording", refresh=False)
@@ -1502,7 +1392,7 @@ class ControlWindow(QMainWindow):
         self._render_current_stage()
 
     def _start_pipeline_stage(self, stage: Stage) -> None:
-        if self._pipeline_active():
+        if pipeline_active(self._control_runtime()):
             return
         self._latest_pipeline_event = None
         self._clear_pipeline_confirmation()
@@ -1535,9 +1425,9 @@ class ControlWindow(QMainWindow):
         if stage is None:
             stage = self.workflow.current_stage(self.workflow_state)
         confirmation = self._pending_pipeline_confirmation()
-        run_complete_label = _run_complete_label(confirmation)
+        complete_label = run_complete_label(confirmation)
         if stage.id == "runs":
-            run_label = _run_start_label(confirmation)
+            run_label = run_start_label(confirmation)
             if run_label and not self.last_metadata.get("recording_active"):
                 if self._run(
                     "start_recording",
@@ -1550,7 +1440,7 @@ class ControlWindow(QMainWindow):
         if self._run("confirm_protocol", refresh=False, notify_success=False) is None:
             self._refresh_action_box(stage)
             return
-        if stage.id == "runs" and run_complete_label:
+        if stage.id == "runs" and complete_label:
             self._runs_completion_confirmed = True
         self._clear_pipeline_confirmation()
         self._dismiss_notification()
@@ -1605,9 +1495,6 @@ class ControlWindow(QMainWindow):
             self._show_pipeline_confirmation_notice(stage, self._latest_pipeline_event)
         self._render_current_stage()
 
-    def _pipeline_active(self) -> bool:
-        return self.last_metadata.get("pipeline_state") in {"running", "paused", "stopping"}
-
     def _pending_pipeline_confirmation(self) -> str:
         if self._pipeline_pending_confirmation:
             return self._pipeline_pending_confirmation
@@ -1638,7 +1525,7 @@ class ControlWindow(QMainWindow):
             step = str(getattr(event, "step_name", "") or "").strip()
             if step:
                 return step
-        return _pipeline_start_label(stage)
+        return pipeline_start_label(stage)
 
     def _pipeline_status_text(self, stage: Stage) -> str:
         event = self._latest_pipeline_event
@@ -1660,7 +1547,7 @@ class ControlWindow(QMainWindow):
         if state == "error":
             error = str(getattr(event, "error_msg", "") or "").strip() if event else ""
             return f"Protocol error: {error}" if error else "Protocol error"
-        return _pipeline_start_label(stage)
+        return pipeline_start_label(stage)
 
     def _pipeline_progress_text(self, stage: Stage) -> str:
         event = self._latest_pipeline_event
@@ -1766,7 +1653,7 @@ class ControlWindow(QMainWindow):
             self._schedule_completed_pipeline_stage_finish(stage)
 
     def _sync_run_recording_for_confirmation(self, confirmation: str) -> None:
-        if not _run_complete_label(confirmation):
+        if not run_complete_label(confirmation):
             return
         if not self.last_metadata.get("recording_active"):
             return
@@ -1883,7 +1770,7 @@ class ControlWindow(QMainWindow):
         status = self.workflow_state.statuses.get(stage.id, StageStatus.PENDING)
         if index == self.workflow_state.index and self.status_kind == "danger":
             return "error"
-        if self._stage_uses_camera(stage) and self._camera_scene_ready():
+        if stage_uses_camera(stage) and self._camera_scene_ready():
             return "done"
         if stage.id == "fluigent" and self._fluigent_ready():
             return "done"
@@ -1912,7 +1799,7 @@ class ControlWindow(QMainWindow):
             return 100.0
         if status in {"inactive", "error"}:
             return 0.0
-        if self._stage_uses_camera(stage):
+        if stage_uses_camera(stage):
             if self.runtime_state["camera_live"]:
                 return 100.0
             if self.runtime_state["camera"]:
@@ -1940,12 +1827,6 @@ class ControlWindow(QMainWindow):
             return 0.0
         return min(99.0, max(0.0, (current + step_progress) / total * 100.0))
 
-    def _stage_uses_camera(self, stage: Stage) -> bool:
-        return any(surface.kind == "camera" for surface in stage.surfaces)
-
-    def _stage_uses_fluidics(self, stage: Stage) -> bool:
-        return stage.id in {"fluigent", "corrections", "priming", "runs", "wash"}
-
     def _refresh_runtime_state(self) -> None:
         camera = getattr(self.api.engine, "camera", None)
         hardware = getattr(self.api.engine, "hardware", None)
@@ -1969,36 +1850,6 @@ class ControlWindow(QMainWindow):
     def _camera_scene_ready(self) -> bool:
         self._refresh_runtime_state()
         return self.runtime_state["camera_live"]
-
-    def _action_requires_camera_live(self, action: str) -> bool:
-        return False
-
-    def _action_requires_project(self, action: str) -> bool:
-        return action in {
-            "refresh_cameras",
-            "connect_camera",
-            "disconnect_camera",
-            "start_camera_live",
-            "stop_camera_live",
-            "apply_camera_settings",
-            "start_recording",
-        }
-
-    def _action_requires_fluigent(self, action: str) -> bool:
-        return action in {
-            "apply_corrections",
-            "set_channel_flow",
-            "set_channel_pressure",
-            "stop_channel",
-            "set_channel_response",
-            "start_recording",
-            "run_protocol",
-            "pause_protocol",
-            "resume_protocol",
-            "confirm_protocol",
-            "skip_protocol",
-            "wash",
-        }
 
     def _fluigent_ready(self) -> bool:
         self._refresh_runtime_state()
@@ -2068,23 +1919,6 @@ class ControlWindow(QMainWindow):
             self._complete_current_stage()
             return
         self._render_current_stage()
-
-    def _action_enabled(self, action: str | None) -> bool:
-        if action is None:
-            return True
-        if self._action_requires_camera_live(action) and not self._camera_scene_ready():
-            return False
-        if action == "connect_fluidics":
-            if self._fluigent_ready():
-                return False
-            if self.values.get("simulated"):
-                return True
-            return int(self.last_metadata.get("fluigent_instrument_count") or 0) > 0
-        if action == "disconnect_fluidics":
-            return self._fluigent_ready()
-        if self._action_requires_fluigent(action) and not self._fluigent_ready():
-            return False
-        return True
 
     def _ensure_fluigent_availability(self) -> None:
         if self.values.get("simulated"):
@@ -2355,7 +2189,9 @@ class ControlWindow(QMainWindow):
             self._append_log(f"project: loaded {processed} recording metadata item(s)")
         if changed:
             try:
-                self.project_path = save_session(self.project_path, self.api.session)
+                project = save_project(self.project_path, self.api.session)
+                self.project_path = project.path
+                self.api.session = project.session
                 self.api.workdir = str(self.project_path)
             except Exception as exc:
                 self._append_log(f"project: recording metadata save failed: {exc}")
@@ -2439,18 +2275,6 @@ class ControlWindow(QMainWindow):
         if stage.id == "wash":
             return "Set wash volume and pressure duration, then follow each protocol prompt until shutdown is complete."
         return stage.description or stage.label
-
-    def _default_controls(self, stage: Stage) -> tuple[StageControl, ...]:
-        if stage.id == "corrections" or stage.id in PIPELINE_STAGE_IDS:
-            return ()
-        controls: list[StageControl] = []
-        if stage.action:
-            controls.append(StageControl("Run Stage", stage.action, completes=True))
-        if stage.skippable:
-            controls.append(StageControl("Skip", skippable=True, variant="secondary"))
-        if not controls:
-            controls.append(StageControl("Complete", completes=True, variant="success"))
-        return tuple(controls)
 
     def _set_status(self, text: str, kind: str = "primary") -> None:
         self.status_kind = kind
@@ -2556,11 +2380,11 @@ class ControlWindow(QMainWindow):
             available_height = max(120, self.height() - self.notification_host.y() - 18)
             if self.instruction_card is not None:
                 self.instruction_card.fit_to_parent(
-                    LEFT_RAIL_WIDTH,
+                    Theme.LEFT_RAIL_WIDTH,
                     available_height,
                 )
             if self.notification is not None:
-                self.notification.fit_to_parent(LEFT_RAIL_WIDTH, available_height)
+                self.notification.fit_to_parent(Theme.LEFT_RAIL_WIDTH, available_height)
             return
         parent = self.centralWidget()
         if parent is None:
@@ -2634,43 +2458,6 @@ class ControlWindow(QMainWindow):
                 self._clear_layout(child_layout)
 
 
-def _short_control_label(label: str) -> str:
-    replacements = {
-        "Disconnect": "Disconnect",
-        "Continue": "Next",
-        "Run Priming": "Prime",
-        "Confirm Step": "Confirm",
-        "Priming Done": "Done",
-        "Run Protocol": "Run",
-        "Stop Protocol": "Stop",
-        "Runs Done": "Done",
-        "Run Wash": "Wash",
-        "Skip Wash": "Skip",
-        "Workflow Done": "Done",
-    }
-    return replacements.get(label, label)
-
-
-def _pipeline_start_label(stage: Stage) -> str:
-    if stage.id == "priming":
-        return "Run Priming"
-    if stage.id == "runs":
-        return "Start Runs"
-    if stage.id == "wash":
-        return "Run Wash"
-    return "Start"
-
-
-def _run_start_label(message: str) -> str:
-    match = re.search(r"\bStart\s+(set\d{2}_rep\d{2})\b", message)
-    return match.group(1) if match else ""
-
-
-def _run_complete_label(message: str) -> str:
-    match = re.search(r"\b(set\d{2}_rep\d{2})\s+complete\b", message)
-    return match.group(1) if match else ""
-
-
 def _status_dot(status: str, size: int) -> QLabel:
     dot = QLabel()
     dot.setFixedSize(size, size)
@@ -2680,7 +2467,7 @@ def _status_dot(status: str, size: int) -> QLabel:
 
 
 def _apply_dot_status(dot: QLabel, status: str) -> None:
-    color = STATUS_COLORS[status]
+    color = ui.status_color(status)
     radius = max(1, dot.width() // 2)
     dot.setStyleSheet(
         f"background: {color}; border: 1px solid {color}; border-radius: {radius}px;"
