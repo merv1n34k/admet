@@ -8,12 +8,11 @@ from admet.ui.presenter import SurfaceVM
 def render_charts(ui: Any, surface: SurfaceVM, runtime: Any) -> None:
     charts = runtime.surface_charts(surface)
     if not charts:
-        with ui.column().classes("admet-surface-placeholder"):
-            ui.label(surface.title or "Results").classes("text-sm font-medium")
-            ui.label("Stored raw runs will appear here after analysis.").classes(
-                "text-xs text-gray-500"
-            )
+        with ui.column().classes("panel w-full p-3"):
+            ui.label(surface.title or "Results").classes("section-title")
+            ui.label("Stored raw runs will appear here after analysis.").classes("muted text-xs")
         return
-    with ui.grid(columns=2).classes("w-full gap-3"):
+    with ui.element("div").classes("comparison-grid w-full"):
         for chart in charts:
-            ui.echart(chart).classes("w-full h-64 admet-chart")
+            with ui.column().classes("plot-card"):
+                ui.echart(chart).classes("w-full h-64")

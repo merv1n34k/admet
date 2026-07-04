@@ -8,7 +8,7 @@ from admet.ui.presenter import SurfaceVM
 def render_matrix(ui: Any, surface: SurfaceVM, runtime: Any) -> None:
     rows = runtime.surface_rows(surface)
     columns = _columns(surface, rows)
-    ui.table(columns=columns, rows=rows, row_key="uid").classes("w-full").props(
+    ui.table(columns=columns, rows=rows, row_key="uid").classes("w-full slim-table matrix-table").props(
         "dense flat wrap-cells"
     )
 

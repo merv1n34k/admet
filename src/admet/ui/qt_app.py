@@ -14,13 +14,13 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
     QProgressBar,
-    QPushButton,
     QScrollArea,
     QSpinBox,
     QTableWidget,
@@ -122,11 +122,11 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
         screen = build_screen(self.workflow, self.workflow_state, self)
         root = QWidget()
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(18, 20, 20, 20)
+        layout.setSpacing(ui.spacing("group"))
         self._render_topbar(layout, screen)
         body = QHBoxLayout()
-        body.setSpacing(10)
+        body.setSpacing(16)
         layout.addLayout(body, 1)
         self._render_steps(body, screen)
         self._render_content(body, screen)
@@ -134,38 +134,52 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
 
     def _render_topbar(self, layout: QVBoxLayout, screen: ScreenModel) -> None:
         project = screen.project
-        row = QHBoxLayout()
+        panel = QFrame()
+        panel.setObjectName("TopPanel")
+        row = QHBoxLayout(panel)
+        row.setContentsMargins(12, 10, 12, 10)
+        row.setSpacing(ui.spacing("group"))
+        title = QLabel("admet control")
+        title.setObjectName("AppTitle")
+        row.addWidget(title)
         self.project_badge = QLabel(project.title)
-        self.project_badge.setObjectName("MutedText")
+        self.project_badge.setObjectName("ProjectBadge")
         row.addWidget(self.project_badge)
         row.addStretch()
         if project.can_create:
-            button = QPushButton("New Project")
+            button = ui.button("New Project")
             button.clicked.connect(self._new_project)
             row.addWidget(button)
         if project.can_save:
-            button = QPushButton("Save Project")
+            button = ui.button("Save Project")
             button.clicked.connect(self._save_project)
             row.addWidget(button)
-        layout.addLayout(row)
+        layout.addWidget(panel)
 
     def _render_steps(self, body: QHBoxLayout, screen: ScreenModel) -> None:
-        rail = QWidget()
+        rail = QFrame()
+        rail.setObjectName("WorkflowToc")
         rail.setFixedWidth(250)
         rail_layout = QVBoxLayout(rail)
-        rail_layout.setContentsMargins(0, 0, 0, 0)
+        rail_layout.setContentsMargins(10, 10, 10, 10)
         rail_layout.setSpacing(4)
+        title = QLabel("Workflow")
+        title.setObjectName("TocTitle")
+        rail_layout.addWidget(title)
         for index, step in enumerate(screen.steps):
-            row = QHBoxLayout()
-            row.setContentsMargins(0, 0, 0, 0)
+            row_widget = QWidget()
+            row_widget.setObjectName("TocRow")
+            row = QHBoxLayout(row_widget)
+            row.setContentsMargins(2, 2, 4, 2)
             row.setSpacing(6)
             row.addWidget(_status_dot(step.status.value), 0)
-            button = QPushButton(step.label)
+            button = ui.stage_button(step.label, active=step.current)
+            button.setObjectName("TocStage")
             button.setCheckable(True)
             button.setChecked(step.current)
             button.clicked.connect(lambda _checked=False, i=index: self._activate(i))
             row.addWidget(button, 1)
-            rail_layout.addLayout(row)
+            rail_layout.addWidget(row_widget)
         for instruction in screen.instructions:
             label = QLabel(instruction)
             label.setWordWrap(True)
@@ -184,34 +198,46 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
         scroll.setWidgetResizable(True)
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setSpacing(8)
-        layout.addWidget(_title(screen.title))
-        self._render_buttons(layout, screen.action_box)
-        self._render_settings_table(layout, screen.settings)
-        for surface in screen.surfaces:
-            self._render_surface(layout, surface)
-        self._render_results(layout, screen.results)
-        layout.addWidget(_title("Action Log"))
-        for line in screen.log:
-            layout.addWidget(QLabel(line))
+        layout.setSpacing(ui.spacing("group"))
+        self._render_section(layout, "Action Box", lambda body: self._render_buttons(body, screen.action_box))
+        self._render_section(layout, "Action Panel", lambda body: self._render_settings_table(body, screen.settings))
+        self._render_section(
+            layout,
+            "Main Window",
+            lambda body: [self._render_surface(body, surface) for surface in screen.surfaces],
+        )
+        self._render_section(layout, screen.results.title, lambda body: self._render_results(body, screen.results))
+        self._render_section(layout, "Action Log", lambda body: self._render_log(body, screen.log))
         layout.addStretch()
         scroll.setWidget(content)
         body.addWidget(scroll, 1)
 
+    def _render_section(self, layout: QVBoxLayout, title: str, render_body) -> None:
+        group, body = ui.section(title)
+        render_body(body)
+        layout.addWidget(group)
+
     def _render_buttons(self, layout: QVBoxLayout, action_box: ActionBoxVM) -> None:
         progress = QProgressBar()
+        progress.setObjectName("ProcessProgress")
         progress.setRange(0, 100)
         progress.setValue(int(action_box.progress * 100))
         progress.setTextVisible(False)
         layout.addWidget(progress)
         row = QHBoxLayout()
         for button in action_box.buttons:
-            widget = QPushButton(button.label)
+            widget = ui.button(button.label, variant=_qt_variant(button.variant))
             widget.setEnabled(button.enabled)
             widget.clicked.connect(lambda _checked=False, command=button.command: self._handle_command(command))
             row.addWidget(widget)
         row.addStretch()
         layout.addLayout(row)
+
+    def _render_log(self, layout: QVBoxLayout, lines: tuple[str, ...]) -> None:
+        label = QLabel("\n".join(lines) or "No actions yet.")
+        label.setObjectName("LogText")
+        label.setWordWrap(True)
+        layout.addWidget(label)
 
     def _render_fields(self, layout: QVBoxLayout, fields: tuple[FieldVM, ...]) -> None:
         if not fields:
@@ -247,7 +273,6 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
         render_qt_surface(layout, surface, self)
 
     def _render_results(self, layout: QVBoxLayout, results: ResultsVM) -> None:
-        layout.addWidget(_title(results.title))
         if not results.rows:
             label = QLabel(results.empty_message)
             label.setObjectName("MutedText")
@@ -418,6 +443,12 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
 
     def _append_log(self, message: str) -> None:
         self._log_lines.append(message)
+
+def _qt_variant(variant: str) -> str:
+    if variant in {"primary", "success", "danger", "warning"}:
+        return variant
+    return "neutral"
+
 
 def _title(text: str) -> QLabel:
     label = QLabel(text)
