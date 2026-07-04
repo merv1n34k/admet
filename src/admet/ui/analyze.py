@@ -112,16 +112,7 @@ class AnalyzeWorkflowView:
         self.source_path = ""
         self.selected_uid = ""
         self.matrix: list[MatrixRow] = []
-        self.settings: dict[str, Any] = {
-            "opencv_microns_per_pixel": 1.0,
-            "opencv_fps": 0.0,
-            "cellpose_config_path": "",
-            "cellpose_px_to_um": 1.14,
-            "cellpose_frame_limit": 0,
-            "cellpose_use_cache": True,
-            "cellpose_detect_inclusions": True,
-            "cache_root": str(Path.home() / ".admet-cache" / "admet2"),
-        }
+        self.settings: dict[str, Any] = self._default_settings()
         self.stage_progress: dict[str, int] = {
             "import": 0,
             "video": 0,
@@ -291,10 +282,11 @@ class AnalyzeWorkflowView:
 
         body = self._refs["action_panel_body"]
         with body:
+            if self._stage_id() == "import":
+                self._render_matrix()
+                return
             with ui.column().classes("panel w-full gap-2 p-2"):
-                if self._stage_id() == "import":
-                    self._render_import_controls()
-                elif self._stage_id() == "video":
+                if self._stage_id() == "video":
                     self._render_opencv_settings()
                 elif self._stage_id() == "imaging":
                     self._render_cellpose_settings()
@@ -307,7 +299,6 @@ class AnalyzeWorkflowView:
         body = self._refs["main_body"]
         with body:
             if self._stage_id() == "import":
-                self._render_matrix()
                 self._render_import_inventory()
             elif self._stage_id() == "video":
                 self._render_video_stage()
@@ -1348,9 +1339,9 @@ class AnalyzeWorkflowView:
     def _action_specs(self, stage_id: str) -> list[dict[str, Any]]:
         if stage_id == "import":
             return [
-                {"label": "Create Project", "handler": self._new_project},
-                {"label": "Load Project", "handler": self._open_project_browser},
-                {"label": "Browse Source", "handler": self._open_source_browser, "active": True},
+                {"label": "Browse File", "handler": self._open_source_browser, "active": True},
+                {"label": "Reset Settings", "handler": self._reset_settings},
+                {"label": "Clear Matrix", "handler": self._clear_matrix},
             ]
         if stage_id == "video":
             return [{"label": "Run OpenCV", "handler": lambda: self._run_engine("opencv"), "active": True}]
@@ -1362,6 +1353,31 @@ class AnalyzeWorkflowView:
                 {"label": "Run All", "handler": lambda: self._run_engine(None)},
             ]
         return [{"label": "Export Later", "handler": lambda: self._notify("Export is not wired yet.", "warning")}]
+
+    def _default_settings(self) -> dict[str, Any]:
+        return {
+            "opencv_microns_per_pixel": 1.0,
+            "opencv_fps": 0.0,
+            "cellpose_config_path": "",
+            "cellpose_px_to_um": 1.14,
+            "cellpose_frame_limit": 0,
+            "cellpose_use_cache": True,
+            "cellpose_detect_inclusions": True,
+            "cache_root": str(Path.home() / ".admet-cache" / "admet2"),
+        }
+
+    def _reset_settings(self) -> None:
+        self.settings = self._default_settings()
+        self._notify("Settings reset to defaults.", "success")
+        self._log("settings: reset to defaults")
+        self._refresh()
+
+    def _clear_matrix(self) -> None:
+        self.matrix = []
+        self.selected_uid = ""
+        self._notify("Batch matrix cleared.", "success")
+        self._log("matrix: cleared")
+        self._refresh()
 
     def _new_project(self) -> None:
         path = self._project_path()
