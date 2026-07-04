@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from admet.core.session import AdmetSession, SessionFile, load_session, new_session, save_session
 from admet.engines.acquisition import RecordingRun
-from admet.engines.acquisition.settings import CAMERA_SETTINGS, CORRECTION_SETTINGS
+from admet.engines.acquisition.settings import CAMERA_SETTINGS
 from admet.ui.qt_app import ControlWindow
 from admet.ui.window import WindowController
 from admet.workflows import StageStatus
@@ -86,39 +86,15 @@ class RecordingRunTests(unittest.TestCase):
     def test_recording_keeps_preview_on_by_default(self):
         self.assertFalse(CAMERA_SETTINGS.defaults()["camera_preview_off_recording"])
 
-    def test_correction_action_params_show_calibration_scale_first(self):
-        window = ControlWindow.__new__(ControlWindow)
-        stage = SimpleNamespace(id="corrections")
-
-        ordered = window._ordered_params(stage, list(CORRECTION_SETTINGS.params))
-        collapsed = window._collapsed_params(stage, ordered)
-
-        self.assertEqual(
-            [param.name for param in collapsed],
-            [
-                "oil_l_calibration",
-                "oil_l_scale",
-                "cells_m_calibration",
-                "cells_m_scale",
-                "beads_m_calibration",
-                "beads_m_scale",
-            ],
-        )
-        self.assertEqual(
-            [param.name for param in ordered[6:]],
-            [
-                "oil_l_offset",
-                "oil_l_quadratic",
-                "cells_m_offset",
-                "cells_m_quadratic",
-                "beads_m_offset",
-                "beads_m_quadratic",
-            ],
-        )
-
     def test_runs_pipeline_completion_waits_for_run_confirmation(self):
         window = ControlWindow.__new__(ControlWindow)
-        window.workflow = SimpleNamespace(current_stage=lambda _state: SimpleNamespace(id="runs"))
+        window.workflow = SimpleNamespace(
+            current_stage=lambda _state: SimpleNamespace(
+                id="runs",
+                pipeline=True,
+                completion_gate="recording_confirmation",
+            )
+        )
         window.workflow_state = SimpleNamespace(statuses={"runs": StageStatus.ACTIVE})
         window._latest_pipeline_event = object()
         window._runs_completion_confirmed = False
@@ -138,7 +114,7 @@ class RecordingRunTests(unittest.TestCase):
 
     def test_completed_pipeline_stage_finish_is_deferred(self):
         window = ControlWindow.__new__(ControlWindow)
-        stage = SimpleNamespace(id="priming")
+        stage = SimpleNamespace(id="priming", pipeline=True, completion_gate="")
         window.workflow = SimpleNamespace(current_stage=lambda _state: stage)
         window.workflow_state = SimpleNamespace(statuses={"priming": StageStatus.ACTIVE})
         window._runs_completion_confirmed = False
@@ -169,7 +145,7 @@ class RecordingRunTests(unittest.TestCase):
 
     def test_action_box_refresh_syncs_without_rebuild_when_structure_matches(self):
         window = ControlWindow.__new__(ControlWindow)
-        stage = SimpleNamespace(id="priming")
+        stage = SimpleNamespace(id="priming", pipeline=True, completion_gate="")
         calls = []
         window._window_controller = WindowController()
         window._window_controller.wiring.render("priming", ("priming",), mount=lambda: None, sync=lambda: None)

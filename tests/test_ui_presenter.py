@@ -28,7 +28,11 @@ class PresenterTests(unittest.TestCase):
                     self.assertEqual(screen.instructions, _stage_instructions(stage))
                     self.assertEqual(
                         [field.name for field in screen.fields],
-                        _stage_field_names(stage),
+                        _stage_visible_field_names(stage),
+                    )
+                    self.assertEqual(
+                        [field.name for field in screen.settings.all_fields],
+                        _stage_all_field_names(stage),
                     )
                     self.assertEqual(
                         [surface.kind for surface in screen.surfaces],
@@ -77,6 +81,33 @@ class PresenterTests(unittest.TestCase):
         self.assertEqual(commands.count("skip"), 1)
         self.assertEqual(commands, ["back", "skip", "complete"])
 
+    def test_correction_settings_are_grouped_by_presenter(self):
+        workflow = create_control_workflow()
+        screen = build_screen(workflow, _state_for(workflow, 2))
+
+        self.assertEqual(
+            [field.name for field in screen.settings.fields],
+            [
+                "oil_l_calibration",
+                "oil_l_scale",
+                "cells_m_calibration",
+                "cells_m_scale",
+                "beads_m_calibration",
+                "beads_m_scale",
+            ],
+        )
+        self.assertEqual(
+            [field.name for field in screen.settings.all_fields[6:12]],
+            [
+                "oil_l_offset",
+                "oil_l_quadratic",
+                "cells_m_offset",
+                "cells_m_quadratic",
+                "beads_m_offset",
+                "beads_m_quadratic",
+            ],
+        )
+
 
 def _state_for(workflow: Workflow, index: int) -> WorkflowState:
     statuses = {stage.id: StageStatus.PENDING for stage in workflow.stages}
@@ -84,10 +115,28 @@ def _state_for(workflow: Workflow, index: int) -> WorkflowState:
     return WorkflowState(index=index, statuses=statuses)
 
 
-def _stage_field_names(stage: Stage) -> list[str]:
+def _stage_visible_field_names(stage: Stage) -> list[str]:
+    names = _stage_all_field_names(stage)
+    collapsed_count = int(stage.settings_options.get("collapsed_count") or 0)
+    if collapsed_count:
+        return names[:collapsed_count]
+    if len(names) > 6:
+        return names[:6]
+    return names
+
+
+def _stage_all_field_names(stage: Stage) -> list[str]:
     if not stage.show_settings:
         return []
-    return [field.name for field in stage.settings.params]
+    primary = _stage_named_fields(stage, "primary")
+    secondary = _stage_named_fields(stage, "secondary")
+    ordered = {*primary, *secondary}
+    return [*primary, *secondary, *(field.name for field in stage.settings.params if field.name not in ordered)]
+
+
+def _stage_named_fields(stage: Stage, key: str) -> list[str]:
+    available = {field.name for field in stage.settings.params}
+    return [name for name in tuple(stage.settings_options.get(key) or ()) if name in available]
 
 
 def _stage_button_commands(stage: Stage, index: int) -> list[str]:

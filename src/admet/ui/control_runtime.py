@@ -31,11 +31,14 @@ from admet.workflows import Stage, StageStatus
 
 class ControlSessionMixin:
     def _can_complete_completed_pipeline_stage(self, stage: Stage) -> bool:
-        if stage.id not in {"priming", "runs", "wash"}:
+        if not stage.pipeline:
             return False
         if self.workflow_state.statuses.get(stage.id) is not StageStatus.ACTIVE:
             return False
-        return not (stage.id in {"runs"} and not self._runs_completion_confirmed)
+        return not (
+            stage.completion_gate == "recording_confirmation"
+            and not self._runs_completion_confirmed
+        )
 
     def _schedule_completed_pipeline_stage_finish(self, stage: Stage) -> None:
         if self._completion_pending or not self._can_complete_completed_pipeline_stage(stage):
@@ -56,7 +59,7 @@ class ControlSessionMixin:
         self._clear_pipeline_confirmation()
         self._dismiss_notification()
         self._complete_current_stage()
-        if stage.id in {"runs"}:
+        if stage.completion_gate == "recording_confirmation":
             self._runs_completion_confirmed = False
 
     def _refresh_action_box(self, stage: Stage) -> None:

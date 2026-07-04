@@ -8,6 +8,7 @@ from admet.engines.acquisition.settings import (
     RUN_SETTINGS,
     WASH_SETTINGS,
 )
+from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNELS
 
 from .model import Stage, StageControl, StageSurface, Workflow
 
@@ -77,6 +78,18 @@ CAMERA_SURFACE_OPTIONS = {
 }
 
 
+CORRECTION_PRIMARY_PARAMS = tuple(
+    name
+    for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
+    for name in (f"{prefix}_calibration", f"{prefix}_scale")
+)
+CORRECTION_SECONDARY_PARAMS = tuple(
+    name
+    for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
+    for name in (f"{prefix}_offset", f"{prefix}_quadratic")
+)
+
+
 def create_control_workflow() -> Workflow:
     return Workflow(
         workflow_id="control",
@@ -123,6 +136,11 @@ def create_control_workflow() -> Workflow:
                 "3. Correction factors",
                 description="Flow sensor calibration table and polynomial correction factors.",
                 settings=CORRECTION_SETTINGS,
+                settings_options={
+                    "primary": CORRECTION_PRIMARY_PARAMS,
+                    "secondary": CORRECTION_SECONDARY_PARAMS,
+                    "collapsed_count": 6,
+                },
             ),
             Stage(
                 "priming",
@@ -130,6 +148,7 @@ def create_control_workflow() -> Workflow:
                 action="run_protocol",
                 description="Run the priming pipeline and confirm gated steps as prompted.",
                 settings=PROTOCOL_SETTINGS,
+                pipeline=True,
             ),
             Stage(
                 "runs",
@@ -137,6 +156,8 @@ def create_control_workflow() -> Workflow:
                 action="run_protocol",
                 description="Recorded Drop-Seq or custom run protocol with CSV/video session output.",
                 settings=RUN_SETTINGS,
+                pipeline=True,
+                completion_gate="recording_confirmation",
             ),
             Stage(
                 "wash",
@@ -144,6 +165,7 @@ def create_control_workflow() -> Workflow:
                 action="run_protocol",
                 description="Post-run wash and shutdown path.",
                 settings=WASH_SETTINGS,
+                pipeline=True,
             ),
         ),
     )

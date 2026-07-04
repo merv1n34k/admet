@@ -46,6 +46,9 @@ class Stage:
     controls: tuple[StageControl, ...] = ()
     surfaces: tuple[StageSurface, ...] = ()
     show_settings: bool = True
+    settings_options: dict[str, Any] = field(default_factory=dict)
+    pipeline: bool = False
+    completion_gate: str = ""
 
 
 @dataclass(frozen=True)

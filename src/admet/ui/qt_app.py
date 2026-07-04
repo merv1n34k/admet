@@ -17,9 +17,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -27,10 +30,9 @@ from PySide6.QtWidgets import (
 from admet.core.api import AdmetAPI
 from admet.core.engine import Param, ParamKind
 from admet.core.run import RunJob
-from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNELS
 from admet.ui import theme_qt as ui
 from admet.ui.control_runtime import ControlSessionMixin
-from admet.ui.presenter import FieldVM, ScreenModel, SurfaceVM, build_screen
+from admet.ui.presenter import ActionBoxVM, FieldVM, ResultsVM, ScreenModel, SurfaceVM, build_screen
 from admet.ui.project import create_project, save_project, suggested_project_path
 from admet.ui.theme_qt import Theme
 from admet.ui.window import WindowController
@@ -111,7 +113,7 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
         layout = QVBoxLayout(root)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
-        self._render_topbar(layout)
+        self._render_topbar(layout, screen)
         body = QHBoxLayout()
         body.setSpacing(10)
         layout.addLayout(body, 1)
@@ -119,18 +121,20 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
         self._render_content(body, screen)
         self.setCentralWidget(root)
 
-    def _render_topbar(self, layout: QVBoxLayout) -> None:
+    def _render_topbar(self, layout: QVBoxLayout, screen: ScreenModel) -> None:
+        project = screen.project
         row = QHBoxLayout()
-        self.project_badge = QLabel(self._project_text())
+        self.project_badge = QLabel(project.title)
         self.project_badge.setObjectName("MutedText")
         row.addWidget(self.project_badge)
         row.addStretch()
-        for label, handler in (
-            ("New Project", self._new_project),
-            ("Save Project", self._save_project),
-        ):
-            button = QPushButton(label)
-            button.clicked.connect(handler)
+        if project.can_create:
+            button = QPushButton("New Project")
+            button.clicked.connect(self._new_project)
+            row.addWidget(button)
+        if project.can_save:
+            button = QPushButton("Save Project")
+            button.clicked.connect(self._save_project)
             row.addWidget(button)
         layout.addLayout(row)
 
@@ -146,6 +150,16 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
             button.setChecked(step.current)
             button.clicked.connect(lambda _checked=False, i=index: self._activate(i))
             rail_layout.addWidget(button)
+        for instruction in screen.instructions:
+            label = QLabel(instruction)
+            label.setWordWrap(True)
+            label.setObjectName("MutedText")
+            rail_layout.addWidget(label)
+        if screen.notice is not None:
+            notice = QLabel(screen.notice.message)
+            notice.setWordWrap(True)
+            notice.setObjectName("MutedText")
+            rail_layout.addWidget(notice)
         rail_layout.addStretch()
         body.addWidget(rail)
 
@@ -156,25 +170,26 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
         layout = QVBoxLayout(content)
         layout.setSpacing(8)
         layout.addWidget(_title(screen.title))
-        for instruction in screen.instructions:
-            label = QLabel(instruction)
-            label.setWordWrap(True)
-            label.setObjectName("MutedText")
-            layout.addWidget(label)
-        self._render_buttons(layout, screen)
-        self._render_fields(layout, screen.fields)
+        self._render_buttons(layout, screen.action_box)
+        self._render_fields(layout, screen.settings.fields)
         for surface in screen.surfaces:
             self._render_surface(layout, surface)
+        self._render_results(layout, screen.results)
         layout.addWidget(_title("Action Log"))
-        for line in self._log_lines[-8:]:
+        for line in screen.log:
             layout.addWidget(QLabel(line))
         layout.addStretch()
         scroll.setWidget(content)
         body.addWidget(scroll, 1)
 
-    def _render_buttons(self, layout: QVBoxLayout, screen: ScreenModel) -> None:
+    def _render_buttons(self, layout: QVBoxLayout, action_box: ActionBoxVM) -> None:
+        progress = QProgressBar()
+        progress.setRange(0, 100)
+        progress.setValue(int(action_box.progress * 100))
+        progress.setTextVisible(False)
+        layout.addWidget(progress)
         row = QHBoxLayout()
-        for button in screen.buttons:
+        for button in action_box.buttons:
             widget = QPushButton(button.label)
             widget.setEnabled(button.enabled)
             widget.clicked.connect(lambda _checked=False, command=button.command: self._handle_command(command))
@@ -200,6 +215,22 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
             preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
             preview.setStyleSheet(f"background:{Theme.BG_RAISED}; border:1px solid {Theme.BORDER_COOL};")
             layout.addWidget(preview)
+
+    def _render_results(self, layout: QVBoxLayout, results: ResultsVM) -> None:
+        layout.addWidget(_title(results.title))
+        if not results.rows:
+            label = QLabel(results.empty_message)
+            label.setObjectName("MutedText")
+            layout.addWidget(label)
+            return
+        columns = list(results.rows[0].keys())
+        table = QTableWidget(len(results.rows), len(columns))
+        table.setHorizontalHeaderLabels([column.title() for column in columns])
+        for row_index, row in enumerate(results.rows):
+            for column_index, column in enumerate(columns):
+                table.setItem(row_index, column_index, QTableWidgetItem(str(row.get(column, ""))))
+        table.resizeColumnsToContents()
+        layout.addWidget(table)
 
     def _field_widget(self, field: FieldVM) -> QWidget:
         value = field.value
@@ -338,6 +369,9 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
             return "Project: none"
         return f"Project: {self.api.session.project_id}.admetp"
 
+    def project_label(self) -> str:
+        return self._project_text()
+
     def _sync_project_badge(self) -> None:
         if self.project_badge is not None:
             self.project_badge.setText(self._project_text())
@@ -351,39 +385,6 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
 
     def _append_log(self, message: str) -> None:
         self._log_lines.append(message)
-
-    def _collapsed_params(self, stage: Stage, full_params: list[Param]) -> list[Param]:
-        if stage.id in {"corrections"}:
-            return self._correction_primary_params(full_params)
-        if len(full_params) > 6:
-            return full_params[:6]
-        return full_params
-
-    def _ordered_params(self, stage: Stage, params: list[Param]) -> list[Param]:
-        if stage.id != "corrections":
-            return params
-        primary = self._correction_primary_params(params)
-        secondary = self._correction_secondary_params(params)
-        ordered_names = {param.name for param in (*primary, *secondary)}
-        return [*primary, *secondary, *(param for param in params if param.name not in ordered_names)]
-
-    def _correction_primary_params(self, params: list[Param]) -> list[Param]:
-        by_name = {param.name: param for param in params}
-        return [
-            by_name[name]
-            for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
-            for name in (f"{prefix}_calibration", f"{prefix}_scale")
-            if name in by_name
-        ]
-
-    def _correction_secondary_params(self, params: list[Param]) -> list[Param]:
-        by_name = {param.name: param for param in params}
-        return [
-            by_name[name]
-            for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
-            for name in (f"{prefix}_offset", f"{prefix}_quadratic")
-            if name in by_name
-        ]
 
 def _title(text: str) -> QLabel:
     label = QLabel(text)
