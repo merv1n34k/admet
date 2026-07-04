@@ -1210,10 +1210,11 @@ class AnalyzeWorkflowView:
         source = selected.source_path if selected is not None else self.source_path
         start = Path(source).parent if source else self._project_path().parent
         self._open_path_browser(
-            title="Select source",
+            title="Add sources",
             start=start,
             mode="source",
-            row_uid=selected.uid if selected is not None else None,
+            row_uid=None,
+            multi=True,
         )
 
     def _browse_matrix_source(self, event: Any) -> None:
@@ -1230,22 +1231,40 @@ class AnalyzeWorkflowView:
         start: Path,
         mode: str,
         row_uid: str | None,
+        multi: bool = False,
     ) -> None:
         from nicegui import ui
 
         state = {"path": _existing_dir(start)}
+        added: set[str] = set()
         dialog = ui.dialog().classes("browser-dialog")
         with dialog, ui.card().classes("browser-card"):
             header = ui.label(title).classes("section-title")
             path_label = ui.label(str(state["path"])).classes("browser-path")
             rows = ui.column().classes("browser-list w-full gap-1")
-            with ui.row().classes("w-full gap-2 justify-end"):
+            with ui.row().classes("w-full gap-2 justify-end items-center"):
+                status = ui.label("").classes("muted text-xs mr-auto")
                 if mode == "source":
                     ui.button(
-                        "Use This Folder",
-                        on_click=lambda: self._select_browser_path(state["path"], mode, row_uid, dialog),
+                        "Add This Folder" if multi else "Use This Folder",
+                        on_click=lambda: choose(state["path"]),
                     ).props("dense no-caps outline")
-                ui.button("Cancel", on_click=dialog.close).props("dense no-caps outline")
+                ui.button("Done" if multi else "Cancel", on_click=lambda: finish()).props("dense no-caps outline")
+
+        def choose(path: Path) -> None:
+            if not multi:
+                self._select_browser_path(path, mode, row_uid, dialog)
+                return
+            if self._append_source(Path(path)):
+                added.add(str(Path(path).expanduser().resolve()))
+                status.set_text(f"{len(added)} added")
+                render_entries()
+
+        def finish() -> None:
+            dialog.close()
+            if multi and added:
+                self._notify(f"added {len(added)} source(s).", "success")
+                self._refresh()
 
         def render_entries() -> None:
             current = state["path"]
@@ -1261,16 +1280,22 @@ class AnalyzeWorkflowView:
                 if not entries:
                     ui.label("No matching entries.").classes("muted text-xs")
                 for entry in entries:
-                    label = entry.name + ("/" if entry.is_dir() else "")
+                    is_added = str(entry.expanduser().resolve()) in added
                     if entry.is_dir():
-                        ui.button(label, on_click=lambda path=entry: navigate(path)).props(
+                        with ui.row().classes("browser-row w-full items-center no-wrap gap-1"):
+                            ui.button(entry.name + "/", on_click=lambda path=entry: navigate(path)).props(
+                                "dense no-caps flat"
+                            ).classes("grow justify-start")
+                            if multi and mode == "source":
+                                ui.button(
+                                    "✓" if is_added else "Add",
+                                    on_click=lambda path=entry: choose(path),
+                                ).props("dense no-caps outline")
+                    else:
+                        label = ("✓ " if is_added else "") + entry.name
+                        ui.button(label, on_click=lambda path=entry: choose(path)).props(
                             "dense no-caps flat"
                         ).classes("browser-row")
-                    else:
-                        ui.button(
-                            label,
-                            on_click=lambda path=entry: self._select_browser_path(path, mode, row_uid, dialog),
-                        ).props("dense no-caps flat").classes("browser-row")
 
         def navigate(path: Path) -> None:
             state["path"] = _existing_dir(path)
@@ -1335,6 +1360,29 @@ class AnalyzeWorkflowView:
         self._notify(f"source ready: {source.name}", "success")
         self._log(f"matrix: source {source} -> {engine}")
         self._refresh()
+
+    def _append_source(self, source: Path) -> bool:
+        source = source.expanduser().resolve()
+        try:
+            engine = infer_engine(source)
+        except Exception as exc:
+            self._notify(f"unsupported source: {exc}", "warning")
+            return False
+        if any(Path(item.source_path) == source for item in self.matrix):
+            return False
+        self.matrix.append(
+            MatrixRow(
+                uid=_uid(),
+                project_path=str(session_path(self.project_path)),
+                source_path=str(source),
+                engine=engine,
+                sample_id=source.stem or f"sample_{len(self.matrix) + 1}",
+            )
+        )
+        self.stage_progress["import"] = 100
+        self._mark_stage("import", StageStatus.COMPLETE)
+        self._log(f"matrix: appended {source} -> {engine}")
+        return True
 
     def _action_specs(self, stage_id: str) -> list[dict[str, Any]]:
         if stage_id == "import":
