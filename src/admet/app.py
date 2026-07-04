@@ -73,7 +73,7 @@ def run_analyze_ui(port: int, *, native: bool = False) -> None:
 
 
 def run_control_ui() -> None:
-    from admet.ui.control import run_control_app
+    from admet.ui.qt_app import run_control_app
 
     api = create_engine_api("acquisition")
     raise SystemExit(run_control_app(api))
