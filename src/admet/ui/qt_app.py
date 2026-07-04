@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -34,6 +34,7 @@ from admet.ui import theme_qt as ui
 from admet.ui.control_runtime import ControlSessionMixin
 from admet.ui.presenter import ActionBoxVM, FieldVM, ResultsVM, ScreenModel, SurfaceVM, build_screen
 from admet.ui.project import create_project, save_project, suggested_project_path
+from admet.ui.surfaces import render_qt_surface
 from admet.ui.theme_qt import Theme
 from admet.ui.window import WindowController
 from admet.workflows import Stage, StageStatus, create_control_workflow
@@ -209,12 +210,7 @@ class ControlWindow(ControlSessionMixin, QMainWindow):
     def _render_surface(self, layout: QVBoxLayout, surface: SurfaceVM) -> None:
         layout.addWidget(_title(surface.title or surface.kind))
         self._render_fields(layout, surface.fields)
-        if surface.kind == "camera":
-            preview = QLabel("Camera preview surface")
-            preview.setMinimumHeight(260)
-            preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            preview.setStyleSheet(f"background:{Theme.BG_RAISED}; border:1px solid {Theme.BORDER_COOL};")
-            layout.addWidget(preview)
+        render_qt_surface(layout, surface, self)
 
     def _render_results(self, layout: QVBoxLayout, results: ResultsVM) -> None:
         layout.addWidget(_title(results.title))

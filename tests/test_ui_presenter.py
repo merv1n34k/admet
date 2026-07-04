@@ -4,6 +4,7 @@ import unittest
 
 from admet.core.engine import Param
 from admet.ui.presenter import build_screen
+from admet.ui.surfaces import NICEGUI_SURFACES, QT_SURFACES
 from admet.workflows import Stage, StageControl, StageStatus, Workflow, WorkflowState
 from admet.workflows.analyze import create_analyze_workflow
 from admet.workflows.control import create_control_workflow
@@ -107,6 +108,17 @@ class PresenterTests(unittest.TestCase):
                 "beads_m_quadratic",
             ],
         )
+
+    def test_all_declared_surface_kinds_have_renderers(self):
+        kinds = {
+            surface.kind
+            for workflow in (create_analyze_workflow(), create_control_workflow())
+            for stage in workflow.stages
+            for surface in stage.surfaces
+        }
+
+        self.assertLessEqual(kinds, set(NICEGUI_SURFACES))
+        self.assertLessEqual(kinds, set(QT_SURFACES))
 
 
 def _state_for(workflow: Workflow, index: int) -> WorkflowState:
