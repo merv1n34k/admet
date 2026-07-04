@@ -692,6 +692,8 @@ class AnalyzeWorkflowView:
                 row_key="uid",
             ).classes("slim-table matrix-table w-full").props("dense flat hide-bottom")
             self._register_table(f"{engine}_matrix", table)
+            if engine == "opencv":
+                self._wire_opencv_matrix(table)
             table.on("rowClick", self._select_row_event)
             if not rows:
                 ui.label(f"No active {engine} files.").classes("muted text-xs")
@@ -754,42 +756,40 @@ class AnalyzeWorkflowView:
                 _preview_frame_index(target),
             )
             preview_ok = not bool(preview["error"])
-            with ui.element("div").classes("media-editor-grid w-full"):
-                with ui.column().classes("gap-2"):
-                    self._refs["opencv_preview"] = ui.html(self._opencv_preview_html(target, preview)).classes("w-full")
-                with ui.column().classes("gap-2"):
-                    ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
-                    ui.label(_compact_path(target.source_path)).classes("muted text-xs path-label").props(
-                        f'title="{html.escape(target.source_path)}"'
-                    )
-                    with ui.row().classes("calibration-row w-full gap-2"):
-                        self._number_editor(
-                            target,
-                            "microns_per_pixel",
-                            "Microns / px",
-                            float(self.settings["opencv_microns_per_pixel"]),
-                            step=0.01,
-                        )
-                        self._number_editor(
-                            target,
-                            "fps",
-                            "FPS",
-                            int(self.settings["opencv_fps"]),
-                            step=1,
-                        )
-                    with ui.element("div").classes("editor-grid"):
-                        self._slider_editor(target, "preview_frame", "Preview frame", 0, frame_max, 1, 0)
-                        self._slider_editor(target, "start_frame", "Start frame", 0, frame_max, 1, 0)
-                        self._slider_editor(target, "end_frame", "End frame", 0, frame_max + 1, 1, frame_max)
-                    with ui.element("div").classes("editor-grid editor-grid-roi"):
-                        if not preview_ok:
-                            ui.label("Preview unavailable. Relocate the source or use the arm64 analyze environment before editing crop/frame values.").classes(
-                                "editor-note"
-                            )
-                        self._slider_editor(target, "roi_x", "ROI X", 0, width_max, 1, 0)
-                        self._slider_editor(target, "roi_y", "ROI Y", 0, height_max, 1, 0)
-                        self._slider_editor(target, "roi_width", "ROI W", 0, width_max, 1, 0)
-                        self._slider_editor(target, "roi_height", "ROI H", 0, height_max, 1, 0)
+            ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
+            ui.label(_compact_path(target.source_path)).classes("muted text-xs path-label").props(
+                f'title="{html.escape(target.source_path)}"'
+            )
+            self._refs["opencv_preview"] = ui.html(self._opencv_preview_html(target, preview)).classes(
+                "opencv-preview w-full"
+            )
+            with ui.row().classes("calibration-row w-full gap-2"):
+                self._number_editor(
+                    target,
+                    "microns_per_pixel",
+                    "Microns / px",
+                    float(self.settings["opencv_microns_per_pixel"]),
+                    step=0.01,
+                )
+                self._number_editor(
+                    target,
+                    "fps",
+                    "FPS",
+                    int(self.settings["opencv_fps"]),
+                    step=1,
+                )
+            if not preview_ok:
+                ui.label("Preview unavailable. Relocate the source or use the arm64 analyze environment before editing crop/frame values.").classes(
+                    "editor-note"
+                )
+            with ui.column().classes("editor-sliders w-full gap-3"):
+                self._slider_editor(target, "preview_frame", "Preview frame", 0, frame_max, 1, 0)
+                self._slider_editor(target, "start_frame", "Start frame", 0, frame_max, 1, 0)
+                self._slider_editor(target, "end_frame", "End frame", 0, frame_max + 1, 1, frame_max)
+                self._slider_editor(target, "roi_x", "ROI X", 0, width_max, 1, 0)
+                self._slider_editor(target, "roi_y", "ROI Y", 0, height_max, 1, 0)
+                self._slider_editor(target, "roi_width", "ROI W", 0, width_max, 1, 0)
+                self._slider_editor(target, "roi_height", "ROI H", 0, height_max, 1, 0)
 
     def _slider_editor(
         self,
@@ -1643,23 +1643,36 @@ class AnalyzeWorkflowView:
         }
 
     def _opencv_matrix_row(self, row: MatrixRow) -> dict[str, Any]:
-        microns = _row_float(row, "microns_per_pixel", float(self.settings["opencv_microns_per_pixel"]))
-        fps = _row_float(row, "fps", float(self.settings["opencv_fps"]))
-        roi_w = _row_int(row, "roi_width", 0)
-        roi_h = _row_int(row, "roi_height", 0)
-        roi = f'{_row_int(row, "roi_x", 0)},{_row_int(row, "roi_y", 0)} · {roi_w}×{roi_h}' if (roi_w or roi_h) else "full"
-        end = _row_int(row, "end_frame", 0)
         return {
             "uid": row.uid,
             "selected": "●" if row.uid == self.selected_uid else "",
             "sample_id": row.sample_id,
             "source": Path(row.source_path).name or row.source_path,
-            "microns": f"{microns:.2f}",
-            "fps": f"{fps:.0f}" if fps else "auto",
+            "microns": _row_float(row, "microns_per_pixel", float(self.settings["opencv_microns_per_pixel"])),
+            "fps": _row_float(row, "fps", float(self.settings["opencv_fps"])),
             "start": _row_int(row, "start_frame", 0),
-            "end": end or "end",
-            "roi": roi,
+            "end": _row_int(row, "end_frame", 0),
+            "x": _row_int(row, "roi_x", 0),
+            "y": _row_int(row, "roi_y", 0),
+            "w": _row_int(row, "roi_width", 0),
+            "h": _row_int(row, "roi_height", 0),
         }
+
+    def _wire_opencv_matrix(self, table: Any) -> None:
+        table.add_slot(
+            "body-cell-sample_id",
+            """
+            <q-td :props="props">
+              <q-input dense outlined v-model="props.row.sample_id"
+                @click.stop @mousedown.stop
+                @blur="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'sample_id', value: props.row.sample_id})"
+                @keyup.enter="$event.target.blur()" />
+            </q-td>
+            """,
+        )
+        for col, setting in _OPENCV_EDIT_FIELDS:
+            table.add_slot(f"body-cell-{col}", _numeric_cell_slot(col, setting))
+        table.on("matrix-change", self._handle_matrix_change)
 
     def _targets(self, engine: str | None = None) -> list[MatrixRow]:
         return [
@@ -1690,9 +1703,16 @@ class AnalyzeWorkflowView:
         field = str(payload.get("field") or "")
         value = payload.get("value")
         row = next((item for item in self.matrix if item.uid == uid), None)
-        if row is None or field != "sample_id":
+        if row is None:
             return
-        row.sample_id = str(value or "")
+        if field == "sample_id":
+            row.sample_id = str(value or "")
+            return
+        if field in _OPENCV_SETTING_FIELDS:
+            number = _numeric(value)
+            if number is None:
+                number = 0
+            row.settings[field] = float(number) if field in _OPENCV_FLOAT_FIELDS else int(number)
 
     def _set_setting(self, key: str, value: Any) -> None:
         self.settings[key] = value
@@ -1792,6 +1812,21 @@ def _engine_matrix_columns() -> list[dict[str, Any]]:
     ]
 
 
+_OPENCV_EDIT_FIELDS = (
+    ("microns", "microns_per_pixel"),
+    ("fps", "fps"),
+    ("start", "start_frame"),
+    ("end", "end_frame"),
+    ("x", "roi_x"),
+    ("y", "roi_y"),
+    ("w", "roi_width"),
+    ("h", "roi_height"),
+)
+
+_OPENCV_FLOAT_FIELDS = {"microns_per_pixel", "fps"}
+_OPENCV_SETTING_FIELDS = {setting for _, setting in _OPENCV_EDIT_FIELDS}
+
+
 def _opencv_matrix_columns() -> list[dict[str, Any]]:
     return [
         {"name": "selected", "label": "", "field": "selected", "align": "left"},
@@ -1801,8 +1836,23 @@ def _opencv_matrix_columns() -> list[dict[str, Any]]:
         {"name": "fps", "label": "FPS", "field": "fps", "align": "right"},
         {"name": "start", "label": "Start", "field": "start", "align": "right"},
         {"name": "end", "label": "End", "field": "end", "align": "right"},
-        {"name": "roi", "label": "ROI", "field": "roi", "align": "left"},
+        {"name": "x", "label": "X", "field": "x", "align": "right"},
+        {"name": "y", "label": "Y", "field": "y", "align": "right"},
+        {"name": "w", "label": "W", "field": "w", "align": "right"},
+        {"name": "h", "label": "H", "field": "h", "align": "right"},
     ]
+
+
+def _numeric_cell_slot(col: str, field: str) -> str:
+    return f"""
+    <q-td :props="props">
+      <q-input dense outlined type="number" input-class="matrix-num"
+        v-model.number="props.row.{col}"
+        @click.stop @mousedown.stop
+        @blur="$parent.$emit('matrix-change', {{uid: props.row.uid, field: '{field}', value: props.row.{col}}})"
+        @keyup.enter="$event.target.blur()" />
+    </q-td>
+    """
 
 
 def _project_ref_label(ref: ProjectRef) -> str:
@@ -2523,6 +2573,13 @@ def _style() -> str:
       border: 1px solid #d7e2ea;
       background: #16212b;
     }
+    .opencv-preview {
+      display: block;
+      width: 100%;
+      max-width: 760px;
+    }
+    .editor-sliders { width: 100%; }
+    .editor-sliders .slider-field { width: 100%; }
     .admet-viewer-placeholder {
       background:
         radial-gradient(circle at 18% 34%, rgba(214, 223, 230, 0.78) 0 24px, transparent 25px),
