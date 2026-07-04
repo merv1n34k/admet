@@ -643,20 +643,6 @@ class AnalyzeWorkflowView:
             </q-td>
             """,
         )
-        table.add_slot(
-            "body-cell-cache",
-            """
-            <q-td :props="props">
-              <q-select dense outlined emit-value map-options :options="[
-                {label: 'Use', value: 'use'},
-                {label: 'Discard', value: 'discard'},
-                {label: 'Skip', value: 'skip'}
-              ]" v-model="props.row.cache"
-                @click.stop @mousedown.stop
-                @update:model-value="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'cache_policy', value: props.row.cache})" />
-            </q-td>
-            """,
-        )
         table.on("matrix-change", self._handle_matrix_change)
         table.on("browse-source", self._browse_matrix_source)
 
@@ -1641,7 +1627,6 @@ class AnalyzeWorkflowView:
             "source_path": row.source_path,
             "engine": row.engine,
             "sample_id": row.sample_id,
-            "cache": row.cache_policy,
             "active": row.active,
         }
 
@@ -1653,7 +1638,6 @@ class AnalyzeWorkflowView:
             "source": Path(row.source_path).name or row.source_path,
             "source_path": row.source_path,
             "sample_id": row.sample_id,
-            "cache": row.cache_policy,
         }
 
     def _targets(self, engine: str | None = None) -> list[MatrixRow]:
@@ -1685,13 +1669,9 @@ class AnalyzeWorkflowView:
         field = str(payload.get("field") or "")
         value = payload.get("value")
         row = next((item for item in self.matrix if item.uid == uid), None)
-        if row is None or field not in {"sample_id", "cache_policy"}:
+        if row is None or field != "sample_id":
             return
-        if field == "cache_policy":
-            value = str(value or "use")
-        else:
-            value = str(value or "")
-        setattr(row, field, value)
+        row.sample_id = str(value or "")
 
     def _set_setting(self, key: str, value: Any) -> None:
         self.settings[key] = value
@@ -1779,7 +1759,6 @@ def _matrix_columns() -> list[dict[str, Any]]:
         {"name": "source", "label": "Source", "field": "source", "align": "left"},
         {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
         {"name": "sample_id", "label": "Sample ID", "field": "sample_id", "align": "left"},
-        {"name": "cache", "label": "Cache", "field": "cache", "align": "left"},
     ]
 
 
@@ -1789,7 +1768,6 @@ def _engine_matrix_columns() -> list[dict[str, Any]]:
         {"name": "project", "label": "Project", "field": "project", "align": "left"},
         {"name": "source", "label": "Source", "field": "source", "align": "left"},
         {"name": "sample_id", "label": "Sample ID", "field": "sample_id", "align": "left"},
-        {"name": "cache", "label": "Cache", "field": "cache", "align": "left"},
     ]
 
 
