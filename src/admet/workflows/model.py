@@ -32,6 +32,12 @@ StageControl = StageAction
 
 
 @dataclass(frozen=True)
+class StageInstruction:
+    text: str
+    guard: str = ""
+
+
+@dataclass(frozen=True)
 class StageSurface:
     kind: str
     title: str = ""
@@ -79,6 +85,7 @@ class Stage:
     confirmation_required: bool = False
     description: str = ""
     instructions: tuple[str, ...] = ()
+    instruction_cards: tuple[StageInstruction, ...] = ()
     settings: ParamSchema = field(default_factory=ParamSchema)
     settings_panel: SettingsSpec | None = None
     actions: tuple[StageAction, ...] = ()
@@ -87,6 +94,7 @@ class Stage:
     results: ResultsSpec = field(default_factory=ResultsSpec)
     log: LogSpec = field(default_factory=LogSpec)
     surfaces: tuple[StageSurface, ...] = ()
+    features: tuple[str, ...] = ()
     show_settings: bool = True
     settings_options: dict[str, Any] = field(default_factory=dict)
     pipeline: bool = False
@@ -103,6 +111,12 @@ class Stage:
             object.__setattr__(self, "settings", self.settings_panel.schema)
         if self.editor is not None and not self.surfaces:
             object.__setattr__(self, "surfaces", self.editor.surfaces)
+        if self.instructions and not self.instruction_cards:
+            object.__setattr__(
+                self,
+                "instruction_cards",
+                tuple(StageInstruction(text) for text in self.instructions),
+            )
 
 
 @dataclass(frozen=True)

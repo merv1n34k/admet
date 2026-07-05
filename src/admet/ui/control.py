@@ -120,20 +120,6 @@ CAMERA_AUTO_APPLY_PARAMS = {
 PREVIEW_MIN_HEIGHT = 280
 PREVIEW_MAX_HEIGHT = 520
 
-CAMERA_MAIN_SETTINGS = (
-    "camera_width",
-    "camera_height",
-    "camera_exposure_us",
-    "camera_gain",
-    "camera_pixel_format",
-    "camera_readout",
-)
-
-FLUIDICS_MAIN_SETTINGS = (
-    "simulated",
-)
-
-PIPELINE_STAGE_IDS = {"priming", "runs", "wash"}
 LEFT_RAIL_WIDTH = 246
 _VIDEO_TABLE_COLUMNS = (
     ("video", "Video"),
@@ -588,7 +574,7 @@ class ControlWindow(QMainWindow):
             self._acknowledge_camera_frame()
         stage = self.workflow.current_stage(self.workflow_state)
         self._refresh_runtime_state()
-        if stage.id == "fluigent":
+        if "fluidics_preflight" in stage.features:
             self._ensure_fluigent_availability()
         previous_page = self.current_stage_page
         page = self._activate_stage_page(stage)
@@ -677,7 +663,7 @@ class ControlWindow(QMainWindow):
         action_layout.setContentsMargins(0, 0, 0, 0)
         action_layout.setSpacing(0)
 
-        if stage.id in PIPELINE_STAGE_IDS:
+        if stage.pipeline:
             action_layout.addWidget(self._pipeline_status_widget(stage))
 
         command_row = QWidget()
@@ -994,50 +980,15 @@ class ControlWindow(QMainWindow):
     def _main_settings(self, stage: Stage) -> list[Param]:
         visible_names = {param.name for param in self._stage_params(stage)}
         names: list[str] = []
-        if self._stage_uses_camera(stage):
-            names.extend(name for name in CAMERA_MAIN_SETTINGS if name in visible_names)
-        if stage.id == "priming":
-            names.extend(
-                name
-                for name in (
-                    "prime_oil_volume_ul",
-                    "prime_aqueous_volume_ul",
-                )
-                if name in visible_names and name not in names
-            )
-        elif stage.id == "runs":
-            names.extend(
-                name
-                for name in (
-                    "set_count",
-                    "replicate_count",
-                    "run_volume_ul",
-                    "run_aqueous_total_flow_ul_min",
-                )
-                if name in visible_names and name not in names
-            )
-        elif stage.id == "wash":
-            names.extend(
-                name
-                for name in (
-                    "wash_oil_flow_ul_min",
-                    "wash_aqueous_total_flow_ul_min",
-                    "wash_oil_volume_ul",
-                    "wash_pressure_mbar",
-                    "wash_pressure_duration_s",
-                )
-                if name in visible_names and name not in names
-            )
-        if self._stage_uses_fluidics(stage):
-            names.extend(
-                name
-                for name in FLUIDICS_MAIN_SETTINGS
-                if name in visible_names and name not in names
-            )
+        names.extend(
+            name
+            for name in stage.settings_options.get("main", ())
+            if name in visible_names and name not in names
+        )
         return [self._param_by_name(name) for name in names]
 
     def _collapsed_params(self, stage: Stage, full_params: list[Param]) -> list[Param]:
-        if stage.id == "corrections":
+        if "primary" in stage.settings_options:
             return self._correction_primary_params(full_params)
         params = self._main_settings(stage) or full_params
         if self._param_row_count(params) > 3:
@@ -1045,7 +996,7 @@ class ControlWindow(QMainWindow):
         return params
 
     def _ordered_params(self, stage: Stage, params: list[Param]) -> list[Param]:
-        if stage.id != "corrections":
+        if "primary" not in stage.settings_options and "secondary" not in stage.settings_options:
             return params
         primary = self._correction_primary_params(params)
         secondary = self._correction_secondary_params(params)
@@ -1159,8 +1110,10 @@ class ControlWindow(QMainWindow):
         title.setObjectName("FieldLabel")
         header_layout.addWidget(title)
         header_layout.addStretch()
-        if stage.id == "corrections":
-            apply_button = ui.button("Apply All Corrections", variant="primary", size="inline")
+        header_action = stage.settings_options.get("header_action")
+        if header_action:
+            action = next((item for item in stage.actions if item.action == header_action), None)
+            apply_button = ui.button(action.label if action is not None else "Apply", variant="primary", size="inline")
             apply_button.clicked.connect(self._apply_all_corrections)
             apply_button.setEnabled(self._fluigent_ready())
             header_layout.addWidget(apply_button)
@@ -1233,8 +1186,9 @@ class ControlWindow(QMainWindow):
                 self.workflow_state,
                 confirmed=confirmed,
             )
-            if stage.id == "priming":
-                self._notify("Priming complete. Prime the chip before starting test runs.", "warning")
+            completion_message = stage.settings_options.get("completion_message")
+            if completion_message:
+                self._notify(str(completion_message), "warning")
             else:
                 self._notify("Stage complete", "success")
             self._append_log("stage: complete")
@@ -1245,15 +1199,9 @@ class ControlWindow(QMainWindow):
 
     def _auto_complete_ready_stage(self, action: str) -> bool:
         stage = self.workflow.current_stage(self.workflow_state)
-        if stage.id == "scene" and action in {
-            "connect_camera",
-            "start_camera_live",
-            "apply_camera_settings",
-        }:
-            if self.runtime_state["camera_live"]:
-                self._complete_current_stage()
-                return True
-        if stage.id == "fluigent" and action == "connect_fluidics" and self.runtime_state["fluidics"]:
+        actions = set(stage.settings_options.get("auto_complete_actions", ()))
+        guard = str(stage.settings_options.get("auto_complete_guard") or "")
+        if action in actions and self._guard_enabled(guard):
             self._complete_current_stage()
             return True
         return False
@@ -1389,13 +1337,13 @@ class ControlWindow(QMainWindow):
     def _toggle_pipeline(self, stage: Stage) -> None:
         if self._pipeline_active():
             self._run("stop_protocol", refresh=False)
-            if stage.id == "runs" and self.last_metadata.get("recording_active"):
+            if stage.completion_gate == "recording_confirmation" and self.last_metadata.get("recording_active"):
                 self._run("stop_recording", refresh=False)
             self._completion_pending = False
             self._render_current_stage()
             return
 
-        if stage.id == "runs":
+        if stage.completion_gate == "recording_confirmation":
             self._runs_completion_confirmed = False
         self._completion_pending = False
         self._run("run_protocol", self._protocol_run_settings(stage), refresh=False)
@@ -1407,7 +1355,7 @@ class ControlWindow(QMainWindow):
         self._latest_pipeline_event = None
         self._clear_pipeline_confirmation()
         self._completion_pending = False
-        if stage.id == "runs":
+        if stage.completion_gate == "recording_confirmation":
             self._control_recording_dir = None
             self._runs_completion_confirmed = False
         if self._run("run_protocol", self._protocol_run_settings(stage), refresh=False) is None:
@@ -1436,7 +1384,7 @@ class ControlWindow(QMainWindow):
             stage = self.workflow.current_stage(self.workflow_state)
         confirmation = self._pending_pipeline_confirmation()
         run_complete_label = _run_complete_label(confirmation)
-        if stage.id == "runs":
+        if stage.completion_gate == "recording_confirmation":
             run_label = _run_start_label(confirmation)
             if run_label and not self.last_metadata.get("recording_active"):
                 if self._run(
@@ -1450,39 +1398,21 @@ class ControlWindow(QMainWindow):
         if self._run("confirm_protocol", refresh=False, notify_success=False) is None:
             self._refresh_action_box(stage)
             return
-        if stage.id == "runs" and run_complete_label:
+        if stage.completion_gate == "recording_confirmation" and run_complete_label:
             self._runs_completion_confirmed = True
         self._clear_pipeline_confirmation()
         self._dismiss_notification()
-        if stage.id in PIPELINE_STAGE_IDS:
+        if stage.pipeline:
             self._refresh_action_box(stage)
 
     def _protocol_run_settings(self, stage: Stage) -> dict[str, Any]:
-        if stage.id == "runs":
-            return {
-                "pipeline_name": "Drop-Seq",
-                "set_count": self.values.get("set_count"),
-                "replicate_count": self.values.get("replicate_count"),
-                "run_volume_ul": self.values.get("run_volume_ul"),
-                "run_aqueous_total_flow_ul_min": self.values.get("run_aqueous_total_flow_ul_min"),
-                "tick_s": self.values.get("tick_s"),
-            }
-        if stage.id == "wash":
-            return {
-                "pipeline_name": "Wash",
-                "wash_oil_flow_ul_min": self.values.get("wash_oil_flow_ul_min"),
-                "wash_aqueous_total_flow_ul_min": self.values.get("wash_aqueous_total_flow_ul_min"),
-                "wash_oil_volume_ul": self.values.get("wash_oil_volume_ul"),
-                "wash_pressure_mbar": self.values.get("wash_pressure_mbar"),
-                "wash_pressure_duration_s": self.values.get("wash_pressure_duration_s"),
-                "tick_s": self.values.get("tick_s"),
-            }
-        return {
-            "pipeline_name": "Priming",
-            "prime_oil_volume_ul": self.values.get("prime_oil_volume_ul"),
-            "prime_aqueous_volume_ul": self.values.get("prime_aqueous_volume_ul"),
+        settings = {
+            "pipeline_name": stage.settings_options.get("pipeline_name", self.values.get("pipeline_name")),
             "tick_s": self.values.get("tick_s"),
         }
+        for name in stage.settings_options.get("main", ()):
+            settings[name] = self.values.get(name)
+        return settings
 
     def _recording_settings(self, run_label: str) -> dict[str, Any]:
         if self.project_path is None:
@@ -1501,7 +1431,7 @@ class ControlWindow(QMainWindow):
             self._render_current_stage()
             return
         stage = self.workflow.current_stage(self.workflow_state)
-        if action == "resume_protocol" and stage.id in PIPELINE_STAGE_IDS:
+        if action == "resume_protocol" and stage.pipeline:
             self._show_pipeline_confirmation_notice(stage, self._latest_pipeline_event)
         self._render_current_stage()
 
@@ -1650,11 +1580,11 @@ class ControlWindow(QMainWindow):
             return
         self._latest_pipeline_event = latest
         stage = self.workflow.current_stage(self.workflow_state)
-        if stage.id in PIPELINE_STAGE_IDS:
+        if stage.pipeline:
             confirmation = str(getattr(latest, "confirmation_message", "") or "").strip()
             if confirmation:
                 self._pipeline_pending_confirmation = confirmation
-                if stage.id == "runs":
+                if stage.completion_gate == "recording_confirmation":
                     self._sync_run_recording_for_confirmation(confirmation)
                 self._show_pipeline_confirmation_notice(stage, latest)
             elif self._pending_pipeline_confirmation():
@@ -1673,11 +1603,11 @@ class ControlWindow(QMainWindow):
         self._run("stop_recording", raise_errors=False, refresh=False, notify_success=False)
 
     def _can_complete_completed_pipeline_stage(self, stage: Stage) -> bool:
-        if stage.id not in PIPELINE_STAGE_IDS:
+        if not stage.pipeline:
             return False
         if self.workflow_state.statuses.get(stage.id) is not StageStatus.ACTIVE:
             return False
-        if stage.id == "runs" and not self._runs_completion_confirmed:
+        if stage.completion_gate == "recording_confirmation" and not self._runs_completion_confirmed:
             return False
         return True
 
@@ -1700,7 +1630,7 @@ class ControlWindow(QMainWindow):
         self._clear_pipeline_confirmation()
         self._dismiss_notification()
         self._complete_current_stage()
-        if stage.id == "runs":
+        if stage.completion_gate == "recording_confirmation":
             self._runs_completion_confirmed = False
 
     def _refresh_action_box(self, stage: Stage) -> None:
@@ -1784,7 +1714,7 @@ class ControlWindow(QMainWindow):
             return "error"
         if self._stage_uses_camera(stage) and self._camera_scene_ready():
             return "done"
-        if stage.id == "fluigent" and self._fluigent_ready():
+        if "fluidics_preflight" in stage.features and self._fluigent_ready():
             return "done"
         if status is StageStatus.COMPLETE:
             return "done"
@@ -1819,7 +1749,7 @@ class ControlWindow(QMainWindow):
             if self.last_metadata.get("camera_count"):
                 return 30.0
             return 0.0
-        if stage.id in PIPELINE_STAGE_IDS:
+        if stage.pipeline:
             return self._pipeline_progress_percent()
         if stage.action and self.last_metadata.get("action") == stage.action:
             return 100.0
@@ -1840,10 +1770,10 @@ class ControlWindow(QMainWindow):
         return min(99.0, max(0.0, (current + step_progress) / total * 100.0))
 
     def _stage_uses_camera(self, stage: Stage) -> bool:
-        return any(surface.kind == "camera" for surface in stage.surfaces)
+        return "camera" in stage.features
 
     def _stage_uses_fluidics(self, stage: Stage) -> bool:
-        return stage.id in {"fluigent", "corrections", "priming", "runs", "wash"}
+        return "fluidics" in stage.features
 
     def _guard_enabled(self, guard: str) -> bool:
         if not guard:
@@ -2000,7 +1930,7 @@ class ControlWindow(QMainWindow):
             self._render_current_stage()
             return
         stage = self.workflow.current_stage(self.workflow_state)
-        if stage.id == "corrections":
+        if any(action.action == "apply_corrections" and action.completes for action in stage.actions):
             self._complete_current_stage()
             return
         self._render_current_stage()
@@ -2352,32 +2282,13 @@ class ControlWindow(QMainWindow):
         self._show_instruction_card(self._stage_instruction(stage))
 
     def _stage_instruction(self, stage: Stage) -> str:
-        if stage.id == "scene":
-            if not self.runtime_state["project"]:
-                return "Create or select an admet project, then refresh and connect the camera."
-            if not self.runtime_state["camera"]:
-                return "Refresh cameras, choose the camera in Settings, then connect it."
-            if not self.runtime_state["camera_live"]:
-                return "Start Live to preview the connected camera and apply camera settings."
-            return "Camera live preview is active. Adjust camera settings or move to Fluigent."
-        if stage.id == "fluigent":
-            if not self._fluigent_ready():
-                return "Connect Fluigent. Use simulated mode only when no instrument is attached."
-            return "Fluigent is connected. Review channel readings and continue when ready."
-        if stage.id == "corrections":
-            return "Review the correction matrix, then apply all corrections."
-        if stage.id == "priming":
-            return "Start priming, follow each protocol prompt, and press Proceed when the physical step is complete."
-        if stage.id == "runs":
-            if not self._fluigent_ready():
-                return "Connect Fluigent before starting test runs."
-            return "Set run count, Oil L volume, and total aqueous flow, then start test runs. Camera recording starts automatically when live preview is active."
-        if stage.id == "wash":
-            return "Set wash volume and pressure duration, then follow each protocol prompt until shutdown is complete."
+        for instruction in stage.instruction_cards:
+            if not instruction.guard or self._guard_enabled(instruction.guard):
+                return instruction.text
         return stage.description or stage.label
 
     def _default_controls(self, stage: Stage) -> tuple[StageControl, ...]:
-        if stage.id == "corrections" or stage.id in PIPELINE_STAGE_IDS:
+        if stage.pipeline:
             return ()
         controls: list[StageControl] = []
         if stage.action:
@@ -3412,13 +3323,7 @@ def _short_control_label(label: str) -> str:
 
 
 def _pipeline_start_label(stage: Stage) -> str:
-    if stage.id == "priming":
-        return "Run Priming"
-    if stage.id == "runs":
-        return "Start Runs"
-    if stage.id == "wash":
-        return "Run Wash"
-    return "Start"
+    return str(stage.settings_options.get("pipeline_label") or "Start")
 
 
 def _run_start_label(message: str) -> str:

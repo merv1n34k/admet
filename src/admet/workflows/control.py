@@ -10,7 +10,7 @@ from admet.engines.acquisition.settings import (
 )
 from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNELS
 
-from .model import EditorSpec, ResultsSpec, Stage, StageAction, StageSurface, Workflow
+from .model import EditorSpec, ResultsSpec, Stage, StageAction, StageInstruction, StageSurface, Workflow
 
 
 CAMERA_SURFACE_OPTIONS = {
@@ -99,6 +99,33 @@ CONTROL_RESULTS = ResultsSpec(
     options={"columns": ("label", "video", "fluidics", "fps", "dimensions", "created")},
 )
 
+CAMERA_MAIN_SETTINGS = (
+    "camera_width",
+    "camera_height",
+    "camera_exposure_us",
+    "camera_gain",
+    "camera_pixel_format",
+    "camera_readout",
+)
+FLUIDICS_MAIN_SETTINGS = ("simulated",)
+PRIMING_MAIN_SETTINGS = (
+    "prime_oil_volume_ul",
+    "prime_aqueous_volume_ul",
+)
+RUN_MAIN_SETTINGS = (
+    "set_count",
+    "replicate_count",
+    "run_volume_ul",
+    "run_aqueous_total_flow_ul_min",
+)
+WASH_MAIN_SETTINGS = (
+    "wash_oil_flow_ul_min",
+    "wash_aqueous_total_flow_ul_min",
+    "wash_oil_volume_ul",
+    "wash_pressure_mbar",
+    "wash_pressure_duration_s",
+)
+
 
 CORRECTION_PRIMARY_PARAMS = tuple(
     name
@@ -124,6 +151,21 @@ def create_control_workflow() -> Workflow:
                 instructions=(
                     "Create or load an ADMET project before connecting the camera.",
                     "Select a camera in the main editor, connect it, and turn live preview on.",
+                ),
+                instruction_cards=(
+                    StageInstruction(
+                        "Create or select an admet project, then refresh and connect the camera.",
+                        "not project_ready",
+                    ),
+                    StageInstruction(
+                        "Refresh cameras, choose the camera in Settings, then connect it.",
+                        "project_ready and not camera_connected",
+                    ),
+                    StageInstruction(
+                        "Start Live to preview the connected camera and apply camera settings.",
+                        "camera_connected and not camera_live",
+                    ),
+                    StageInstruction("Camera live preview is active. Adjust camera settings or move to Fluigent."),
                 ),
                 settings=CAMERA_SETTINGS,
                 actions=(
@@ -151,7 +193,17 @@ def create_control_workflow() -> Workflow:
                 ),
                 editor=CONTROL_LIVE_EDITOR,
                 results=CONTROL_RESULTS,
+                features=("camera",),
                 show_settings=False,
+                settings_options={
+                    "main": CAMERA_MAIN_SETTINGS,
+                    "auto_complete_actions": (
+                        "connect_camera",
+                        "start_camera_live",
+                        "apply_camera_settings",
+                    ),
+                    "auto_complete_guard": "camera_live",
+                },
             ),
             Stage(
                 "fluigent",
@@ -161,6 +213,13 @@ def create_control_workflow() -> Workflow:
                 instructions=(
                     "Connect Fluigent once for the project session.",
                     "Simulated mode must be selected before connecting when no device is attached.",
+                ),
+                instruction_cards=(
+                    StageInstruction(
+                        "Connect Fluigent. Use simulated mode only when no instrument is attached.",
+                        "not fluidics_connected",
+                    ),
+                    StageInstruction("Fluigent is connected. Review channel readings and continue when ready."),
                 ),
                 settings=FLUIGENT_SETTINGS,
                 actions=(
@@ -175,6 +234,12 @@ def create_control_workflow() -> Workflow:
                 ),
                 editor=CONTROL_LIVE_EDITOR,
                 results=CONTROL_RESULTS,
+                features=("fluidics", "fluidics_preflight"),
+                settings_options={
+                    "main": FLUIDICS_MAIN_SETTINGS,
+                    "auto_complete_actions": ("connect_fluidics",),
+                    "auto_complete_guard": "fluidics_connected",
+                },
             ),
             Stage(
                 "corrections",
@@ -192,10 +257,12 @@ def create_control_workflow() -> Workflow:
                 ),
                 editor=CONTROL_LIVE_EDITOR,
                 results=CONTROL_RESULTS,
+                features=("fluidics",),
                 settings_options={
                     "primary": CORRECTION_PRIMARY_PARAMS,
                     "secondary": CORRECTION_SECONDARY_PARAMS,
                     "collapsed_count": 6,
+                    "header_action": "apply_corrections",
                 },
             ),
             Stage(
@@ -219,7 +286,14 @@ def create_control_workflow() -> Workflow:
                 ),
                 editor=CONTROL_LIVE_EDITOR,
                 results=CONTROL_RESULTS,
+                features=("fluidics",),
                 pipeline=True,
+                settings_options={
+                    "main": PRIMING_MAIN_SETTINGS,
+                    "pipeline_name": "Priming",
+                    "pipeline_label": "Start Priming",
+                    "completion_message": "Priming complete. Prime the chip before starting test runs.",
+                },
             ),
             Stage(
                 "runs",
@@ -227,6 +301,13 @@ def create_control_workflow() -> Workflow:
                 action="run_protocol",
                 description="Recorded Drop-Seq or custom run protocol with CSV/video session output.",
                 instructions=("Run the test protocol. Recording is managed by the protocol.",),
+                instruction_cards=(
+                    StageInstruction("Connect Fluigent before starting test runs.", "not fluidics_connected"),
+                    StageInstruction(
+                        "Set run count, Oil L volume, and total aqueous flow, then start test runs. "
+                        "Camera recording starts automatically when live preview is active."
+                    ),
+                ),
                 settings=RUN_SETTINGS,
                 actions=(
                     StageAction(
@@ -242,8 +323,14 @@ def create_control_workflow() -> Workflow:
                 ),
                 editor=CONTROL_LIVE_EDITOR,
                 results=CONTROL_RESULTS,
+                features=("fluidics",),
                 pipeline=True,
                 completion_gate="recording_confirmation",
+                settings_options={
+                    "main": RUN_MAIN_SETTINGS,
+                    "pipeline_name": "Drop-Seq",
+                    "pipeline_label": "Start Run",
+                },
             ),
             Stage(
                 "wash",
@@ -251,6 +338,11 @@ def create_control_workflow() -> Workflow:
                 action="run_protocol",
                 description="Post-run wash and shutdown path.",
                 instructions=("Run the wash protocol and confirm gated steps as prompted.",),
+                instruction_cards=(
+                    StageInstruction(
+                        "Set wash volume and pressure duration, then follow each protocol prompt until shutdown is complete."
+                    ),
+                ),
                 settings=WASH_SETTINGS,
                 actions=(
                     StageAction(
@@ -266,7 +358,13 @@ def create_control_workflow() -> Workflow:
                 ),
                 editor=CONTROL_LIVE_EDITOR,
                 results=CONTROL_RESULTS,
+                features=("fluidics",),
                 pipeline=True,
+                settings_options={
+                    "main": WASH_MAIN_SETTINGS,
+                    "pipeline_name": "Wash",
+                    "pipeline_label": "Start Wash",
+                },
             ),
         ),
     )

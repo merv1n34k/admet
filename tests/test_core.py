@@ -86,6 +86,8 @@ class WorkflowTests(unittest.TestCase):
         workflow = create_control_workflow()
         stage_ids = [stage.id for stage in workflow.stages]
         scene = next(stage for stage in workflow.stages if stage.id == "scene")
+        fluigent = next(stage for stage in workflow.stages if stage.id == "fluigent")
+        priming = next(stage for stage in workflow.stages if stage.id == "priming")
         runs = next(stage for stage in workflow.stages if stage.id == "runs")
         actions = {control.action for control in runs.actions}
         corrections = next(stage for stage in workflow.stages if stage.id == "corrections")
@@ -94,7 +96,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(stage_ids, ["scene", "fluigent", "corrections", "priming", "runs", "wash"])
         self.assertEqual(scene.editor.kind, "control_live")
         self.assertTrue(scene.editor.persistent)
+        self.assertIn("camera", scene.features)
+        self.assertIn("fluidics_preflight", fluigent.features)
+        self.assertEqual(scene.settings_options["auto_complete_guard"], "camera_live")
+        self.assertEqual(priming.settings_options["pipeline_name"], "Priming")
+        self.assertIn("completion_message", priming.settings_options)
         self.assertIn("camera_live and fluidics_connected", {action.guard for action in runs.actions})
+        self.assertEqual(runs.settings_options["pipeline_name"], "Drop-Seq")
+        self.assertEqual(runs.completion_gate, "recording_confirmation")
         self.assertNotIn("start_recording", actions)
         self.assertNotIn("stop_recording", actions)
         self.assertIn("run_protocol", actions)
