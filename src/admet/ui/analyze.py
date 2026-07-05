@@ -9,6 +9,7 @@ import mimetypes
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 from statistics import mean, median, pstdev
 from typing import Any
@@ -710,17 +711,19 @@ class AnalyzeWorkflowView:
                 ui.label(label).classes("muted text-xs font-semibold")
                 value_label = ui.label(_format_slider_value(value, step)).classes("slider-value")
 
+            # During a drag only the label + row object update (cheap). The preview is
+            # decoded once on release (@change), not on every tick, so dragging no longer
+            # fires a full stage sync + video decode per step.
             def update_slider(event: Any, item: MatrixRow = row, name: str = key, use_int: bool = step >= 1) -> None:
                 number = _numeric(event.value)
                 if number is None:
                     number = 0
                 value_label.set_text(_format_slider_value(number, step))
-                self._set_row_slider(
-                    item,
-                    name,
-                    number,
-                    integer=use_int,
-                )
+                item.settings[name] = int(number) if use_int else float(number)
+
+            def commit_slider(_event: Any, item: MatrixRow = row) -> None:
+                self.selected_uid = item.uid
+                self._sync_previews()
 
             slider = ui.slider(
                 min=minimum,
@@ -729,22 +732,7 @@ class AnalyzeWorkflowView:
                 value=value,
                 on_change=update_slider,
             ).props("dense").classes("w-full")
-            slider.on("change", lambda _event: self._sync_previews())
-
-    def _set_row_slider(
-        self,
-        row: MatrixRow,
-        key: str,
-        value: Any,
-        *,
-        integer: bool,
-    ) -> None:
-        number = _numeric(value)
-        if number is None:
-            number = 0
-        row.settings[key] = int(number) if integer else float(number)
-        self.selected_uid = row.uid
-        self._sync_stage()
+            slider.on("change", commit_slider)
 
     def _number_editor(
         self,
@@ -788,7 +776,7 @@ class AnalyzeWorkflowView:
             number = 0
         row.settings[key] = int(number) if integer else float(number)
         self.selected_uid = row.uid
-        self._sync_stage()
+        self._sync_previews()
 
     def _opencv_preview_html(self, target: MatrixRow, frame: dict[str, Any] | None = None) -> str:
         source = self._resolve_media_path(target.source_path, target.project_path)
@@ -2265,6 +2253,16 @@ def _video_metadata(path: Path) -> dict[str, int]:
 def _read_video_frame(path: Path, frame_index: int) -> dict[str, Any]:
     if not path.exists():
         return {"error": f"Video file is not readable: {path}", "src": "", "width": 0, "height": 0}
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return _decode_video_frame(str(path), mtime, int(frame_index))
+
+
+@lru_cache(maxsize=128)
+def _decode_video_frame(path_str: str, _mtime: float, frame_index: int) -> dict[str, Any]:
+    path = Path(path_str)
     try:
         import cv2
     except Exception as exc:
