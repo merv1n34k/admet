@@ -72,7 +72,9 @@ class RawSummary:
     frequency_hz: float
     threshold: float
     diameters: tuple[float, ...] = ()
-    points: tuple[tuple[float, float], ...] = ()
+    detections: tuple[tuple[float, float, float, float, float], ...] = ()
+    spans: tuple[tuple[float, float, float], ...] = ()
+    inclusion_counts: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -724,7 +726,12 @@ class AnalyzeWorkflowView:
                 _plot_card(_diameter_chart(summaries))
                 _plot_card(_cv_chart(summaries))
                 _plot_card(_frequency_chart(summaries))
-            _plot_card(_position_scatter(summaries))
+                _plot_card(_position_scatter(summaries))
+                _plot_card(_track_timeline_chart(summaries))
+                _plot_card(_perimeter_time_chart(summaries))
+                _plot_card(_area_position_chart(summaries))
+                if _has_inclusions(summaries):
+                    _plot_card(_inclusion_chart(summaries))
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("3. Fluidics summary").classes("section-title")
             fluidics = self._fluidics_runs()
@@ -1968,9 +1975,12 @@ def summarize_raw_rows(run: StoredRun, rows: list[dict[str, Any]]) -> list[RawSu
             if _is_number(values.get("frame"))
         }
         diameters: list[float] = []
-        points: list[tuple[float, float]] = []
+        detections: list[tuple[float, float, float, float, float]] = []
+        spans: dict[float, list[float]] = {}
+        inclusion_counts: list[int] = []
         for row in group_rows:
-            if row.get("kind") not in {"detection", "droplet", "track"}:
+            kind = row.get("kind")
+            if kind not in {"detection", "droplet", "track"}:
                 continue
             values = _row_values(row)
             diameter = _numeric(values.get("diameter_um"))
@@ -1979,19 +1989,27 @@ def summarize_raw_rows(run: StoredRun, rows: list[dict[str, Any]]) -> list[RawSu
                 diameter = pixels * scale if pixels is not None else None
             if diameter is not None and math.isfinite(diameter) and diameter > 0:
                 diameters.append(diameter)
+            if kind == "droplet":
+                inclusion_counts.append(int(_numeric(values.get("inclusions")) or 0))
+            frame = _numeric(values.get("frame"))
             cx = _numeric(values.get("centroid_x"))
             cy = _numeric(values.get("centroid_y"))
-            if cx is not None and cy is not None and len(points) < 4000:
-                points.append((round(cx, 1), round(cy, 1)))
+            if frame is not None and cx is not None and cy is not None and len(detections) < 6000:
+                area = _numeric(values.get("area")) or 0.0
+                perimeter = _numeric(values.get("perimeter")) or 0.0
+                detections.append(
+                    (frame, round(cx, 1), round(cy, 1), round(area * scale * scale, 2), round(perimeter * scale, 2))
+                )
+            droplet_id = _numeric(values.get("droplet_id") or values.get("track_id"))
+            if droplet_id is not None and frame is not None:
+                bounds = spans.setdefault(droplet_id, [frame, frame])
+                bounds[0] = min(bounds[0], frame)
+                bounds[1] = max(bounds[1], frame)
 
-        tracks = sum(1 for row in group_rows if row.get("kind") == "track")
-        detections = sum(1 for row in group_rows if row.get("kind") in {"detection", "droplet"})
-        droplets = int(_numeric(meta.get("total_droplets")) or 0) or tracks or detections
-        inclusions = sum(
-            int(_numeric(_row_values(row).get("inclusions")) or 0)
-            for row in group_rows
-            if row.get("kind") == "droplet"
-        )
+        track_count = sum(1 for row in group_rows if row.get("kind") == "track")
+        detection_count = sum(1 for row in group_rows if row.get("kind") in {"detection", "droplet"})
+        droplets = int(_numeric(meta.get("total_droplets")) or 0) or track_count or detection_count
+        inclusions = sum(inclusion_counts)
         mean_d = float(_numeric(meta.get("mean_diameter_um")) or (mean(diameters) if diameters else 0.0))
         median_d = median(diameters) if diameters else mean_d
         std_d = float(_numeric(meta.get("std_diameter_um")) or (pstdev(diameters) if len(diameters) > 1 else 0.0))
@@ -2014,7 +2032,9 @@ def summarize_raw_rows(run: StoredRun, rows: list[dict[str, Any]]) -> list[RawSu
                 frequency_hz=float(_numeric(meta.get("frequency_hz") or true_stats.get("true_frequency_hz")) or 0.0),
                 threshold=float(_numeric(meta.get("threshold") or context.get("threshold")) or 0.0),
                 diameters=tuple(diameters),
-                points=tuple(points),
+                detections=tuple(detections),
+                spans=tuple((did, lo, hi) for did, (lo, hi) in sorted(spans.items())),
+                inclusion_counts=tuple(inclusion_counts),
             )
         )
 
@@ -2207,28 +2227,83 @@ def _diameter_hist_chart(summaries: list[RawSummary]) -> dict[str, Any]:
     }
 
 
-def _position_scatter(summaries: list[RawSummary]) -> dict[str, Any]:
+def _scatter_chart(title: str, xname: str, yname: str, summaries, project, *, invert_y: bool = False) -> dict[str, Any]:
     series = []
     for summary in summaries[:6]:
-        if not summary.points:
-            continue
-        series.append(
-            {
-                "name": summary.sample_id,
-                "type": "scatter",
-                "symbolSize": 4,
-                "data": [[x, y] for x, y in summary.points],
-            }
-        )
-    return {
-        "title": {"text": "Droplet positions (px)", "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
+        data = [point for point in (project(detection) for detection in summary.detections) if point is not None]
+        if data:
+            series.append({"name": summary.sample_id, "type": "scatter", "symbolSize": 3, "data": data})
+    chart: dict[str, Any] = {
+        "title": {"text": title, "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
         "tooltip": {},
         "legend": {"top": 4, "right": 8, "textStyle": {"fontSize": 9}},
-        "grid": {"left": 48, "right": 12, "top": 36, "bottom": 34},
-        "xAxis": {"type": "value", "name": "x"},
-        "yAxis": {"type": "value", "name": "y", "inverse": True},
+        "grid": {"left": 52, "right": 12, "top": 36, "bottom": 40},
+        "xAxis": {"type": "value", "name": xname},
+        "yAxis": {"type": "value", "name": yname, "inverse": invert_y},
         "series": series,
     }
+    return chart
+
+
+def _position_scatter(summaries: list[RawSummary]) -> dict[str, Any]:
+    return _scatter_chart(
+        "Droplet positions (px)", "x", "y", summaries,
+        lambda d: [d[1], d[2]], invert_y=True,
+    )
+
+
+def _perimeter_time_chart(summaries: list[RawSummary]) -> dict[str, Any]:
+    return _scatter_chart(
+        "Perimeter over time (µm)", "frame", "µm", summaries,
+        lambda d: [d[0], d[4]] if d[4] else None,
+    )
+
+
+def _area_position_chart(summaries: list[RawSummary]) -> dict[str, Any]:
+    return _scatter_chart(
+        "Area by x position (µm²)", "x", "µm²", summaries,
+        lambda d: [d[1], d[3]] if d[3] else None,
+    )
+
+
+def _track_timeline_chart(summaries: list[RawSummary]) -> dict[str, Any]:
+    data = []
+    for summary in summaries[:3]:
+        for droplet_id, first_frame, last_frame in summary.spans[:600]:
+            data.append({"coords": [[first_frame, droplet_id], [last_frame, droplet_id]]})
+    return {
+        "title": {"text": "Droplet timeline (frame)", "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
+        "tooltip": {},
+        "grid": {"left": 52, "right": 12, "top": 36, "bottom": 40},
+        "xAxis": {"type": "value", "name": "frame"},
+        "yAxis": {"type": "value", "name": "droplet id"},
+        "series": [
+            {
+                "type": "lines",
+                "coordinateSystem": "cartesian2d",
+                "data": data,
+                "lineStyle": {"width": 2, "color": "#225d82", "opacity": 0.7},
+            }
+        ],
+    }
+
+
+def _inclusion_chart(summaries: list[RawSummary]) -> dict[str, Any]:
+    counts: dict[int, int] = {}
+    for summary in summaries:
+        for value in summary.inclusion_counts:
+            counts[value] = counts.get(value, 0) + 1
+    keys = sorted(counts)
+    return _bar_chart(
+        "Inclusions per droplet",
+        [str(key) for key in keys],
+        [counts[key] for key in keys],
+        "#185e49",
+    )
+
+
+def _has_inclusions(summaries: list[RawSummary]) -> bool:
+    return any(summary.inclusion_counts for summary in summaries)
 
 
 def _view_summary_columns() -> list[dict[str, Any]]:
