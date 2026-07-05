@@ -1241,6 +1241,7 @@ class AnalyzeWorkflowView:
                 row.sample_id = source.stem or row.sample_id
         self.source_path = row.source_path
         self.selected_uid = row.uid
+        self._link_source(source, engine, row.sample_id)
         self.stage_progress["import"] = 100
         self._mark_stage("import", StageStatus.COMPLETE)
         self._notify(f"source ready: {source.name}", "success")
@@ -1256,19 +1257,33 @@ class AnalyzeWorkflowView:
             return False
         if any(Path(item.source_path) == source for item in self.matrix):
             return False
+        sample_id = source.stem or f"sample_{len(self.matrix) + 1}"
         self.matrix.append(
             MatrixRow(
                 uid=_uid(),
                 project_path=str(session_path(self.project_path)),
                 source_path=str(source),
                 engine=engine,
-                sample_id=source.stem or f"sample_{len(self.matrix) + 1}",
+                sample_id=sample_id,
             )
         )
+        self._link_source(source, engine, sample_id)
         self.stage_progress["import"] = 100
         self._mark_stage("import", StageStatus.COMPLETE)
         self._log(f"matrix: appended {source} -> {engine}")
         return True
+
+    def _link_source(self, source: Path, engine: str, sample_id: str) -> None:
+        # Persist the attached file into the project manifest so it is remembered
+        # across sessions. External files are linked by absolute path.
+        try:
+            path = session_path(self.project_path)
+            store = ProjectStore(path) if (path / "manifest.json").is_file() else ProjectStore.create(path, path.stem)
+            store.register_analysis_file(str(source), engine=engine, sample_id=sample_id)
+            store.save()
+            self.project_refs = discover_projects(self.discovery_root)
+        except Exception as exc:
+            self._log(f"project: could not link {source.name}: {exc}")
 
     def _action_specs(self, stage_id: str) -> list[dict[str, Any]]:
         return _stage_spec(stage_id).buttons(self)
@@ -1742,7 +1757,7 @@ def _schema_cell_slot(param: Param) -> str:
 def _project_ref_label(ref: ProjectRef) -> str:
     return (
         f"{ref.project_id} · {(ref.updated or 'unknown')[:10]} · "
-        f"{ref.recording_count} recordings / {ref.run_count} runs"
+        f"{ref.file_count} files / {ref.run_count} runs"
     )
 
 

@@ -19,6 +19,7 @@ class ProjectRef:
     updated: str
     recording_count: int
     run_count: int
+    file_count: int = 0
 
 
 def projects_root(explicit: str | Path | None = None) -> Path:
@@ -54,6 +55,16 @@ def _ref_from_manifest(project_path: Path, manifest: Path) -> ProjectRef:
         updated=str(data.get("updated_at") or ""),
         recording_count=_recording_count(project_path, data),
         run_count=_run_count(project_path, data),
+        file_count=_file_count(data),
+    )
+
+
+def _file_count(manifest: dict[str, Any]) -> int:
+    roles = {"analysis_video", "analysis_image_dir"}
+    return sum(
+        1
+        for file in manifest.get("files", ())
+        if isinstance(file, dict) and file.get("role") in roles
     )
 
 
