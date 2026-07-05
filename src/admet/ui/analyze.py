@@ -24,7 +24,7 @@ from admet.ui import design
 from admet.ui.window import structure_signature
 from admet.ui.scaffold import panel_specs
 from admet.workflows import StageStatus, Workflow, WorkflowState
-from admet.workflows.analyze import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
+from admet.workflows.analyze_runner import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 
 
 VIDEO_SUFFIXES = {".avi", ".mp4", ".mov", ".mkv"}

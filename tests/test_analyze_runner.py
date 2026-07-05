@@ -6,7 +6,7 @@ from pathlib import Path
 from admet.core.engine import ActionSpec, EngineRegistry, Param, ParamKind, ParamSchema
 from admet.core.run import RunJob, RunResult
 from admet.core.session import load_session
-from admet.workflows.analyze import AnalyzeBatchRunner, AnalyzeTarget, infer_engine
+from admet.workflows.analyze_runner import AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 
 
 class AnalyzeBatchRunnerTests(unittest.TestCase):
@@ -64,10 +64,47 @@ class AnalyzeBatchRunnerTests(unittest.TestCase):
         self.assertTrue(session.files[0].metadata["external"])
         self.assertEqual(session.items[0].project_type, "analysis_run")
         self.assertEqual(session.items[0].files, (session.files[0].id,))
-        self.assertIn("analysis/runs/", session.items[0].metadata["raw_path"])
+        # single, stable analysis output -- no timestamped run directories
+        self.assertEqual(session.items[0].metadata["raw_path"], "analysis/raw.jsonl")
+        self.assertFalse((project / "analysis" / "runs").exists())
         self.assertFalse((project / "cache").exists())
         self.assertEqual(analysis_metadata["run_count"], 1)
         self.assertTrue(engine.calls[0]["cache_dir"].is_relative_to(cache_root))
+
+    def test_rerunning_same_batch_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "source.avi"
+            source.write_bytes(b"video")
+            project = root / "study.admetp"
+            registry = EngineRegistry()
+            registry.register("opencv", lambda: FakeAnalyzeEngine("opencv"))
+            runner = AnalyzeBatchRunner(registry, cache_root=root / "cache")
+            target = AnalyzeTarget(
+                project_path=project, source_path=source, engine="opencv", sample_id="s1"
+            )
+
+            first = runner.run((target,))
+            first_rows = first.projects[0].raw_path.read_text(encoding="utf-8").splitlines()
+            second = runner.run((target,))
+            raw_path = second.projects[0].raw_path
+            second_rows = raw_path.read_text(encoding="utf-8").splitlines()
+
+            analysis_metadata = json.loads(
+                (project / "analysis" / "metadata.json").read_text(encoding="utf-8")
+            )
+            session = load_session(project)
+
+        # one stable output path, reused across runs
+        self.assertEqual(first.projects[0].raw_path, raw_path)
+        self.assertEqual(raw_path.name, "raw.jsonl")
+        # data is rewritten in place, not duplicated
+        self.assertGreater(len(first_rows), 0)
+        self.assertEqual(len(second_rows), len(first_rows))
+        # exactly one run / one analysis item, no timestamped run dirs
+        self.assertEqual(analysis_metadata["run_count"], 1)
+        self.assertEqual(len(session.items), 1)
+        self.assertFalse((project / "analysis" / "runs").exists())
 
     def test_runner_groups_rows_by_project(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -133,11 +170,13 @@ class AnalyzeBatchRunnerTests(unittest.TestCase):
                 (root / "study.admetp" / "analysis" / "metadata.json").read_text(encoding="utf-8")
             )
 
+        # the live report surfaces the skip for this run...
         self.assertEqual(len(report.jobs), 1)
         self.assertEqual(report.jobs[0].status, "skipped")
         self.assertIn("cannot infer analyze engine", report.jobs[0].warnings[0])
         self.assertEqual(session.files, ())
-        self.assertEqual(metadata["runs"][0]["metadata"]["jobs"][0]["status"], "skipped")
+        # ...but nothing is persisted for a skipped target -- no data means no record
+        self.assertEqual(metadata["runs"][0]["metadata"]["jobs"], [])
 
 
 class FakeAnalyzeEngine:

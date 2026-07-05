@@ -88,10 +88,12 @@ class ProjectStore:
         self.save()
 
     def analysis_run_target(self, label: str = "analysis") -> AnalysisRunTarget:
-        run_id = _stamped_id(label)
-        run_dir = self.analysis_dir / "runs" / run_id
+        # A project keeps a single, stable analysis output: one raw.jsonl and one
+        # run.json in the analysis dir. Runs are idempotent -- re-running rewrites
+        # this output in place instead of stacking timestamped run directories.
+        run_dir = self.analysis_dir
         return AnalysisRunTarget(
-            run_id=run_id,
+            run_id="analysis",
             run_dir=run_dir,
             raw_path=run_dir / "raw.jsonl",
             run_metadata_path=run_dir / "run.json",

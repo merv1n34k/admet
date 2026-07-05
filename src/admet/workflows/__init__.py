@@ -46,12 +46,15 @@ def __getattr__(name: str):
         "AnalyzeJobReport",
         "AnalyzeProjectReport",
         "AnalyzeTarget",
-        "create_analyze_workflow",
         "infer_engine",
     }:
-        from . import analyze
+        from . import analyze_runner
 
-        return getattr(analyze, name)
+        return getattr(analyze_runner, name)
+    if name == "create_analyze_workflow":
+        from .analyze import create_analyze_workflow
+
+        return create_analyze_workflow
     if name == "create_control_workflow":
         from .control import create_control_workflow
 

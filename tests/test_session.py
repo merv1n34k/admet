@@ -236,11 +236,13 @@ class SessionProjectTests(unittest.TestCase):
             run_metadata = json.loads(target.run_metadata_path.read_text(encoding="utf-8"))
 
         self.assertEqual(analysis["run_count"], 1)
-        self.assertEqual(run_metadata["raw_path"], f"analysis/runs/{target.run_id}/raw.jsonl")
+        # single, stable analysis output at the analysis root -- no timestamped dirs
+        self.assertEqual(target.run_id, "analysis")
+        self.assertEqual(run_metadata["raw_path"], "analysis/raw.jsonl")
         self.assertEqual(loaded.items[0].id, target.run_id)
         self.assertEqual(loaded.items[0].files, ("video-1",))
-        self.assertEqual(loaded.items[0].metadata["run_path"], f"analysis/runs/{target.run_id}")
-        self.assertEqual(loaded.items[0].metadata["raw_path"], f"analysis/runs/{target.run_id}/raw.jsonl")
+        self.assertEqual(loaded.items[0].metadata["run_path"], "analysis")
+        self.assertEqual(loaded.items[0].metadata["raw_path"], "analysis/raw.jsonl")
 
 if __name__ == "__main__":
     unittest.main()
