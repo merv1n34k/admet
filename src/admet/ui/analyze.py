@@ -1154,34 +1154,39 @@ class AnalyzeWorkflowView:
             with rows:
                 parent = current.parent
                 if parent != current:
-                    ui.button("..", on_click=lambda path=parent: navigate(path)).props("dense no-caps flat").classes(
-                        "browser-row"
-                    )
+                    ui.button("⬆  ..", on_click=lambda path=parent: navigate(path)).props(
+                        "dense no-caps flat"
+                    ).classes("browser-row browser-name")
                 entries = _browser_entries(current, mode)
                 if not entries:
                     ui.label("No matching entries.").classes("muted text-xs")
+                    return
+                # Flat rows: a select toggle on the LEFT for every file and folder,
+                # then the name (folders navigate, files are labels). Same add path
+                # for everything via _append_source on Add & Close.
                 for entry in entries:
+                    is_dir = entry.is_dir()
                     is_selected = str(entry.expanduser().resolve()) in selected
-                    if entry.is_dir():
-                        with ui.row().classes("browser-row w-full items-center no-wrap gap-1"):
-                            ui.button(entry.name + "/", on_click=lambda path=entry: navigate(path)).props(
+                    with ui.row().classes("browser-row w-full items-center no-wrap gap-2"):
+                        if multi:
+                            ui.button(
+                                "✓" if is_selected else "＋",
+                                on_click=lambda path=entry: toggle(path),
+                            ).props(
+                                "dense no-caps " + ("unelevated color=primary" if is_selected else "outline")
+                            ).classes("browser-select")
+                        name = entry.name + ("/" if is_dir else "")
+                        if is_dir:
+                            ui.button(name, on_click=lambda path=entry: navigate(path)).props(
                                 "dense no-caps flat"
-                            ).classes("grow justify-start")
-                            if multi and mode == "source":
-                                ui.button(
-                                    "✓" if is_selected else "Select",
-                                    on_click=lambda path=entry: toggle(path),
-                                ).props("dense no-caps outline")
-                    elif multi:
-                        label = ("✓ " if is_selected else "") + entry.name
-                        ui.button(label, on_click=lambda path=entry: toggle(path)).props(
-                            "dense no-caps flat"
-                        ).classes("browser-row")
-                    else:
-                        ui.button(
-                            entry.name,
-                            on_click=lambda path=entry: self._select_browser_path(path, mode, row_uid, dialog),
-                        ).props("dense no-caps flat").classes("browser-row")
+                            ).classes("grow browser-name")
+                        elif multi:
+                            ui.label(name).classes("grow browser-name")
+                        else:
+                            ui.button(
+                                name,
+                                on_click=lambda path=entry: self._select_browser_path(path, mode, row_uid, dialog),
+                            ).props("dense no-caps flat").classes("grow browser-name")
 
         def navigate(path: Path) -> None:
             state["path"] = _existing_dir(path)
@@ -2688,6 +2693,17 @@ def _style() -> str:
       border-radius: 4px !important;
       color: var(--text) !important;
       font-weight: 500 !important;
+    }
+    .browser-select {
+      min-width: 34px !important;
+      width: 34px;
+      flex: 0 0 auto;
+      padding: 0 !important;
+    }
+    .browser-name {
+      justify-content: flex-start !important;
+      text-align: left;
+      overflow-wrap: anywhere;
     }
     .plot-grid {
       display: grid;
