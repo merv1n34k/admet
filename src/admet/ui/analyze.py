@@ -294,10 +294,11 @@ class AnalyzeWorkflowView:
             if self._stage_id() == "video":
                 self._render_engine_matrix("opencv")
                 return
+            if self._stage_id() == "imaging":
+                self._render_engine_matrix("cellpose")
+                return
             with ui.column().classes("panel w-full gap-2 p-2"):
-                if self._stage_id() == "imaging":
-                    self._render_cellpose_settings()
-                elif self._stage_id() == "view":
+                if self._stage_id() == "view":
                     self._render_view_settings()
                 else:
                     ui.label("Export will use stored raw analysis data.").classes("muted text-xs")
@@ -345,7 +346,7 @@ class AnalyzeWorkflowView:
             "project_files": self._project_file_rows,
             "recording_inventory": self._recording_inventory_rows,
             "opencv_matrix": lambda: [self._opencv_matrix_row(row) for row in self._targets("opencv")],
-            "cellpose_matrix": lambda: [self._engine_matrix_row(row) for row in self._targets("cellpose")],
+            "cellpose_matrix": lambda: [self._cellpose_matrix_row(row) for row in self._targets("cellpose")],
             "opencv_summary": lambda: _view_summary_rows(
                 [summary for summary in self._raw_summaries() if summary.engine == "opencv"]
             ),
@@ -500,17 +501,11 @@ class AnalyzeWorkflowView:
                 1,
                 integer=True,
             )
-            with ui.column().classes("gap-0"):
-                ui.checkbox(
-                    "Use cache",
-                    value=bool(self.settings["cellpose_use_cache"]),
-                    on_change=lambda event: self._set_setting("cellpose_use_cache", bool(event.value)),
-                )
-                ui.checkbox(
-                    "Detect inclusions",
-                    value=bool(self.settings["cellpose_detect_inclusions"]),
-                    on_change=lambda event: self._set_setting("cellpose_detect_inclusions", bool(event.value)),
-                )
+            ui.checkbox(
+                "Detect inclusions",
+                value=bool(self.settings["cellpose_detect_inclusions"]),
+                on_change=lambda event: self._set_setting("cellpose_detect_inclusions", bool(event.value)),
+            )
 
     def _render_view_settings(self) -> None:
         from nicegui import ui
@@ -681,8 +676,12 @@ class AnalyzeWorkflowView:
         from nicegui import ui
 
         rows = [row for row in self.matrix if row.active and row.engine == engine]
-        columns = _opencv_matrix_columns() if engine == "opencv" else _engine_matrix_columns()
-        build = self._opencv_matrix_row if engine == "opencv" else self._engine_matrix_row
+        if engine == "opencv":
+            columns, build, wire = _opencv_matrix_columns(), self._opencv_matrix_row, self._wire_opencv_matrix
+        elif engine == "cellpose":
+            columns, build, wire = _cellpose_matrix_columns(), self._cellpose_matrix_row, self._wire_cellpose_matrix
+        else:
+            columns, build, wire = _engine_matrix_columns(), self._engine_matrix_row, None
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label(f"{engine.title()} files").classes("section-title")
             table = ui.table(
@@ -691,8 +690,8 @@ class AnalyzeWorkflowView:
                 row_key="uid",
             ).classes("slim-table matrix-table w-full").props("dense flat hide-bottom")
             self._register_table(f"{engine}_matrix", table)
-            if engine == "opencv":
-                self._wire_opencv_matrix(table)
+            if wire is not None:
+                wire(table)
             table.on("rowClick", self._select_row_event)
             if not rows:
                 ui.label(f"No active {engine} files.").classes("muted text-xs")
@@ -969,21 +968,20 @@ class AnalyzeWorkflowView:
                     ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
                     ui.label(target.source_path).classes("muted text-xs path-label")
                     with ui.element("div").classes("editor-grid"):
-                        self._slider_editor(
+                        self._number_editor(
                             target,
                             "px_to_um",
                             "px to um",
-                            0.01,
-                            10.0,
-                            0.01,
                             float(self.settings["cellpose_px_to_um"]),
+                            step=0.01,
                         )
-                        self._slider_editor(target, "frame_limit", "Frame limit", 0, max(image_max, 500), 1, 0)
-                        self._bool_editor(
+                        self._number_editor(
                             target,
-                            "use_cache",
-                            "Use cache",
-                            bool(self.settings["cellpose_use_cache"]),
+                            "frame_limit",
+                            "Frame limit",
+                            0,
+                            step=1,
+                            maximum=max(image_max, 500),
                         )
                         self._bool_editor(
                             target,
@@ -1419,7 +1417,6 @@ class AnalyzeWorkflowView:
             "cellpose_config_path": "",
             "cellpose_px_to_um": 1.14,
             "cellpose_frame_limit": 0,
-            "cellpose_use_cache": True,
             "cellpose_detect_inclusions": True,
             "cache_root": str(Path.home() / ".admet-cache" / "admet2"),
         }
@@ -1545,7 +1542,6 @@ class AnalyzeWorkflowView:
                 "config_path": str(_row_setting(row, "config_path", self.settings["cellpose_config_path"]) or ""),
                 "px_to_um": _row_float(row, "px_to_um", self.settings["cellpose_px_to_um"]),
                 "frame_limit": frame_limit or None,
-                "use_cache": _row_bool(row, "use_cache", self.settings["cellpose_use_cache"]),
                 "detect_inclusions": _row_bool(
                     row,
                     "detect_inclusions",
@@ -1692,6 +1688,33 @@ class AnalyzeWorkflowView:
             table.add_slot(f"body-cell-{col}", _numeric_cell_slot(col, setting))
         table.on("matrix-change", self._handle_matrix_change)
 
+    def _cellpose_matrix_row(self, row: MatrixRow) -> dict[str, Any]:
+        return {
+            "uid": row.uid,
+            "sample_id": row.sample_id,
+            "source": Path(row.source_path).name or row.source_path,
+            "px_um": _row_float(row, "px_to_um", float(self.settings["cellpose_px_to_um"])),
+            "frame_limit": _row_int(row, "frame_limit", 0),
+            "config": str(_row_setting(row, "config_path", self.settings["cellpose_config_path"])),
+        }
+
+    def _wire_cellpose_matrix(self, table: Any) -> None:
+        table.add_slot(
+            "body-cell-sample_id",
+            """
+            <q-td :props="props">
+              <q-input dense outlined v-model="props.row.sample_id"
+                @click.stop @mousedown.stop
+                @blur="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'sample_id', value: props.row.sample_id})"
+                @keyup.enter="$event.target.blur()" />
+            </q-td>
+            """,
+        )
+        for col, setting in _CELLPOSE_EDIT_FIELDS:
+            table.add_slot(f"body-cell-{col}", _numeric_cell_slot(col, setting))
+        table.add_slot("body-cell-config", _text_cell_slot("config", "config_path"))
+        table.on("matrix-change", self._handle_matrix_change)
+
     def _targets(self, engine: str | None = None) -> list[MatrixRow]:
         return [
             row
@@ -1726,11 +1749,14 @@ class AnalyzeWorkflowView:
         if field == "sample_id":
             row.sample_id = str(value or "")
             return
-        if field in _OPENCV_SETTING_FIELDS:
+        if field in _TEXT_SETTING_FIELDS:
+            row.settings[field] = str(value or "")
+            return
+        if field in _NUMERIC_SETTING_FIELDS:
             number = _numeric(value)
             if number is None:
                 number = 0
-            row.settings[field] = float(number) if field in _OPENCV_FLOAT_FIELDS else int(number)
+            row.settings[field] = float(number) if field in _FLOAT_SETTING_FIELDS else int(number)
 
     def _set_setting(self, key: str, value: Any) -> None:
         self.settings[key] = value
@@ -1841,8 +1867,13 @@ _OPENCV_EDIT_FIELDS = (
     ("h", "roi_height"),
 )
 
-_OPENCV_FLOAT_FIELDS = {"microns_per_pixel", "fps"}
-_OPENCV_SETTING_FIELDS = {setting for _, setting in _OPENCV_EDIT_FIELDS}
+_CELLPOSE_EDIT_FIELDS = (
+    ("px_um", "px_to_um"),
+    ("frame_limit", "frame_limit"),
+)
+_FLOAT_SETTING_FIELDS = {"microns_per_pixel", "fps", "px_to_um"}
+_TEXT_SETTING_FIELDS = {"config_path"}
+_NUMERIC_SETTING_FIELDS = {setting for _, setting in _OPENCV_EDIT_FIELDS} | {"px_to_um", "frame_limit"}
 
 
 def _opencv_matrix_columns() -> list[dict[str, Any]]:
@@ -1860,11 +1891,32 @@ def _opencv_matrix_columns() -> list[dict[str, Any]]:
     ]
 
 
+def _cellpose_matrix_columns() -> list[dict[str, Any]]:
+    return [
+        {"name": "sample_id", "label": "Sample", "field": "sample_id", "align": "left"},
+        {"name": "source", "label": "Source", "field": "source", "align": "left"},
+        {"name": "px_um", "label": "px→µm", "field": "px_um", "align": "right"},
+        {"name": "frame_limit", "label": "Frame limit", "field": "frame_limit", "align": "right"},
+        {"name": "config", "label": "Config", "field": "config", "align": "left"},
+    ]
+
+
 def _numeric_cell_slot(col: str, field: str) -> str:
     return f"""
     <q-td :props="props">
       <q-input dense outlined type="number" input-class="matrix-num"
         v-model.number="props.row.{col}"
+        @click.stop @mousedown.stop
+        @blur="$parent.$emit('matrix-change', {{uid: props.row.uid, field: '{field}', value: props.row.{col}}})"
+        @keyup.enter="$event.target.blur()" />
+    </q-td>
+    """
+
+
+def _text_cell_slot(col: str, field: str) -> str:
+    return f"""
+    <q-td :props="props">
+      <q-input dense outlined v-model="props.row.{col}"
         @click.stop @mousedown.stop
         @blur="$parent.$emit('matrix-change', {{uid: props.row.uid, field: '{field}', value: props.row.{col}}})"
         @keyup.enter="$event.target.blur()" />

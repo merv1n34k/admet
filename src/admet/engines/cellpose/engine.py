@@ -67,7 +67,7 @@ class CellposeAnalysisEngine:
         config = self._config_from_settings(settings)
         detector = CellposeDetection(
             config,
-            use_cache=settings["use_cache"],
+            use_cache=settings.get("use_cache", True),
             detect_inclusions=settings["detect_inclusions"],
             cache_dir=cache_dir,
         )
@@ -81,7 +81,7 @@ class CellposeAnalysisEngine:
     def _config_from_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         config = load_config(settings["config_path"] or None)
         config["px_to_um"] = settings["px_to_um"]
-        config.setdefault("cache", {})["enabled"] = settings["use_cache"]
+        config.setdefault("cache", {})["enabled"] = settings.get("use_cache", True)
         return config
 
     def _write_raw_rows(

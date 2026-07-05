@@ -9,7 +9,6 @@ CELLPOSE_SETTINGS = ParamSchema(
         Param("config_path", "Config Path", ParamKind.PATH, default=""),
         Param("px_to_um", "Pixels To Microns", ParamKind.FLOAT, default=1.14, minimum=0.0),
         Param("frame_limit", "Frame Limit", ParamKind.INTEGER, default=None),
-        Param("use_cache", "Use Cache", ParamKind.BOOLEAN, default=True),
         Param("detect_inclusions", "Detect Inclusions", ParamKind.BOOLEAN, default=True),
     )
 )
