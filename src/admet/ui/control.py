@@ -50,9 +50,8 @@ from admet.engines.acquisition.fluidics.config import (
 )
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
 from admet.ui import theme as ui
-from admet.ui.scaffold import panel_specs
 from admet.ui.theme import Theme
-from admet.ui.window import structure_changed, structure_signature
+from admet.ui.window import panel_specs, structure_changed, structure_signature
 from admet.ui.workflow_view import active_when, guard_enabled, has_feature, instruction_text
 from admet.workflows import create_control_workflow
 

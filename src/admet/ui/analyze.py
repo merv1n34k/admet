@@ -21,8 +21,7 @@ from admet.core.session import session_path
 from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
 from admet.engines.opencv.settings import OPENCV_SETTINGS
 from admet.ui import design
-from admet.ui.scaffold import panel_specs
-from admet.ui.window import structure_signature
+from admet.ui.window import panel_specs, structure_signature
 from admet.ui.workflow_view import current_stage, guard_enabled, instruction_text, stage_by_id
 from admet.workflows import StageStatus, Workflow, WorkflowState
 from admet.workflows.analyze_runner import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
