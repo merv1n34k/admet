@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
-from admet.workflows import Stage, StageAction, Workflow, WorkflowState
+from admet.workflows import Stage, StageAction, StageStatus, Workflow, WorkflowState
 
 
 @dataclass(frozen=True)
@@ -13,6 +14,15 @@ class ActionButtonState:
     active: bool = False
     warning: bool = False
     toggle: bool = False
+
+
+@dataclass(frozen=True)
+class TocRowState:
+    index: int
+    stage_id: str
+    label: str
+    selected: bool
+    status: Any
 
 
 def current_stage(workflow: Workflow, state: WorkflowState) -> Stage:
@@ -64,6 +74,39 @@ def action_button_state(
         warning=action.variant == "warning",
         toggle=toggle,
     )
+
+
+def toc_row_states(
+    workflow: Workflow,
+    state: WorkflowState,
+    *,
+    status_for: Callable[[int, Stage], Any] | None = None,
+) -> tuple[TocRowState, ...]:
+    rows = []
+    for index, stage in enumerate(workflow.stages):
+        status = status_for(index, stage) if status_for is not None else state.statuses.get(stage.id, StageStatus.PENDING)
+        rows.append(
+            TocRowState(
+                index=index,
+                stage_id=stage.id,
+                label=stage.label,
+                selected=index == state.index,
+                status=status,
+            )
+        )
+    return tuple(rows)
+
+
+def workflow_progress_percent(workflow: Workflow, state: WorkflowState) -> float:
+    total = max(1, len(workflow.stages))
+    done = sum(
+        1
+        for stage in workflow.stages
+        if state.statuses.get(stage.id) in {StageStatus.COMPLETE, StageStatus.SKIPPED}
+    )
+    if state.statuses.get(current_stage(workflow, state).id) is StageStatus.ACTIVE:
+        done += 0.55
+    return min(100.0, done / total * 100.0)
 
 
 def instruction_text(stage: Stage, guard_value: Callable[[str], bool]) -> str:

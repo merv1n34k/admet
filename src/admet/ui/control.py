@@ -52,7 +52,7 @@ from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
 from admet.ui import theme as ui
 from admet.ui.theme import Theme
 from admet.ui.window import panel_specs, structure_changed, structure_signature
-from admet.ui.workflow_view import action_button_state, active_when, guard_enabled, has_feature, instruction_text
+from admet.ui.workflow_view import action_button_state, active_when, guard_enabled, has_feature, instruction_text, toc_row_states
 from admet.workflows import create_control_workflow
 
 
@@ -1749,10 +1749,10 @@ class ControlWindow(QMainWindow):
         self._render_current_stage()
 
     def _sync_toc(self) -> None:
-        for index, row in enumerate(self.toc_rows):
-            status = self._status_key(index)
-            _apply_dot_status(row["dot"], status)
-            row["label"].setStyleSheet(_toc_label_qss(status))
+        rows = toc_row_states(self.workflow, self.workflow_state, status_for=lambda index, _stage: self._status_key(index))
+        for state, row in zip(rows, self.toc_rows, strict=True):
+            _apply_dot_status(row["dot"], state.status)
+            row["label"].setStyleSheet(_toc_label_qss(state.status))
 
     def _status_key(self, index: int) -> str:
         stage = self.workflow.stages[index]
@@ -1768,20 +1768,6 @@ class ControlWindow(QMainWindow):
         if status is StageStatus.ACTIVE:
             return "processing"
         return "inactive"
-
-    def _workflow_progress(self) -> float:
-        total = max(1, len(self.workflow.stages))
-        done = sum(
-            1
-            for stage in self.workflow.stages
-            if self.workflow_state.statuses.get(stage.id)
-            in {StageStatus.COMPLETE, StageStatus.SKIPPED}
-        )
-        if self.workflow_state.statuses.get(
-            self.workflow.current_stage(self.workflow_state).id
-        ) is StageStatus.ACTIVE:
-            done += 0.55
-        return min(100.0, done / total * 100.0)
 
     def _stage_progress(self, stage: Stage, status: str) -> float:
         if status == "done":

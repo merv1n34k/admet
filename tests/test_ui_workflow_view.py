@@ -8,8 +8,10 @@ from admet.ui.workflow_view import (
     guard_enabled,
     instruction_text,
     stage_by_id,
+    toc_row_states,
+    workflow_progress_percent,
 )
-from admet.workflows import Stage, StageAction, StageInstruction, Workflow, WorkflowState
+from admet.workflows import Stage, StageAction, StageInstruction, StageStatus, Workflow, WorkflowState
 
 
 class WorkflowViewTests(unittest.TestCase):
@@ -79,6 +81,34 @@ class WorkflowViewTests(unittest.TestCase):
         self.assertFalse(state.enabled)
         self.assertTrue(state.active)
         self.assertTrue(state.toggle)
+
+    def test_toc_row_states_use_workflow_state_by_default(self) -> None:
+        workflow = Workflow("test", "Test", (Stage("one", "One"), Stage("two", "Two")))
+        state = WorkflowState(index=1, statuses={"one": StageStatus.COMPLETE, "two": StageStatus.ACTIVE})
+
+        rows = toc_row_states(workflow, state)
+        self.assertEqual([row.stage_id for row in rows], ["one", "two"])
+        self.assertEqual([row.label for row in rows], ["One", "Two"])
+        self.assertFalse(rows[0].selected)
+        self.assertTrue(rows[1].selected)
+        self.assertIs(rows[0].status, StageStatus.COMPLETE)
+
+    def test_toc_row_states_accept_mode_status_resolver(self) -> None:
+        workflow = Workflow("test", "Test", (Stage("one", "One"), Stage("two", "Two")))
+
+        rows = toc_row_states(
+            workflow,
+            WorkflowState(index=0),
+            status_for=lambda index, _stage: "done" if index == 0 else "inactive",
+        )
+
+        self.assertEqual([row.status for row in rows], ["done", "inactive"])
+
+    def test_workflow_progress_percent_counts_done_and_active_stage(self) -> None:
+        workflow = Workflow("test", "Test", (Stage("one", "One"), Stage("two", "Two")))
+        state = WorkflowState(index=1, statuses={"one": StageStatus.COMPLETE, "two": StageStatus.ACTIVE})
+
+        self.assertEqual(workflow_progress_percent(workflow, state), 77.5)
 
 
 if __name__ == "__main__":

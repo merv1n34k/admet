@@ -22,7 +22,7 @@ from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
 from admet.engines.opencv.settings import OPENCV_SETTINGS
 from admet.ui import design
 from admet.ui.window import panel_specs, structure_signature
-from admet.ui.workflow_view import action_button_state, current_stage, instruction_text, stage_by_id
+from admet.ui.workflow_view import action_button_state, current_stage, instruction_text, stage_by_id, toc_row_states
 from admet.workflows import StageStatus, Workflow, WorkflowState
 from admet.workflows.analyze_runner import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 
@@ -422,16 +422,14 @@ class AnalyzeWorkflowView:
 
         with ui.column().classes("workflow-toc w-full"):
             ui.label("Workflow").classes("toc-title")
-            for index, stage in enumerate(self.workflow.stages):
-                selected = index == self.state.index
-                status = self.state.statuses.get(stage.id, StageStatus.PENDING)
-                dot = _dot_class(status, selected)
+            for row in toc_row_states(self.workflow, self.state):
+                dot = _dot_class(row.status, row.selected)
                 with ui.row().classes("toc-row w-full items-center gap-2").on(
                     "click",
-                    lambda _event, idx=index: self._activate(idx),
+                    lambda _event, idx=row.index: self._activate(idx),
                 ):
                     ui.element("span").classes(dot)
-                    ui.label(stage.label).classes("text-sm" + (" font-semibold" if selected else ""))
+                    ui.label(row.label).classes("text-sm" + (" font-semibold" if row.selected else ""))
 
     def _render_instruction_card(self) -> None:
         from nicegui import ui
