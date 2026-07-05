@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import csv
 import html
+import itertools
 import json
 import math
 import mimetypes
@@ -195,6 +196,7 @@ class AnalyzeWorkflowView:
             "export": 0,
         }
         self.last_report: AnalyzeBatchReport | None = None
+        self._run_progress = 0
         self.notice = "Create or select a project, then add files to the batch matrix."
         self.notice_kind = "primary"
         self.action_log: list[str] = ["Analyze UI ready."]
@@ -288,6 +290,11 @@ class AnalyzeWorkflowView:
             body = self._refs.get(key)
             if body is not None:
                 body.clear()
+        # clear() deletes the elements inside these bodies; drop their refs so a
+        # stale preview from a previous stage can't reach _sync_previews and get
+        # written to a deleted element. Stages that need them re-create them below.
+        for key in ("action_progress", "log", "opencv_preview", "cellpose_preview"):
+            self._refs.pop(key, None)
         self._table_refs = {}
         self._button_refs = []
         self._mount_action_box()
@@ -505,6 +512,7 @@ class AnalyzeWorkflowView:
         table.on("rowClick", self._select_row_event)
 
     def _wire_matrix_table(self, table: Any) -> None:
+        table.add_slot("body-cell-active", _bool_cell_slot("active"))
         table.add_slot(
             "body-cell-project",
             """
@@ -576,6 +584,8 @@ class AnalyzeWorkflowView:
     def _render_engine_matrix(self, engine: str) -> None:
         from nicegui import ui
 
+        # Which files run is decided only by the Use checkbox on the import stage;
+        # the engine stages just show the files tagged for use.
         rows = [row for row in self.matrix if row.active and row.engine == engine]
         params = _matrix_params(engine)
         with ui.column().classes("panel w-full gap-2 p-3"):
@@ -1028,7 +1038,7 @@ class AnalyzeWorkflowView:
 
     def _selected_row_for_engine(self, engine: str) -> MatrixRow | None:
         selected = self._selected_row()
-        if selected is not None and selected.engine == engine:
+        if selected is not None and selected.engine == engine and selected.active:
             return selected
         return next((row for row in self.matrix if row.active and row.engine == engine), None)
 
@@ -1375,7 +1385,7 @@ class AnalyzeWorkflowView:
             )
 
     async def _run_engine(self, engine: str | None) -> None:
-        from nicegui import run
+        from nicegui import run, ui
 
         targets = self._targets(engine)
         if not targets:
@@ -1385,11 +1395,17 @@ class AnalyzeWorkflowView:
             return
         jobs = tuple(self._target_to_run(row) for row in targets)
         # Run the batch off the event loop so heavy cellpose/opencv work does not
-        # freeze the UI. cv2/torch release the GIL during compute, so the page stays
-        # responsive while a run is in progress.
+        # freeze the UI. A timer polls per-file progress reported by the runner and
+        # drives the action-box progress bar live.
+        self._run_progress = 0
         self._notify(f"Running {engine or 'analysis'} on {len(jobs)} file(s)…", "primary")
         self._log(f"analysis: running {engine or 'all'} ({len(jobs)} file(s))")
         self._refresh()
+        progress = self._refs.get("action_progress")
+        timer = ui.timer(
+            0.25,
+            lambda: progress.set_value(self._run_progress / 100.0) if progress is not None else None,
+        )
         try:
             report = await run.io_bound(self._run_batch, jobs)
         except Exception as exc:
@@ -1397,6 +1413,8 @@ class AnalyzeWorkflowView:
             self._log(f"analysis: {type(exc).__name__}: {exc}")
             self._refresh()
             return
+        finally:
+            timer.cancel()
 
         self.last_report = report
         engines = {job.engine for job in report.jobs}
@@ -1413,7 +1431,11 @@ class AnalyzeWorkflowView:
         self._refresh()
 
     def _run_batch(self, jobs: tuple[AnalyzeTarget, ...]) -> AnalyzeBatchReport:
-        return AnalyzeBatchRunner(self.registry, cache_root=self.settings["cache_root"]).run(jobs)
+        def on_progress(percent: float) -> None:
+            self._run_progress = percent
+
+        runner = AnalyzeBatchRunner(self.registry, cache_root=self.settings["cache_root"])
+        return runner.run(jobs, on_progress=on_progress)
 
     def _target_to_run(self, row: MatrixRow) -> AnalyzeTarget:
         settings = self._engine_settings(row)
@@ -1583,6 +1605,9 @@ class AnalyzeWorkflowView:
         row = next((item for item in self.matrix if item.uid == uid), None)
         if row is None:
             return
+        if field == "active":
+            row.active = bool(value)
+            return
         if field == "sample_id":
             row.sample_id = str(value or "")
             return
@@ -1664,6 +1689,7 @@ class AnalyzeWorkflowView:
 
 def _matrix_columns() -> list[dict[str, Any]]:
     return [
+        {"name": "active", "label": "Use", "field": "active", "align": "center"},
         {"name": "project", "label": "Project", "field": "project", "align": "left"},
         {"name": "source", "label": "Source", "field": "source", "align": "left"},
         {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
@@ -1746,7 +1772,7 @@ def _bool_cell_slot(field: str) -> str:
     <q-td :props="props">
       <q-checkbox dense v-model="props.row.{field}"
         @click.stop @mousedown.stop
-        @update:model-value="$parent.$emit('matrix-change', {{uid: props.row.uid, field: '{field}', value: props.row.{field}}})" />
+        @update:model-value="val => $parent.$emit('matrix-change', {{uid: props.row.uid, field: '{field}', value: val}})" />
     </q-td>
     """
 
@@ -2505,8 +2531,14 @@ def _dot_class(status: StageStatus, selected: bool) -> str:
     return "toc-dot"
 
 
+_uid_counter = itertools.count(1)
+
+
 def _uid() -> str:
-    return f"target_{int(time.time() * 1000)}"
+    # A process-unique, monotonic id. Must never collide: rows are keyed by uid in
+    # the matrix table (row_key) and looked up by uid in _handle_matrix_change, so a
+    # shared uid makes every checkbox toggle resolve to the first matching row.
+    return f"target_{next(_uid_counter)}"
 
 
 def _style() -> str:
