@@ -1354,18 +1354,24 @@ class AnalyzeWorkflowView:
                 )
             )
 
-    def _run_engine(self, engine: str | None) -> None:
+    async def _run_engine(self, engine: str | None) -> None:
+        from nicegui import run
+
         targets = self._targets(engine)
         if not targets:
             label = engine or "analyze"
             self._notify(f"No active {label} files.", "warning")
             self._refresh()
             return
+        jobs = tuple(self._target_to_run(row) for row in targets)
+        # Run the batch off the event loop so heavy cellpose/opencv work does not
+        # freeze the UI. cv2/torch release the GIL during compute, so the page stays
+        # responsive while a run is in progress.
+        self._notify(f"Running {engine or 'analysis'} on {len(jobs)} file(s)…", "primary")
+        self._log(f"analysis: running {engine or 'all'} ({len(jobs)} file(s))")
+        self._refresh()
         try:
-            report = AnalyzeBatchRunner(
-                self.registry,
-                cache_root=self.settings["cache_root"],
-            ).run(tuple(self._target_to_run(row) for row in targets))
+            report = await run.io_bound(self._run_batch, jobs)
         except Exception as exc:
             self._notify(f"analysis failed: {exc}", "danger")
             self._log(f"analysis: {type(exc).__name__}: {exc}")
@@ -1385,6 +1391,9 @@ class AnalyzeWorkflowView:
         self._notify(f"analysis complete: {len(report.jobs)} job(s).", "success")
         self._log(f"analysis: complete {len(report.jobs)} job(s)")
         self._refresh()
+
+    def _run_batch(self, jobs: tuple[AnalyzeTarget, ...]) -> AnalyzeBatchReport:
+        return AnalyzeBatchRunner(self.registry, cache_root=self.settings["cache_root"]).run(jobs)
 
     def _target_to_run(self, row: MatrixRow) -> AnalyzeTarget:
         settings = self._engine_settings(row)
