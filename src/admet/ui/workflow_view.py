@@ -76,6 +76,21 @@ def action_button_state(
     )
 
 
+def stage_controls(stage: Stage) -> tuple[StageAction, ...]:
+    if stage.actions:
+        return stage.actions
+    if stage.pipeline:
+        return ()
+    controls: list[StageAction] = []
+    if stage.action:
+        controls.append(StageAction("Run Stage", stage.action, completes=True))
+    if stage.skippable:
+        controls.append(StageAction("Skip", skippable=True, variant="secondary"))
+    if not controls:
+        controls.append(StageAction("Complete", completes=True, variant="success"))
+    return tuple(controls)
+
+
 def toc_row_states(
     workflow: Workflow,
     state: WorkflowState,

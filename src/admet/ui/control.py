@@ -52,7 +52,15 @@ from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
 from admet.ui import theme as ui
 from admet.ui.theme import Theme
 from admet.ui.window import panel_specs, structure_changed, structure_signature
-from admet.ui.workflow_view import action_button_state, active_when, guard_enabled, has_feature, instruction_text, toc_row_states
+from admet.ui.workflow_view import (
+    action_button_state,
+    active_when,
+    guard_enabled,
+    has_feature,
+    instruction_text,
+    stage_controls,
+    toc_row_states,
+)
 from admet.workflows import create_control_workflow
 
 
@@ -677,7 +685,7 @@ class ControlWindow(QMainWindow):
 
     def _action_button_specs(self, stage: Stage) -> list[tuple[str, Any, bool, bool, bool]]:
         controls: list[tuple[str, Any, bool, bool, bool]] = []
-        for control in stage.actions or self._default_controls(stage):
+        for control in stage_controls(stage):
             if control.completes and control.action is None:
                 continue
             spec = self._command_spec(stage, control)
@@ -2286,18 +2294,6 @@ class ControlWindow(QMainWindow):
         if stage is None:
             stage = self.workflow.current_stage(self.workflow_state)
         self._show_instruction_card(instruction_text(stage, self._guard_value))
-
-    def _default_controls(self, stage: Stage) -> tuple[StageControl, ...]:
-        if stage.pipeline:
-            return ()
-        controls: list[StageControl] = []
-        if stage.action:
-            controls.append(StageControl("Run Stage", stage.action, completes=True))
-        if stage.skippable:
-            controls.append(StageControl("Skip", skippable=True, variant="secondary"))
-        if not controls:
-            controls.append(StageControl("Complete", completes=True, variant="success"))
-        return tuple(controls)
 
     def _set_status(self, text: str, kind: str = "primary") -> None:
         self.status_kind = kind

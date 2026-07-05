@@ -8,6 +8,7 @@ from admet.ui.workflow_view import (
     guard_enabled,
     instruction_text,
     stage_by_id,
+    stage_controls,
     toc_row_states,
     workflow_progress_percent,
 )
@@ -109,6 +110,18 @@ class WorkflowViewTests(unittest.TestCase):
         state = WorkflowState(index=1, statuses={"one": StageStatus.COMPLETE, "two": StageStatus.ACTIVE})
 
         self.assertEqual(workflow_progress_percent(workflow, state), 77.5)
+
+    def test_stage_controls_use_declared_actions_or_fallbacks(self) -> None:
+        explicit = Stage("explicit", "Explicit", actions=(StageAction("Run", "run"),))
+        self.assertEqual(stage_controls(explicit), explicit.actions)
+
+        runnable = stage_controls(Stage("run", "Run", action="run_stage"))
+        self.assertEqual([(action.label, action.action) for action in runnable], [("Run Stage", "run_stage")])
+
+        skippable = stage_controls(Stage("skip", "Skip", skippable=True))
+        self.assertEqual([(action.label, action.skippable) for action in skippable], [("Skip", True)])
+
+        self.assertEqual(stage_controls(Stage("pipe", "Pipe", pipeline=True)), ())
 
 
 if __name__ == "__main__":
