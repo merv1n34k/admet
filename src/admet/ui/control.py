@@ -51,7 +51,7 @@ from admet.engines.acquisition.fluidics.config import (
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
 from admet.ui import theme as ui
 from admet.ui.theme import Theme
-from admet.ui.window import panel_specs, structure_changed, structure_signature
+from admet.ui.window import log_state, panel_specs, structure_changed, structure_signature
 from admet.ui.workflow_view import (
     action_button_state,
     active_when,
@@ -1193,7 +1193,8 @@ class ControlWindow(QMainWindow):
         self._render_current_stage()
 
     def _render_log(self) -> None:
-        log = QLabel("\n".join(self.log_entries[-80:]))
+        state = log_state(self.log_entries)
+        log = QLabel("\n".join(state.lines) or state.empty_text)
         log.setObjectName("LogText")
         log.setWordWrap(True)
         self.log_layout.addWidget(log)
@@ -1201,7 +1202,8 @@ class ControlWindow(QMainWindow):
 
     def _sync_log(self) -> None:
         if self.log_label is not None:
-            self.log_label.setText("\n".join(self.log_entries[-80:]))
+            state = log_state(self.log_entries)
+            self.log_label.setText("\n".join(state.lines) or state.empty_text)
 
     def _handle_control(self, stage: Stage, control: StageControl) -> None:
         if control.action is not None:

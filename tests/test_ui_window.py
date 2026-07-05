@@ -1,79 +1,55 @@
+from __future__ import annotations
+
 import unittest
 
-from admet.ui.window import RenderDecision, WindowController, WindowStageContext, WindowWiring
+from admet.ui.window import log_state, settings_panel_state, table_state
+from admet.workflows import SettingsSpec, Stage
 
 
-class WindowWiringTests(unittest.TestCase):
-    def test_render_mounts_once_then_syncs(self):
-        wiring = WindowWiring()
-        calls = []
-
-        first = wiring.render("stage", ("a",), mount=lambda: calls.append("mount"), sync=lambda: calls.append("sync"))
-        second = wiring.render("stage", ("a",), mount=lambda: calls.append("mount"), sync=lambda: calls.append("sync"))
-
-        self.assertTrue(first.mounted)
-        self.assertFalse(second.mounted)
-        self.assertEqual(calls, ["mount", "sync", "sync"])
-
-    def test_render_remounts_shared_on_cached_stage_switch(self):
-        wiring = WindowWiring()
-        calls = []
-        wiring.render("stage", ("a",), mount=lambda: None, sync=lambda: None)
-
-        decision = wiring.render(
-            "stage",
-            ("a",),
-            mount=lambda: calls.append("mount"),
-            sync=lambda: calls.append("sync"),
-            stage_changed=True,
-            remount_shared=lambda: calls.append("shared"),
+class WindowContractTests(unittest.TestCase):
+    def test_settings_panel_state_extracts_kind_source_and_stage(self) -> None:
+        state = settings_panel_state(
+            Stage(
+                "video",
+                "Video",
+                settings_panel=SettingsSpec(kind="matrix", options={"source": "opencv_targets"}),
+            )
         )
 
-        self.assertFalse(decision.mounted)
-        self.assertTrue(decision.remounted_shared)
-        self.assertEqual(calls, ["shared", "sync"])
+        self.assertEqual(state.kind, "matrix")
+        self.assertEqual(state.source, "opencv_targets")
+        self.assertEqual(state.stage_id, "video")
 
+    def test_settings_panel_state_defaults_missing_panel_to_params(self) -> None:
+        state = settings_panel_state(Stage("view", "View", settings_panel=None))
 
-class WindowControllerTests(unittest.TestCase):
-    def test_controller_uses_context_hooks(self):
-        hooks = FakeHooks()
-        controller = WindowController()
+        self.assertEqual(state.kind, "params")
+        self.assertEqual(state.stage_id, "view")
 
-        decision = controller.render_current_stage(hooks.prepare)
+    def test_settings_panel_state_preserves_explicit_none_panel(self) -> None:
+        state = settings_panel_state(Stage("view", "View", settings_panel=SettingsSpec(kind="none")))
 
-        self.assertIsNotNone(decision)
-        self.assertEqual(hooks.calls, ["prepare", "mount", "sync", "finish"])
-        self.assertEqual(hooks.finished, decision)
+        self.assertEqual(state.kind, "none")
+        self.assertEqual(state.stage_id, "view")
 
-
-class FakeHooks:
-    def __init__(self):
-        self.calls = []
-        self.finished: RenderDecision | None = None
-
-    def prepare(self) -> WindowStageContext:
-        self.calls.append("prepare")
-        return WindowStageContext(
-            "stage",
-            ("signature",),
-            mount=self.mount,
-            sync=self.sync,
-            finish=self.finish,
-            remount_shared=self.remount_shared,
+    def test_table_state_freezes_rows_and_columns(self) -> None:
+        state = table_state(
+            "summary",
+            [{"sample": "a"}],
+            columns=[{"name": "sample"}],
+            empty_text="No rows.",
         )
 
-    def mount(self) -> None:
-        self.calls.append("mount")
+        self.assertEqual(state.key, "summary")
+        self.assertEqual(state.rows, ({"sample": "a"},))
+        self.assertEqual(state.columns, ({"name": "sample"},))
+        self.assertEqual(state.empty_text, "No rows.")
 
-    def sync(self) -> None:
-        self.calls.append("sync")
+    def test_log_state_limits_lines_and_keeps_empty_text(self) -> None:
+        state = log_state(["one", "two", "three"], limit=2, empty_text="Empty")
 
-    def finish(self, decision: RenderDecision) -> None:
-        self.calls.append("finish")
-        self.finished = decision
-
-    def remount_shared(self) -> None:
-        self.calls.append("shared")
+        self.assertEqual(state.lines, ("two", "three"))
+        self.assertEqual(state.empty_text, "Empty")
 
 
 if __name__ == "__main__":

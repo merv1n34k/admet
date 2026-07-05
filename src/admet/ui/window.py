@@ -3,12 +3,35 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from admet.workflows import Stage
+
 
 @dataclass(frozen=True)
 class PanelSpec:
     key: str
     title: str
     object_name: str = "Panel"
+
+
+@dataclass(frozen=True)
+class SettingsPanelState:
+    kind: str
+    source: str = ""
+    stage_id: str = ""
+
+
+@dataclass(frozen=True)
+class TableState:
+    key: str
+    rows: tuple[dict[str, Any], ...]
+    columns: tuple[Any, ...] = ()
+    empty_text: str = ""
+
+
+@dataclass(frozen=True)
+class LogState:
+    lines: tuple[str, ...]
+    empty_text: str = "No actions yet."
 
 
 @dataclass(frozen=True)
@@ -49,6 +72,36 @@ CONTROL_PANELS = (
 
 def panel_specs(*, channel_manager: bool = False) -> tuple[PanelSpec, ...]:
     return CONTROL_PANELS if channel_manager else CORE_PANELS
+
+
+def settings_panel_state(stage: Stage) -> SettingsPanelState:
+    panel = stage.settings_panel
+    if panel is None:
+        return SettingsPanelState(kind="none", stage_id=stage.id)
+    return SettingsPanelState(
+        kind=panel.kind,
+        source=str(panel.options.get("source") or ""),
+        stage_id=stage.id,
+    )
+
+
+def table_state(
+    key: str,
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    columns: list[Any] | tuple[Any, ...] = (),
+    empty_text: str = "",
+) -> TableState:
+    return TableState(
+        key=key,
+        rows=tuple(rows),
+        columns=tuple(columns),
+        empty_text=empty_text,
+    )
+
+
+def log_state(entries: list[str] | tuple[str, ...], *, limit: int = 80, empty_text: str = "No actions yet.") -> LogState:
+    return LogState(lines=tuple(entries[-limit:]), empty_text=empty_text)
 
 
 def structure_signature(*parts: Any) -> tuple[Any, ...]:

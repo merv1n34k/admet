@@ -21,7 +21,7 @@ from admet.core.session import session_path
 from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
 from admet.engines.opencv.settings import OPENCV_SETTINGS
 from admet.ui import design
-from admet.ui.window import panel_specs, structure_signature
+from admet.ui.window import log_state, panel_specs, settings_panel_state, structure_signature, table_state
 from admet.ui.workflow_view import action_button_state, current_stage, instruction_text, stage_by_id, toc_row_states
 from admet.workflows import StageStatus, Workflow, WorkflowState
 from admet.workflows.analyze_runner import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
@@ -294,22 +294,19 @@ class AnalyzeWorkflowView:
 
     def _render_settings_panel(self) -> None:
         stage = self._stage()
-        settings_panel = stage.settings_panel
-        if settings_panel is None:
-            return
-        if settings_panel.kind == "matrix":
-            source = str(settings_panel.options.get("source") or "")
-            if source == "all_targets":
+        panel = settings_panel_state(stage)
+        if panel.kind == "matrix":
+            if panel.source == "all_targets":
                 self._render_matrix()
-            elif source == "opencv_targets":
+            elif panel.source == "opencv_targets":
                 self._render_engine_matrix("opencv")
-            elif source == "cellpose_targets":
+            elif panel.source == "cellpose_targets":
                 self._render_engine_matrix("cellpose")
             return
-        if settings_panel.kind == "none":
+        if panel.kind == "none":
             self._render_view_panel()
             return
-        if stage.id == "export":
+        if panel.stage_id == "export":
             self._render_export_panel()
             return
         self._render_view_panel()
@@ -352,14 +349,19 @@ class AnalyzeWorkflowView:
         with body:
             with ui.column().classes("panel w-full gap-2 p-3"):
                 ui.label("Run summary").classes("section-title")
-                rows = self._result_rows()
-                table = ui.table(
+                state = table_state(
+                    "run_summary",
+                    self._result_rows(),
                     columns=_result_columns(),
-                    rows=rows,
+                    empty_text="No results yet. Run OpenCV, Cellpose, or Run All.",
+                )
+                table = ui.table(
+                    columns=list(state.columns),
+                    rows=list(state.rows),
                 ).classes("w-full").props("dense flat hide-bottom")
-                self._register_table("run_summary", table)
-                if not rows:
-                    ui.label("No results yet. Run OpenCV, Cellpose, or Run All.").classes("muted text-xs")
+                self._register_table(state.key, table)
+                if not state.rows:
+                    ui.label(state.empty_text).classes("muted text-xs")
 
     def _mount_log(self) -> None:
         from nicegui import ui
@@ -412,7 +414,8 @@ class AnalyzeWorkflowView:
     def _sync_log(self) -> None:
         log = self._refs.get("log")
         if log is not None:
-            log.content = "<br>".join(_escape(line) for line in self.action_log[-80:]) or "No actions yet."
+            state = log_state(self.action_log)
+            log.content = "<br>".join(_escape(line) for line in state.lines) or state.empty_text
 
     def _register_table(self, key: str, table: Any) -> None:
         self._table_refs.setdefault(key, []).append(table)
