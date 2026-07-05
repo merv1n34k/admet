@@ -13,7 +13,7 @@ dev: analyze
 
 control:
 	UV_PROJECT_ENVIRONMENT=$(CONTROL_ENV) UV_PYTHON=$(CONTROL_PYTHON) uv sync --extra control
-	UV_PROJECT_ENVIRONMENT=$(CONTROL_ENV) UV_PYTHON=$(CONTROL_PYTHON) uv run admet control
+	PYLON_CAMEMU=2 UV_PROJECT_ENVIRONMENT=$(CONTROL_ENV) UV_PYTHON=$(CONTROL_PYTHON) uv run admet control
 
 analyze:
 	arch -arm64 /usr/bin/env UV_PROJECT_ENVIRONMENT=$(ANALYZE_ENV) UV_PYTHON=$(ANALYZE_PYTHON) uv sync --extra analyze
