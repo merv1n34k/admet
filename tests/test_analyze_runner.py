@@ -96,6 +96,32 @@ class AnalyzeBatchRunnerTests(unittest.TestCase):
         self.assertEqual({project.project_path.name for project in report.projects}, {"one.admetp", "two.admetp"})
         self.assertEqual(len(report.jobs), 2)
 
+    def test_runner_reports_monotonic_intra_file_progress(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_a = root / "a.avi"
+            source_b = root / "b.avi"
+            source_a.write_bytes(b"a")
+            source_b.write_bytes(b"b")
+            registry = EngineRegistry()
+            registry.register("opencv", lambda: FakeAnalyzeEngine("opencv"))
+
+            seen: list[float] = []
+            AnalyzeBatchRunner(registry, cache_root=root / "cache-root").run(
+                (
+                    AnalyzeTarget(root / "one.admetp", source_a, engine="opencv"),
+                    AnalyzeTarget(root / "two.admetp", source_b, engine="opencv"),
+                ),
+                on_progress=lambda pct: seen.append(round(pct, 3)),
+            )
+
+        self.assertEqual(seen[0], 0.0)
+        self.assertEqual(seen[-1], 100.0)
+        self.assertEqual(seen, sorted(seen))
+        # two files: 50% of file 1 -> 25% overall, 50% of file 2 -> 75% overall
+        self.assertIn(25.0, seen)
+        self.assertIn(75.0, seen)
+
     def test_runner_skips_unknown_source_without_aborting_project(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -330,6 +356,9 @@ class FakeAnalyzeEngine:
                     "values": {"frame": 0, "count": 1},
                 }
             )
+        if job.progress is not None:
+            job.progress(50, "half")
+            job.progress(100, "done")
         return RunResult(
             job_id=job.id,
             engine=self.id,

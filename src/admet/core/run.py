@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -22,6 +23,7 @@ class RunJob:
     cache_dir: Path | None = None
     sink: RunSink | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    progress: Callable[[int, str], None] | None = None
 
 
 @dataclass(frozen=True)

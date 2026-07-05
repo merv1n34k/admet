@@ -63,6 +63,8 @@ class OpenCVAnalysisEngine:
         config = self._config_from_settings(settings, cache_dir=cache_dir)
 
         pipeline = DropletPipeline(config)
+        if job is not None and job.progress is not None:
+            pipeline.set_progress_callback(job.progress)
         pipeline.set_video(video_path)
         data = pipeline.run()
         if "error" in data:

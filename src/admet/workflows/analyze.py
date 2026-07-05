@@ -5,6 +5,7 @@ import json
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from admet.core.api import AdmetAPI
@@ -184,20 +185,48 @@ class AnalyzeBatchRunner:
         self.registry = registry
         self.cache_root = Path(cache_root) if cache_root is not None else Path.home() / ".admet-cache"
 
-    def run(self, targets: list[AnalyzeTarget] | tuple[AnalyzeTarget, ...]) -> AnalyzeBatchReport:
+    def run(
+        self,
+        targets: list[AnalyzeTarget] | tuple[AnalyzeTarget, ...],
+        *,
+        on_progress: Callable[[float], None] | None = None,
+    ) -> AnalyzeBatchReport:
         grouped: dict[Path, list[AnalyzeTarget]] = {}
         for target in targets:
             grouped.setdefault(session_path(target.project_path), []).append(target)
 
+        total = len(targets)
+        state = {"index": 0}
+
+        def begin_file() -> Callable[[int, str], None]:
+            # Called once per target. Reports the base progress (files already done)
+            # and returns a per-file callback the engine can drive with its own
+            # 0-100 percent, giving smooth intra-file progress for a single video.
+            index = state["index"]
+            state["index"] += 1
+            if on_progress is not None and total:
+                on_progress(index / total * 100.0)
+
+            def report(percent: int, message: str = "") -> None:
+                if on_progress is not None and total:
+                    fraction = max(0.0, min(100.0, float(percent))) / 100.0
+                    on_progress((index + fraction) / total * 100.0)
+
+            return report
+
         reports = []
         for project_path, project_targets in grouped.items():
-            reports.append(self._run_project(project_path, project_targets))
+            reports.append(self._run_project(project_path, project_targets, begin_file=begin_file))
+        if on_progress is not None:
+            on_progress(100.0)
         return AnalyzeBatchReport(projects=tuple(reports))
 
     def _run_project(
         self,
         project_path: Path,
         targets: list[AnalyzeTarget],
+        *,
+        begin_file: Callable[[], Callable[[int, str], None]] | None = None,
     ) -> AnalyzeProjectReport:
         store = _open_project(project_path)
         run_target = store.analysis_run_target("analysis")
@@ -207,6 +236,7 @@ class AnalyzeBatchRunner:
 
         with JsonlRunSink(run_target.raw_path) as sink:
             for index, target in enumerate(targets, start=1):
+                file_progress = begin_file() if begin_file is not None else None
                 cache_policy = _cache_policy(target.cache_policy)
                 sample_id = target.sample_id or target.source_path.stem
                 try:
@@ -317,6 +347,7 @@ class AnalyzeBatchRunner:
                                 inputs=_job_inputs(engine_id, target.source_path),
                                 cache_dir=cache_dir,
                                 sink=target_sink,
+                                progress=file_progress,
                                 metadata={
                                     "project_id": store.session.project_id,
                                     "run_id": run_target.run_id,

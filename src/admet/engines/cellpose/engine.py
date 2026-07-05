@@ -74,6 +74,7 @@ class CellposeAnalysisEngine:
         rows = detector.run(
             input_dir,
             frame_limit=settings["frame_limit"],
+            on_progress=job.progress if job is not None else None,
         )
         row_count = self._write_raw_rows(job, rows, config=config, detector=detector) if job is not None else 0
         return rows, config, detector, row_count

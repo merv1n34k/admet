@@ -316,6 +316,7 @@ class CellposeDetection:
         input_dir: str | Path,
         *,
         frame_limit: int | None = None,
+        on_progress: Callable[[int, str], None] | None = None,
     ) -> list[dict[str, Any]]:
         frame_groups = self.load_and_group_images(input_dir)
         if not frame_groups:
@@ -325,8 +326,11 @@ class CellposeDetection:
         if frame_limit and frame_limit > 0:
             frame_indices = frame_indices[:frame_limit]
 
+        total = len(frame_indices)
         cache_hits = 0
-        for frame_idx in frame_indices:
+        for position, frame_idx in enumerate(frame_indices, start=1):
+            if on_progress is not None and total:
+                on_progress(int(position / total * 100), f"Frame {position}/{total}")
             z_stack_files = frame_groups[frame_idx]
             cache_key_file = z_stack_files[0][1].name if z_stack_files else None
             if self.cache and cache_key_file and self.cache.is_valid(cache_key_file):
