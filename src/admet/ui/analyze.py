@@ -22,7 +22,7 @@ from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
 from admet.engines.opencv.settings import OPENCV_SETTINGS
 from admet.ui import design
 from admet.ui.window import panel_specs, structure_signature
-from admet.ui.workflow_view import current_stage, guard_enabled, instruction_text, stage_by_id
+from admet.ui.workflow_view import action_button_state, current_stage, instruction_text, stage_by_id
 from admet.workflows import StageStatus, Workflow, WorkflowState
 from admet.workflows.analyze_runner import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 
@@ -1275,12 +1275,13 @@ class AnalyzeWorkflowView:
 
     def _action_spec(self, action: Any) -> dict[str, Any]:
         handler = self._action_handler(action.action)
+        state = action_button_state(action, self._guard_value)
         spec = {
-            "label": action.label,
+            "label": state.label,
             "handler": handler,
-            "active": action.variant in {"primary", "success"},
-            "warning": action.variant == "warning",
-            "enabled": guard_enabled(action.guard, self._guard_value),
+            "active": state.active,
+            "warning": state.warning,
+            "enabled": state.enabled,
         }
         return spec
 

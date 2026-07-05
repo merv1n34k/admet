@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
-from admet.workflows import Stage, Workflow, WorkflowState
+from admet.workflows import Stage, StageAction, Workflow, WorkflowState
+
+
+@dataclass(frozen=True)
+class ActionButtonState:
+    label: str
+    enabled: bool = True
+    active: bool = False
+    warning: bool = False
+    toggle: bool = False
 
 
 def current_stage(workflow: Workflow, state: WorkflowState) -> Stage:
@@ -36,6 +46,24 @@ def guard_enabled(guard: str, value: Callable[[str], bool]) -> bool:
 
 def active_when(active_when: str, value: Callable[[str], bool]) -> bool:
     return bool(active_when) and value(active_when)
+
+
+def action_button_state(
+    action: StageAction,
+    guard_value: Callable[[str], bool],
+    *,
+    enabled: bool = True,
+    active: bool | None = None,
+    toggle: bool = False,
+    label: str | None = None,
+) -> ActionButtonState:
+    return ActionButtonState(
+        label=label or action.label,
+        enabled=enabled and guard_enabled(action.guard, guard_value),
+        active=action.variant in {"primary", "success"} if active is None else active,
+        warning=action.variant == "warning",
+        toggle=toggle,
+    )
 
 
 def instruction_text(stage: Stage, guard_value: Callable[[str], bool]) -> str:

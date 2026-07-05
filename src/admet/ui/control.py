@@ -52,7 +52,7 @@ from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
 from admet.ui import theme as ui
 from admet.ui.theme import Theme
 from admet.ui.window import panel_specs, structure_changed, structure_signature
-from admet.ui.workflow_view import active_when, guard_enabled, has_feature, instruction_text
+from admet.ui.workflow_view import action_button_state, active_when, guard_enabled, has_feature, instruction_text
 from admet.workflows import create_control_workflow
 
 
@@ -835,55 +835,99 @@ class ControlWindow(QMainWindow):
             return None
         if control.kind == "toggle" and control.off_action is not None:
             active = active_when(control.active_when, self._guard_value)
+            state = action_button_state(
+                control,
+                self._guard_value,
+                enabled=self._action_enabled(action),
+                active=active,
+                toggle=True,
+                label=_short_control_label(control.label),
+            )
             return (
-                _short_control_label(control.label),
+                state.label,
                 lambda _checked=False, c=control: self._run(
                     c.off_action if active_when(c.active_when, self._guard_value) else c.action
                 ),
-                self._action_enabled(action) and guard_enabled(control.guard, self._guard_value),
-                active,
-                True,
+                state.enabled,
+                state.active,
+                state.toggle,
             )
         if action == "run_protocol":
+            state = action_button_state(
+                control,
+                self._guard_value,
+                enabled=self._action_enabled("run_protocol"),
+                active=self._pipeline_active(),
+                toggle=True,
+                label=_short_control_label(control.label),
+            )
             return (
-                _short_control_label(control.label),
+                state.label,
                 lambda _checked=False, s=stage: self._toggle_pipeline(s),
-                self._action_enabled("run_protocol") and guard_enabled(control.guard, self._guard_value),
-                self._pipeline_active(),
-                True,
+                state.enabled,
+                state.active,
+                state.toggle,
             )
         if action == "pause_protocol":
             paused = self.last_metadata.get("pipeline_state") == "paused"
+            state = action_button_state(
+                control,
+                self._guard_value,
+                enabled=self._action_enabled("pause_protocol"),
+                active=paused,
+                toggle=True,
+                label="Resume" if paused else "Pause",
+            )
             return (
-                "Resume" if paused else "Pause",
+                state.label,
                 lambda _checked=False: self._toggle_pause(),
-                self._action_enabled("pause_protocol") and guard_enabled(control.guard, self._guard_value),
-                paused,
-                True,
+                state.enabled,
+                state.active,
+                state.toggle,
             )
         if action == "confirm_protocol":
+            state = action_button_state(
+                control,
+                self._guard_value,
+                enabled=self._action_enabled(action),
+                active=False,
+                label=_short_control_label(control.label),
+            )
             return (
-                _short_control_label(control.label),
+                state.label,
                 lambda _checked=False, s=stage: self._confirm_pipeline_step(s),
-                self._action_enabled(action) and guard_enabled(control.guard, self._guard_value),
-                False,
-                False,
+                state.enabled,
+                state.active,
+                state.toggle,
             )
         if action == "skip_protocol":
-            return (
-                _short_control_label(control.label),
-                lambda _checked=False, s=stage: self._skip_pipeline_step(s),
-                self._action_enabled(action) and guard_enabled(control.guard, self._guard_value),
-                False,
-                False,
+            state = action_button_state(
+                control,
+                self._guard_value,
+                enabled=self._action_enabled(action),
+                active=False,
+                label=_short_control_label(control.label),
             )
+            return (
+                state.label,
+                lambda _checked=False, s=stage: self._skip_pipeline_step(s),
+                state.enabled,
+                state.active,
+                state.toggle,
+            )
+        state = action_button_state(
+            control,
+            self._guard_value,
+            enabled=self._action_enabled(action) if action is not None else True,
+            active=False,
+            label=_short_control_label(control.label),
+        )
         return (
-            _short_control_label(control.label),
+            state.label,
             lambda _checked=False, c=control: self._handle_control(stage, c),
-            (self._action_enabled(action) if action is not None else True)
-            and guard_enabled(control.guard, self._guard_value),
-            False,
-            False,
+            state.enabled,
+            state.active,
+            state.toggle,
         )
 
     def _render_channel_manager(self, stage: Stage) -> None:
