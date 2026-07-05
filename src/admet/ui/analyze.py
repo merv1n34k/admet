@@ -8,7 +8,6 @@ import json
 import math
 import mimetypes
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
@@ -28,74 +27,8 @@ from admet.workflows import StageStatus, Workflow, WorkflowState
 from admet.workflows.analyze import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 
 
-WORKFLOW_STAGES = (
-    ("import", "1. Import & Batch"),
-    ("video", "2. Video Analysis"),
-    ("imaging", "3. Imaging Analysis"),
-    ("view", "4. View Results"),
-    ("export", "5. Export"),
-)
 VIDEO_SUFFIXES = {".avi", ".mp4", ".mov", ".mkv"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
-
-
-@dataclass(frozen=True)
-class _StageSpec:
-    buttons: Callable[[Any], list[dict[str, Any]]]
-    panel: Callable[[Any], None]
-    editor: Callable[[Any], None]
-    instruction: str
-
-
-# Per-stage config lives here, once per stage: action-box buttons, action-panel content
-# (matrix or settings), the main-window editor, and the instruction text. The generic
-# components read this registry instead of branching on stage id. Only the editor (and
-# this small config) is per-stage; everything else is shared.
-_STAGES: dict[str, _StageSpec] = {
-    "import": _StageSpec(
-        buttons=lambda v: [
-            {"label": "Browse File", "handler": v._open_source_browser, "active": True},
-            {"label": "Reset Settings", "handler": v._reset_settings},
-            {"label": "Clear Matrix", "handler": v._clear_matrix},
-        ],
-        panel=lambda v: v._render_matrix(),
-        editor=lambda v: v._render_import_inventory(),
-        instruction="Create or load a project, then browse source files or folders. Sample names are edited in the matrix.",
-    ),
-    "video": _StageSpec(
-        buttons=lambda v: [{"label": "Run OpenCV", "handler": lambda: v._run_engine("opencv"), "active": True}],
-        panel=lambda v: v._render_engine_matrix("opencv"),
-        editor=lambda v: v._render_video_stage(),
-        instruction="Configure OpenCV values and run the active video rows.",
-    ),
-    "imaging": _StageSpec(
-        buttons=lambda v: [{"label": "Run Cellpose", "handler": lambda: v._run_engine("cellpose"), "active": True}],
-        panel=lambda v: v._render_engine_matrix("cellpose"),
-        editor=lambda v: v._render_imaging_stage(),
-        instruction="Configure Cellpose values and run the active imaging rows.",
-    ),
-    "view": _StageSpec(
-        buttons=lambda v: [
-            {"label": "Refresh View", "handler": v._refresh_view, "active": True},
-            {"label": "Run All", "handler": lambda: v._run_engine(None)},
-        ],
-        panel=lambda v: v._render_view_panel(),
-        editor=lambda v: v._render_view_results(),
-        instruction="Review stored raw runs and current execution summaries.",
-    ),
-    "export": _StageSpec(
-        buttons=lambda v: [
-            {"label": "Export Later", "handler": lambda: v._notify("Export is not wired yet.", "warning")}
-        ],
-        panel=lambda v: v._render_export_panel(),
-        editor=lambda v: v._render_analysis_runs(),
-        instruction="Export will derive tables and figures from stored raw runs.",
-    ),
-}
-
-
-def _stage_spec(stage_id: str) -> _StageSpec:
-    return _STAGES.get(stage_id, _STAGES["export"])
 
 
 @dataclass
@@ -357,7 +290,29 @@ class AnalyzeWorkflowView:
     def _mount_action_panel(self) -> None:
         body = self._refs["action_panel_body"]
         with body:
-            _stage_spec(self._stage_id()).panel(self)
+            self._render_settings_panel()
+
+    def _render_settings_panel(self) -> None:
+        stage = self._stage()
+        settings_panel = stage.settings_panel
+        if settings_panel is None:
+            return
+        if settings_panel.kind == "matrix":
+            source = str(settings_panel.options.get("source") or "")
+            if source == "all_targets":
+                self._render_matrix()
+            elif source == "opencv_targets":
+                self._render_engine_matrix("opencv")
+            elif source == "cellpose_targets":
+                self._render_engine_matrix("cellpose")
+            return
+        if settings_panel.kind == "none":
+            self._render_view_panel()
+            return
+        if stage.id == "export":
+            self._render_export_panel()
+            return
+        self._render_view_panel()
 
     def _render_view_panel(self) -> None:
         from nicegui import ui
@@ -374,7 +329,21 @@ class AnalyzeWorkflowView:
     def _mount_main_window(self) -> None:
         body = self._refs["main_body"]
         with body:
-            _stage_spec(self._stage_id()).editor(self)
+            self._render_editor()
+
+    def _render_editor(self) -> None:
+        editor = self._stage().editor
+        kind = editor.kind if editor is not None else ""
+        if kind == "import_inventory":
+            self._render_import_inventory()
+        elif kind == "opencv_video":
+            self._render_video_stage()
+        elif kind == "cellpose_editor":
+            self._render_imaging_stage()
+        elif kind == "analysis_results":
+            self._render_view_results()
+        else:
+            self._render_analysis_runs()
 
     def _mount_results(self) -> None:
         from nicegui import ui
@@ -453,16 +422,16 @@ class AnalyzeWorkflowView:
 
         with ui.column().classes("workflow-toc w-full"):
             ui.label("Workflow").classes("toc-title")
-            for index, (_stage_id, label) in enumerate(WORKFLOW_STAGES):
+            for index, stage in enumerate(self.workflow.stages):
                 selected = index == self.state.index
-                status = self.state.statuses.get(_stage_id, StageStatus.PENDING)
+                status = self.state.statuses.get(stage.id, StageStatus.PENDING)
                 dot = _dot_class(status, selected)
                 with ui.row().classes("toc-row w-full items-center gap-2").on(
                     "click",
                     lambda _event, idx=index: self._activate(idx),
                 ):
                     ui.element("span").classes(dot)
-                    ui.label(label).classes("text-sm" + (" font-semibold" if selected else ""))
+                    ui.label(stage.label).classes("text-sm" + (" font-semibold" if selected else ""))
 
     def _render_instruction_card(self) -> None:
         from nicegui import ui
@@ -1301,7 +1270,51 @@ class AnalyzeWorkflowView:
             self._log(f"project: could not link {source.name}: {exc}")
 
     def _action_specs(self, stage_id: str) -> list[dict[str, Any]]:
-        return _stage_spec(stage_id).buttons(self)
+        stage = self._stage_by_id(stage_id)
+        return [self._action_spec(action) for action in stage.actions]
+
+    def _action_spec(self, action: Any) -> dict[str, Any]:
+        handler = self._action_handler(action.action)
+        spec = {
+            "label": action.label,
+            "handler": handler,
+            "active": action.variant in {"primary", "success"},
+            "warning": action.variant == "warning",
+            "enabled": self._guard_enabled(action.guard),
+        }
+        return spec
+
+    def _action_handler(self, action: str | None) -> Any:
+        if action == "browse_source":
+            return self._open_source_browser
+        if action == "reset_settings":
+            return self._reset_settings
+        if action == "clear_matrix":
+            return self._clear_matrix
+        if action == "analyze":
+            stage_id = self._stage_id()
+            engine = "opencv" if stage_id == "video" else "cellpose" if stage_id == "imaging" else None
+            return lambda: self._run_engine(engine)
+        if action == "analyze_all":
+            return lambda: self._run_engine(None)
+        if action == "refresh_view":
+            return self._refresh_view
+        if action == "export_later":
+            return lambda: self._notify("Export is not wired yet.", "warning")
+        return lambda: None
+
+    def _guard_enabled(self, guard: str) -> bool:
+        if not guard:
+            return True
+        if guard == "project_ready":
+            return (self._project_path() / "manifest.json").is_file()
+        if guard == "has_matrix_rows":
+            return bool(self.matrix)
+        if guard == "has_opencv_targets":
+            return bool(self._targets("opencv"))
+        if guard == "has_cellpose_targets":
+            return bool(self._targets("cellpose"))
+        return True
 
     def _default_settings(self) -> dict[str, Any]:
         return {
@@ -1643,12 +1656,12 @@ class AnalyzeWorkflowView:
         self._refresh()
 
     def _activate(self, index: int) -> None:
-        index = max(0, min(index, len(WORKFLOW_STAGES) - 1))
+        index = max(0, min(index, len(self.workflow.stages) - 1))
         statuses = dict(self.state.statuses)
         current_id = self._stage_id()
         if statuses.get(current_id) is StageStatus.ACTIVE:
             statuses[current_id] = StageStatus.PENDING
-        stage_id = WORKFLOW_STAGES[index][0]
+        stage_id = self.workflow.stages[index].id
         if statuses.get(stage_id) is StageStatus.PENDING:
             statuses[stage_id] = StageStatus.ACTIVE
         self.state = replace(self.state, index=index, statuses=statuses)
@@ -1660,8 +1673,14 @@ class AnalyzeWorkflowView:
         self.state = replace(self.state, statuses=statuses)
 
     def _stage_id(self) -> str:
-        index = max(0, min(self.state.index, len(WORKFLOW_STAGES) - 1))
-        return WORKFLOW_STAGES[index][0]
+        return self._stage().id
+
+    def _stage(self) -> Any:
+        index = max(0, min(self.state.index, len(self.workflow.stages) - 1))
+        return self.workflow.stages[index]
+
+    def _stage_by_id(self, stage_id: str) -> Any:
+        return next((stage for stage in self.workflow.stages if stage.id == stage_id), self._stage())
 
     def _project_path(self) -> Path:
         value = str(self.project_path or "").strip()
@@ -1674,7 +1693,10 @@ class AnalyzeWorkflowView:
         return projects_root(self.discovery_root) / f"admet_{time.strftime('%Y%m%d_%H%M%S')}.admetp"
 
     def _instruction(self) -> str:
-        return _stage_spec(self._stage_id()).instruction
+        stage = self._stage()
+        if stage.instructions:
+            return " ".join(stage.instructions)
+        return stage.description
 
     def _notify(self, message: str, kind: str) -> None:
         self.notice = message

@@ -14,12 +14,63 @@ from admet.core.project import ProjectStore
 from admet.core.run import JsonlRunSink, RunJob, RunResult
 from admet.core.session import content_cache_key, session_path
 
-from .model import Stage, StageControl, StageSurface, Workflow
+from .model import EditorSpec, ResultsSpec, SettingsSpec, Stage, StageAction, Workflow
 
 
 VIDEO_SUFFIXES = {".avi", ".mp4", ".mov", ".mkv"}
 IMAGE_SUFFIXES = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
 CACHE_POLICIES = {"use", "discard", "skip"}
+
+
+IMPORT_SETTINGS = SettingsSpec(
+    "matrix",
+    title="Batch Matrix",
+    options={
+        "source": "all_targets",
+        "columns": (
+            "project",
+            "source",
+            "engine",
+            "sample_id",
+            "active",
+        ),
+    },
+)
+VIDEO_SETTINGS = SettingsSpec(
+    "matrix",
+    title="OpenCV Settings",
+    options={
+        "source": "opencv_targets",
+        "engine": "opencv",
+        "columns": ("project", "source", "sample_id", "active", "settings"),
+    },
+)
+IMAGING_SETTINGS = SettingsSpec(
+    "matrix",
+    title="Cellpose Settings",
+    options={
+        "source": "cellpose_targets",
+        "engine": "cellpose",
+        "columns": ("project", "source", "sample_id", "active", "settings"),
+    },
+)
+VIEW_SETTINGS = SettingsSpec("none", title="View Settings")
+EXPORT_SETTINGS = SettingsSpec(
+    "params",
+    title="Export Settings",
+    schema=ParamSchema((Param("export_dir", "Export Directory", ParamKind.PATH, default="exports"),)),
+)
+IMPORT_EDITOR = EditorSpec("import_inventory")
+VIDEO_EDITOR = EditorSpec("opencv_video", options={"engine": "opencv"})
+IMAGING_EDITOR = EditorSpec("cellpose_editor", options={"engine": "cellpose"})
+VIEW_EDITOR = EditorSpec("analysis_results", options={"charts": ("diameter", "cv", "count")})
+EXPORT_EDITOR = EditorSpec("analysis_export")
+
+ANALYZE_RESULTS = ResultsSpec(
+    "analysis_runs",
+    "Analysis Runs",
+    options={"columns": ("project", "run", "engine", "sample", "status", "rows")},
+)
 
 
 def create_analyze_workflow() -> Workflow:
@@ -33,7 +84,7 @@ def create_analyze_workflow() -> Workflow:
                 description="Create or open projects and build the file-to-engine matrix.",
                 instructions=(
                     "Add videos or imaging folders.",
-                    "Each row declares its project, sample id, engine, and cache policy.",
+                    "Each row declares its project, sample id, engine, and whether it is active.",
                 ),
                 settings=ParamSchema(
                     (
@@ -41,23 +92,14 @@ def create_analyze_workflow() -> Workflow:
                         Param("source_path", "Source Path", ParamKind.PATH, default=""),
                     )
                 ),
-                surfaces=(
-                    StageSurface(
-                        "matrix",
-                        "Batch Matrix",
-                        options={
-                            "columns": (
-                                "project",
-                                "source",
-                                "engine",
-                                "sample_id",
-                                "cache",
-                                "active",
-                            )
-                        },
-                    ),
+                settings_panel=IMPORT_SETTINGS,
+                actions=(
+                    StageAction("Browse File", "browse_source", guard="project_ready", variant="secondary"),
+                    StageAction("Reset Settings", "reset_settings", guard="has_matrix_rows", variant="secondary"),
+                    StageAction("Clear Matrix", "clear_matrix", guard="has_matrix_rows", variant="warning"),
                 ),
-                controls=(StageControl("Add Target", completes=True, variant="success"),),
+                editor=IMPORT_EDITOR,
+                results=ANALYZE_RESULTS,
             ),
             Stage(
                 "video",
@@ -70,14 +112,17 @@ def create_analyze_workflow() -> Workflow:
                         Param("fps", "FPS", ParamKind.FLOAT, default=0.0, minimum=0.0),
                     )
                 ),
-                surfaces=(
-                    StageSurface(
-                        "video_preview",
-                        "Video Preview",
-                        options={"engine": "opencv"},
+                settings_panel=VIDEO_SETTINGS,
+                actions=(
+                    StageAction(
+                        "Run OpenCV",
+                        "analyze",
+                        guard="has_opencv_targets",
+                        completes=True,
                     ),
                 ),
-                controls=(StageControl("Run OpenCV", "analyze", completes=True),),
+                editor=VIDEO_EDITOR,
+                results=ANALYZE_RESULTS,
             ),
             Stage(
                 "imaging",
@@ -91,14 +136,17 @@ def create_analyze_workflow() -> Workflow:
                         Param("detect_inclusions", "Detect Inclusions", ParamKind.BOOLEAN, default=True),
                     )
                 ),
-                surfaces=(
-                    StageSurface(
-                        "matrix",
-                        "Imaging Matrix",
-                        options={"engine": "cellpose", "columns": ("project", "source", "sample_id", "cache")},
+                settings_panel=IMAGING_SETTINGS,
+                actions=(
+                    StageAction(
+                        "Run Cellpose",
+                        "analyze",
+                        guard="has_cellpose_targets",
+                        completes=True,
                     ),
                 ),
-                controls=(StageControl("Run Cellpose", "analyze", completes=True),),
+                editor=IMAGING_EDITOR,
+                results=ANALYZE_RESULTS,
             ),
             Stage(
                 "view",
@@ -106,31 +154,26 @@ def create_analyze_workflow() -> Workflow:
                 description="Inspect stored raw analysis runs and execution summaries.",
                 instructions=(
                     "Views use raw JSONL and project run metadata.",
-                    "Skipped rows remain available through prior stored project runs.",
+                    "Stored project runs remain available for review.",
                 ),
-                surfaces=(
-                    StageSurface(
-                        "charts",
-                        "Analysis Results",
-                        options={"charts": ("diameter", "cv", "count")},
-                    ),
+                settings_panel=VIEW_SETTINGS,
+                actions=(
+                    StageAction("Refresh View", "refresh_view", completes=True, variant="success"),
+                    StageAction("Run All", "analyze_all", guard="has_matrix_rows"),
                 ),
-                controls=(StageControl("Refresh View", completes=True, variant="success"),),
+                editor=VIEW_EDITOR,
+                results=ANALYZE_RESULTS,
             ),
             Stage(
                 "export",
                 "5. Export",
                 skippable=True,
                 description="Export figures and derived tables from stored raw data.",
-                settings=ParamSchema(
-                    (
-                        Param("export_dir", "Export Directory", ParamKind.PATH, default="exports"),
-                    )
-                ),
-                controls=(
-                    StageControl("Skip Export", skippable=True, variant="secondary"),
-                    StageControl("Export Done", completes=True, variant="success"),
-                ),
+                settings=EXPORT_SETTINGS.schema,
+                settings_panel=EXPORT_SETTINGS,
+                actions=(StageAction("Export Later", "export_later", variant="warning"),),
+                editor=EXPORT_EDITOR,
+                results=ANALYZE_RESULTS,
             ),
         ),
     )

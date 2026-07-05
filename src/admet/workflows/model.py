@@ -15,13 +15,20 @@ class StageStatus(StrEnum):
 
 
 @dataclass(frozen=True)
-class StageControl:
+class StageAction:
     label: str
     action: str | None = None
+    off_action: str | None = None
+    guard: str = ""
+    active_when: str = ""
+    kind: str = "button"
     advances: bool = False
     completes: bool = False
     skippable: bool = False
     variant: str = "primary"
+
+
+StageControl = StageAction
 
 
 @dataclass(frozen=True)
@@ -29,7 +36,37 @@ class StageSurface:
     kind: str
     title: str = ""
     settings: ParamSchema = field(default_factory=ParamSchema)
-    controls: tuple[StageControl, ...] = ()
+    controls: tuple[StageAction, ...] = ()
+    options: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class EditorSpec:
+    kind: str
+    persistent: bool = False
+    surfaces: tuple[StageSurface, ...] = ()
+    options: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SettingsSpec:
+    kind: str = "params"
+    schema: ParamSchema = field(default_factory=ParamSchema)
+    title: str = "Settings"
+    options: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ResultsSpec:
+    kind: str = "table"
+    title: str = "Results"
+    options: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LogSpec:
+    kind: str = "table"
+    title: str = "Action Log"
     options: dict[str, Any] = field(default_factory=dict)
 
 
@@ -43,12 +80,29 @@ class Stage:
     description: str = ""
     instructions: tuple[str, ...] = ()
     settings: ParamSchema = field(default_factory=ParamSchema)
-    controls: tuple[StageControl, ...] = ()
+    settings_panel: SettingsSpec | None = None
+    actions: tuple[StageAction, ...] = ()
+    controls: tuple[StageAction, ...] = ()
+    editor: EditorSpec | None = None
+    results: ResultsSpec = field(default_factory=ResultsSpec)
+    log: LogSpec = field(default_factory=LogSpec)
     surfaces: tuple[StageSurface, ...] = ()
     show_settings: bool = True
     settings_options: dict[str, Any] = field(default_factory=dict)
     pipeline: bool = False
     completion_gate: str = ""
+
+    def __post_init__(self) -> None:
+        if self.actions and not self.controls:
+            object.__setattr__(self, "controls", self.actions)
+        elif self.controls and not self.actions:
+            object.__setattr__(self, "actions", self.controls)
+        if self.settings_panel is None:
+            object.__setattr__(self, "settings_panel", SettingsSpec(schema=self.settings))
+        elif self.settings is not self.settings_panel.schema and not self.settings.params:
+            object.__setattr__(self, "settings", self.settings_panel.schema)
+        if self.editor is not None and not self.surfaces:
+            object.__setattr__(self, "surfaces", self.editor.surfaces)
 
 
 @dataclass(frozen=True)

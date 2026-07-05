@@ -1,4 +1,16 @@
-from .model import Stage, StageControl, StageStatus, StageSurface, Workflow, WorkflowState
+from .model import (
+    EditorSpec,
+    LogSpec,
+    ResultsSpec,
+    Stage,
+    StageAction,
+    StageControl,
+    SettingsSpec,
+    StageStatus,
+    StageSurface,
+    Workflow,
+    WorkflowState,
+)
 from .runner import WorkflowRunner
 
 __all__ = [
@@ -7,7 +19,12 @@ __all__ = [
     "AnalyzeJobReport",
     "AnalyzeProjectReport",
     "AnalyzeTarget",
+    "EditorSpec",
+    "LogSpec",
+    "ResultsSpec",
+    "SettingsSpec",
     "Stage",
+    "StageAction",
     "StageControl",
     "StageStatus",
     "StageSurface",

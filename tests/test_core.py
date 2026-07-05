@@ -12,8 +12,10 @@ from admet.core.engine import (
 )
 from admet.core.run import RunJob, RunResult
 from admet.workflows import (
+    EditorSpec,
+    SettingsSpec,
     Stage,
-    StageControl,
+    StageAction,
     StageStatus,
     Workflow,
     WorkflowRunner,
@@ -83,21 +85,54 @@ class WorkflowTests(unittest.TestCase):
     def test_control_workflow_declares_runtime_contract(self):
         workflow = create_control_workflow()
         stage_ids = [stage.id for stage in workflow.stages]
+        scene = next(stage for stage in workflow.stages if stage.id == "scene")
         runs = next(stage for stage in workflow.stages if stage.id == "runs")
-        actions = {control.action for control in runs.controls}
+        actions = {control.action for control in runs.actions}
         corrections = next(stage for stage in workflow.stages if stage.id == "corrections")
         correction_names = {param.name for param in corrections.settings.params}
 
         self.assertEqual(stage_ids, ["scene", "fluigent", "corrections", "priming", "runs", "wash"])
+        self.assertEqual(scene.editor.kind, "control_live")
+        self.assertTrue(scene.editor.persistent)
+        self.assertIn("camera_live and fluidics_connected", {action.guard for action in runs.actions})
         self.assertNotIn("start_recording", actions)
         self.assertNotIn("stop_recording", actions)
-        self.assertNotIn("run_protocol", actions)
+        self.assertIn("run_protocol", actions)
         expected_names = {
             f"{prefix}_{suffix}"
             for prefix in ("oil_l", "cells_m", "beads_m")
             for suffix in ("calibration", "scale", "offset", "quadratic")
         }
         self.assertEqual(correction_names, expected_names)
+
+    def test_analyze_workflow_declares_stage_editors(self):
+        workflow = create_analyze_workflow()
+        editors = {stage.id: stage.editor.kind for stage in workflow.stages}
+
+        self.assertEqual(
+            editors,
+            {
+                "import": "import_inventory",
+                "video": "opencv_video",
+                "imaging": "cellpose_editor",
+                "view": "analysis_results",
+                "export": "analysis_export",
+            },
+        )
+
+    def test_analyze_workflow_declares_settings_surfaces(self):
+        workflow = create_analyze_workflow()
+        settings = {stage.id: stage.settings_panel for stage in workflow.stages}
+
+        self.assertEqual(settings["import"].kind, "matrix")
+        self.assertEqual(settings["import"].options["source"], "all_targets")
+        self.assertNotIn("cache", settings["import"].options["columns"])
+        self.assertEqual(settings["video"].kind, "matrix")
+        self.assertEqual(settings["video"].options["source"], "opencv_targets")
+        self.assertEqual(settings["imaging"].kind, "matrix")
+        self.assertEqual(settings["imaging"].options["source"], "cellpose_targets")
+        self.assertEqual(settings["view"].kind, "none")
+        self.assertEqual(settings["export"].kind, "params")
 
     def test_advance_skip_and_rewind(self):
         workflow = Workflow(
@@ -135,11 +170,15 @@ class WorkflowTests(unittest.TestCase):
             "Scene",
             description="Camera setup",
             settings=ParamSchema((Param("camera_index", "Camera", ParamKind.INTEGER, default=0),)),
-            controls=(StageControl("Refresh Cameras", "refresh_cameras"),),
+            settings_panel=SettingsSpec("params"),
+            actions=(StageAction("Refresh Cameras", "refresh_cameras"),),
+            editor=EditorSpec("camera"),
         )
 
         self.assertEqual(stage.settings.defaults()["camera_index"], 0)
         self.assertEqual(stage.controls[0].action, "refresh_cameras")
+        self.assertEqual(stage.actions[0].action, "refresh_cameras")
+        self.assertEqual(stage.editor.kind, "camera")
 
     def test_confirmation_gate_blocks_unconfirmed_completion(self):
         workflow = Workflow("gated", "Gated", (Stage("run", "Run", confirmation_required=True),))

@@ -691,49 +691,7 @@ class ControlWindow(QMainWindow):
 
     def _action_button_specs(self, stage: Stage) -> list[tuple[str, Any, bool, bool, bool]]:
         controls: list[tuple[str, Any, bool, bool, bool]] = []
-        if any(surface.kind == "camera" for surface in stage.surfaces):
-            project_ready = self.runtime_state["project"]
-            camera_connected = self.runtime_state["camera"]
-            camera_live = self.runtime_state["camera_live"]
-            controls.extend(
-                (
-                    (
-                        "Refresh",
-                        lambda _checked=False: self._run("refresh_cameras"),
-                        project_ready,
-                        False,
-                        False,
-                    ),
-                    (
-                        "Connect",
-                        lambda _checked=False: self._run("connect_camera"),
-                        project_ready and not camera_connected,
-                        False,
-                        False,
-                    ),
-                    (
-                        "Disconnect",
-                        lambda _checked=False: self._run("disconnect_camera"),
-                        project_ready and camera_connected,
-                        False,
-                        False,
-                    ),
-                    (
-                        "Live",
-                        lambda _checked=False: self._toggle_action(
-                            "camera_live",
-                            "start_camera_live",
-                            "stop_camera_live",
-                        ),
-                        project_ready and camera_connected,
-                        camera_live,
-                        True,
-                    ),
-                )
-            )
-        if stage.id in PIPELINE_STAGE_IDS:
-            controls.extend(self._pipeline_controls(stage))
-        for control in stage.controls or self._default_controls(stage):
+        for control in stage.actions or self._default_controls(stage):
             if control.completes and control.action is None:
                 continue
             spec = self._command_spec(stage, control)
@@ -881,49 +839,6 @@ class ControlWindow(QMainWindow):
                 button.style().unpolish(button)
                 button.style().polish(button)
 
-    def _pipeline_controls(self, stage: Stage) -> list[tuple[str, Any, bool, bool, bool]]:
-        state = str(self.last_metadata.get("pipeline_state") or "idle")
-        active = state in {"running", "paused", "stopping"}
-        confirmation = self._pending_pipeline_confirmation()
-        can_start = self._fluigent_ready() and not active
-        return [
-            (
-                _pipeline_start_label(stage),
-                lambda _checked=False, s=stage: self._start_pipeline_stage(s),
-                can_start,
-                False,
-                False,
-            ),
-            (
-                "Pause" if state != "paused" else "Resume",
-                lambda _checked=False: self._toggle_pause(),
-                state in {"running", "paused"},
-                state == "paused",
-                True,
-            ),
-            (
-                "Stop",
-                lambda _checked=False: self._stop_pipeline_stage(),
-                active,
-                False,
-                False,
-            ),
-            (
-                "Skip",
-                lambda _checked=False, s=stage: self._skip_pipeline_step(s),
-                state == "running",
-                False,
-                False,
-            ),
-            (
-                "Proceed",
-                lambda _checked=False, s=stage: self._confirm_pipeline_step(s),
-                bool(confirmation) and state == "running",
-                False,
-                False,
-            ),
-        ]
-
     def _command_spec(
         self,
         stage: Stage,
@@ -932,26 +847,52 @@ class ControlWindow(QMainWindow):
         action = control.action
         if action in {"stop_camera_live", "stop_recording", "stop_protocol", "resume_protocol"}:
             return None
+        if control.kind == "toggle" and control.off_action is not None:
+            active = self._action_active(control)
+            return (
+                _short_control_label(control.label),
+                lambda _checked=False, c=control: self._run(c.off_action if self._action_active(c) else c.action),
+                self._action_enabled(action) and self._guard_enabled(control.guard),
+                active,
+                True,
+            )
         if action == "run_protocol":
             return (
                 _short_control_label(control.label),
                 lambda _checked=False, s=stage: self._toggle_pipeline(s),
-                self._action_enabled("run_protocol"),
+                self._action_enabled("run_protocol") and self._guard_enabled(control.guard),
                 self._pipeline_active(),
                 True,
             )
         if action == "pause_protocol":
+            paused = self.last_metadata.get("pipeline_state") == "paused"
             return (
-                "Pause",
+                "Resume" if paused else "Pause",
                 lambda _checked=False: self._toggle_pause(),
-                self._action_enabled("pause_protocol"),
-                self.last_metadata.get("pipeline_state") == "paused",
+                self._action_enabled("pause_protocol") and self._guard_enabled(control.guard),
+                paused,
                 True,
+            )
+        if action == "confirm_protocol":
+            return (
+                _short_control_label(control.label),
+                lambda _checked=False, s=stage: self._confirm_pipeline_step(s),
+                self._action_enabled(action) and self._guard_enabled(control.guard),
+                False,
+                False,
+            )
+        if action == "skip_protocol":
+            return (
+                _short_control_label(control.label),
+                lambda _checked=False, s=stage: self._skip_pipeline_step(s),
+                self._action_enabled(action) and self._guard_enabled(control.guard),
+                False,
+                False,
             )
         return (
             _short_control_label(control.label),
             lambda _checked=False, c=control: self._handle_control(stage, c),
-            self._action_enabled(action) if action is not None else True,
+            (self._action_enabled(action) if action is not None else True) and self._guard_enabled(control.guard),
             False,
             False,
         )
@@ -1903,6 +1844,43 @@ class ControlWindow(QMainWindow):
 
     def _stage_uses_fluidics(self, stage: Stage) -> bool:
         return stage.id in {"fluigent", "corrections", "priming", "runs", "wash"}
+
+    def _guard_enabled(self, guard: str) -> bool:
+        if not guard:
+            return True
+        for part in guard.split(" and "):
+            part = part.strip()
+            if not part:
+                continue
+            expected = True
+            if part.startswith("not "):
+                expected = False
+                part = part[4:].strip()
+            if self._guard_value(part) is not expected:
+                return False
+        return True
+
+    def _guard_value(self, name: str) -> bool:
+        self._refresh_runtime_state()
+        if name == "project_ready":
+            return self.runtime_state["project"]
+        if name == "camera_connected":
+            return self.runtime_state["camera"]
+        if name == "camera_live":
+            return self.runtime_state["camera_live"]
+        if name == "fluidics_connected":
+            return self.runtime_state["fluidics"]
+        if name == "pipeline_running":
+            return self.last_metadata.get("pipeline_state") in {"running", "paused", "stopping"}
+        if name == "pipeline_waiting":
+            return bool(self._pending_pipeline_confirmation()) and self.last_metadata.get("pipeline_state") == "running"
+        return True
+
+    def _action_active(self, control: StageControl) -> bool:
+        active_when = control.active_when
+        if not active_when:
+            return False
+        return self._guard_value(active_when)
 
     def _refresh_runtime_state(self) -> None:
         camera = getattr(self.api.engine, "camera", None)
