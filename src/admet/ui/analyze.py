@@ -346,10 +346,10 @@ class AnalyzeWorkflowView:
             "recording_inventory": self._recording_inventory_rows,
             "opencv_matrix": lambda: [self._opencv_matrix_row(row) for row in self._targets("opencv")],
             "cellpose_matrix": lambda: [self._engine_matrix_row(row) for row in self._targets("cellpose")],
-            "opencv_summary": lambda: _summary_table_rows(
+            "opencv_summary": lambda: _view_summary_rows(
                 [summary for summary in self._raw_summaries() if summary.engine == "opencv"]
             ),
-            "cellpose_summary": lambda: _summary_table_rows(
+            "cellpose_summary": lambda: _view_summary_rows(
                 [summary for summary in self._raw_summaries() if summary.engine == "cellpose"]
             ),
             "view_fluidics": lambda: _fluidics_rows(self._fluidics_runs()),
@@ -721,17 +721,7 @@ class AnalyzeWorkflowView:
                 ui.label("No stored analysis yet. Run OpenCV or Cellpose first.").classes("muted text-xs")
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("2. Droplet plots").classes("section-title")
-            with ui.element("div").classes("comparison-grid w-full"):
-                _plot_card(_diameter_hist_chart(summaries))
-                _plot_card(_diameter_chart(summaries))
-                _plot_card(_cv_chart(summaries))
-                _plot_card(_frequency_chart(summaries))
-                _plot_card(_position_scatter(summaries))
-                _plot_card(_track_timeline_chart(summaries))
-                _plot_card(_perimeter_time_chart(summaries))
-                _plot_card(_area_position_chart(summaries))
-                if _has_inclusions(summaries):
-                    _plot_card(_inclusion_chart(summaries))
+            self._render_droplet_plots(summaries)
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("3. Fluidics summary").classes("section-title")
             fluidics = self._fluidics_runs()
@@ -1019,26 +1009,31 @@ class AnalyzeWorkflowView:
                         "editor-note"
                     )
 
+    def _render_droplet_plots(self, summaries: list[RawSummary]) -> None:
+        from nicegui import ui
+
+        with ui.element("div").classes("comparison-grid w-full"):
+            _plot_card(_diameter_hist_chart(summaries))
+            _plot_card(_diameter_chart(summaries))
+            _plot_card(_cv_chart(summaries))
+            _plot_card(_frequency_chart(summaries))
+            _plot_card(_position_scatter(summaries))
+            _plot_card(_track_timeline_chart(summaries))
+            _plot_card(_perimeter_time_chart(summaries))
+            _plot_card(_area_position_chart(summaries))
+            if _has_inclusions(summaries):
+                _plot_card(_inclusion_chart(summaries))
+
     def _render_engine_plots(self, engine: str) -> None:
         from nicegui import ui
 
         summaries = [summary for summary in self._raw_summaries() if summary.engine == engine]
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("Analysis plots").classes("section-title")
-            with ui.element("div").classes("plot-grid w-full"):
-                _plot_card(_diameter_chart(summaries))
-                _plot_card(_count_chart(summaries))
-                _plot_card(_cv_chart(summaries))
+            self._render_droplet_plots(summaries)
             table = ui.table(
-                columns=[
-                    {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
-                    {"name": "rows", "label": "Rows", "field": "rows", "align": "right"},
-                    {"name": "frames", "label": "Frames", "field": "frames", "align": "right"},
-                    {"name": "droplets", "label": "Droplets", "field": "droplets", "align": "right"},
-                    {"name": "mean_diameter", "label": "Mean diameter", "field": "mean_diameter", "align": "right"},
-                    {"name": "cv_percent", "label": "CV %", "field": "cv_percent", "align": "right"},
-                ],
-                rows=_summary_table_rows(summaries),
+                columns=_view_summary_columns(),
+                rows=_view_summary_rows(summaries),
             ).classes("w-full").props("dense flat hide-bottom")
             self._register_table(f"{engine}_summary", table)
 
