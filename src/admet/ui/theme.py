@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from admet.ui import design
+
 ButtonVariant = Literal["neutral", "primary", "success", "danger", "warning"]
 ControlSize = Literal["inline", "default", "large", "stage"]
 
@@ -15,30 +17,30 @@ class _ControlSize:
 
 class Theme:
     BG_BLACK = "#101820"
-    BG_DARK = "#f7fafc"
-    BG_DARKER = "#edf3f7"
-    BG_MEDIUM = "#edf3f7"
-    BG_RAISED = "#f0f5f8"
-    BG_CONTROL = "#ffffff"
-    BG_CONTROL_HOVER = "#f0f5f8"
-    BG_CONTROL_PRESSED = "#e6eef4"
+    BG_DARK = design.PALETTE.background
+    BG_DARKER = design.PALETTE.background_alt
+    BG_MEDIUM = design.PALETTE.background_alt
+    BG_RAISED = design.PALETTE.raised
+    BG_CONTROL = design.PALETTE.control
+    BG_CONTROL_HOVER = design.PALETTE.control_hover
+    BG_CONTROL_PRESSED = design.PALETTE.control_pressed
 
-    TEXT_WHITE = "#16212b"
-    TEXT_MUTED = "#52677a"
-    TEXT_SUBTLE = "#7b8c9a"
-    TEXT_DISABLED = "#9aa7b2"
+    TEXT_WHITE = design.PALETTE.text
+    TEXT_MUTED = design.PALETTE.text_muted
+    TEXT_SUBTLE = design.PALETTE.text_subtle
+    TEXT_DISABLED = design.PALETTE.text_disabled
 
-    BORDER_COOL = "#d7e2ea"
-    BORDER_HOVER = "#a9bac8"
+    BORDER_COOL = design.PALETTE.border
+    BORDER_HOVER = design.PALETTE.border_hover
 
-    ACCENT = "#225d82"
-    ACCENT_HOVER = "#1b4a68"
-    SUCCESS = "#1b6b53"
-    SUCCESS_HOVER = "#185e49"
-    DANGER = "#8b2b2b"
-    DANGER_HOVER = "#742323"
-    WARNING = "#b7791f"
-    WARNING_DARK = "#9d661a"
+    ACCENT = design.PALETTE.accent
+    ACCENT_HOVER = design.PALETTE.accent_hover
+    SUCCESS = design.PALETTE.success
+    SUCCESS_HOVER = design.PALETTE.success_hover
+    DANGER = design.PALETTE.danger
+    DANGER_HOVER = design.PALETTE.danger_hover
+    WARNING = design.PALETTE.warning
+    WARNING_DARK = design.PALETTE.warning_hover
 
     FONT_SIZE_SMALL = 11
     FONT_SIZE_BODY = 13

@@ -19,6 +19,7 @@ from admet.core.project import ProjectStore
 from admet.core.session import session_path
 from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
 from admet.engines.opencv.settings import OPENCV_SETTINGS
+from admet.ui import design
 from admet.ui.window import structure_signature
 from admet.ui.scaffold import panel_specs
 from admet.workflows import StageStatus, Workflow, WorkflowState
@@ -2036,7 +2037,7 @@ def _diameter_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         "Mean diameter",
         [summary.sample_id for summary in summaries],
         [round(summary.mean_diameter, 3) for summary in summaries],
-        "#225d82",
+        design.PALETTE.accent,
     )
 
 
@@ -2045,7 +2046,7 @@ def _count_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         "Droplet rows",
         [summary.sample_id for summary in summaries],
         [summary.droplets for summary in summaries],
-        "#185e49",
+        design.PALETTE.success_hover,
     )
 
 
@@ -2054,7 +2055,7 @@ def _cv_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         "CV %",
         [summary.sample_id for summary in summaries],
         [round(summary.cv_percent, 3) for summary in summaries],
-        "#742323",
+        design.PALETTE.danger_hover,
     )
 
 
@@ -2063,14 +2064,14 @@ def _frequency_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         "Frequency (Hz)",
         [summary.sample_id for summary in summaries],
         [round(summary.frequency_hz, 2) for summary in summaries],
-        "#b7791f",
+        design.PALETTE.warning,
     )
 
 
 def _diameter_hist_chart(summaries: list[RawSummary]) -> dict[str, Any]:
     values = [value for summary in summaries for value in summary.diameters]
     if not values:
-        return _bar_chart("Diameter distribution (µm)", [], [], "#225d82")
+        return _bar_chart("Diameter distribution (µm)", [], [], design.PALETTE.accent)
     low = min(values)
     high = max(values)
     if high <= low:
@@ -2088,7 +2089,7 @@ def _diameter_hist_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         "grid": {"left": 48, "right": 12, "top": 36, "bottom": 46},
         "xAxis": {"type": "category", "data": labels, "axisLabel": {"rotate": 45, "fontSize": 9}},
         "yAxis": {"type": "value", "name": "count"},
-        "series": [{"type": "bar", "data": counts, "itemStyle": {"color": "#225d82"}}],
+        "series": [{"type": "bar", "data": counts, "itemStyle": {"color": design.PALETTE.accent}}],
     }
 
 
@@ -2147,7 +2148,7 @@ def _track_timeline_chart(summaries: list[RawSummary]) -> dict[str, Any]:
                 "type": "lines",
                 "coordinateSystem": "cartesian2d",
                 "data": data,
-                "lineStyle": {"width": 2, "color": "#225d82", "opacity": 0.7},
+                "lineStyle": {"width": 2, "color": design.PALETTE.accent, "opacity": 0.7},
             }
         ],
     }
@@ -2163,7 +2164,7 @@ def _inclusion_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         "Inclusions per droplet",
         [str(key) for key in keys],
         [counts[key] for key in keys],
-        "#185e49",
+        design.PALETTE.success_hover,
     )
 
 
@@ -2483,14 +2484,14 @@ def _uid() -> str:
 
 
 def _style() -> str:
-    return """
+    return "<style>:root{" + design.css_variables() + "}</style>" + """
     <style>
-    body { background: #f7fafc; }
-    .shell { min-height: 100vh; color: #16212b; font-size: 13px; padding: 18px 20px 20px; gap: 8px; }
+    body { background: var(--bg-app); }
+    .shell { min-height: 100vh; color: var(--text); font-size: 13px; padding: 18px 20px 20px; gap: 8px; }
     .left-rail { width: 246px; align-self: flex-start; gap: 8px; }
     .topbar, .workflow-toc {
-      background: #ffffff;
-      border: 1px solid #d7e2ea;
+      background: var(--bg-control);
+      border: 1px solid var(--border);
       border-radius: 8px;
     }
     .topbar { min-height: 58px; }
@@ -2504,7 +2505,7 @@ def _style() -> str:
       font-size: 16px;
       line-height: 22px;
       font-weight: 650;
-      color: #16212b;
+      color: var(--text);
       padding: 0;
     }
     .admet-panel-body {
@@ -2512,23 +2513,23 @@ def _style() -> str:
     }
     .workflow-toc { padding: 10px 12px; gap: 3px; }
     .notification-card {
-      background: #ffffff;
-      border: 1px solid #225d82;
-      border-left: 5px solid #225d82;
+      background: var(--bg-control);
+      border: 1px solid var(--accent);
+      border-left: 5px solid var(--accent);
       border-radius: 2px;
       padding: 12px 14px;
       gap: 4px;
     }
-    .notification-card-warning { border-color: #b7791f; border-left-color: #b7791f; }
-    .notification-card-success { border-color: #185e49; border-left-color: #185e49; }
-    .notification-card-danger { border-color: #742323; border-left-color: #742323; }
-    .notification-title { color: #52677a; font-size: 11px; font-weight: 650; text-transform: uppercase; }
-    .notification-text { color: #16212b; font-size: 13px; font-weight: 600; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }
+    .notification-card-warning { border-color: var(--warning); border-left-color: var(--warning); }
+    .notification-card-success { border-color: var(--success-hover); border-left-color: var(--success-hover); }
+    .notification-card-danger { border-color: var(--danger-hover); border-left-color: var(--danger-hover); }
+    .notification-title { color: var(--text-muted); font-size: 11px; font-weight: 650; text-transform: uppercase; }
+    .notification-text { color: var(--text); font-size: 13px; font-weight: 600; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }
     .control-box { background: transparent; border: 0; border-radius: 0; gap: 6px; }
-    .control-box-title { font-size: 16px; line-height: 22px; font-weight: 650; color: #16212b; }
+    .control-box-title { font-size: 16px; line-height: 22px; font-weight: 650; color: var(--text); }
     .process-bar {
-      background: #f0f5f8;
-      border: 1px solid #d7e2ea;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
       border-radius: 8px 8px 0 0;
       min-height: 24px;
     }
@@ -2538,8 +2539,8 @@ def _style() -> str:
       overflow: hidden;
     }
     .admet-process {
-      background: #f0f5f8;
-      border: 1px solid #d7e2ea;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
       border-radius: 8px 8px 0 0;
       min-height: 24px;
     }
@@ -2554,8 +2555,8 @@ def _style() -> str:
       border-radius: 0;
     }
     .admet-transport-btn {
-      background: #ffffff !important;
-      color: #16212b !important;
+      background: var(--bg-control) !important;
+      color: var(--text) !important;
       border: 0 !important;
       border-radius: 0 !important;
       min-height: 22px !important;
@@ -2563,26 +2564,26 @@ def _style() -> str:
       padding: 0 !important;
       font-weight: 500;
     }
-    .admet-transport-btn:hover { background: #f0f5f8 !important; }
+    .admet-transport-btn:hover { background: var(--bg-raised) !important; }
     .admet-transport-btn-active {
-      color: #225d82 !important;
-      background: #e6eef4 !important;
+      color: var(--accent) !important;
+      background: var(--bg-control-pressed) !important;
       font-weight: 650;
     }
     .admet-transport-btn-warning {
-      color: #ffffff !important;
-      background: #b7791f !important;
+      color: var(--bg-control) !important;
+      background: var(--warning) !important;
       font-weight: 700;
     }
     .admet-transport-separator {
       width: 1px;
       align-self: stretch;
-      background: #d7e2ea;
+      background: var(--border);
     }
     .transport-buttons { background: transparent; border: 0; border-radius: 0; }
     .transport-btn {
-      background: #ffffff !important;
-      color: #16212b !important;
+      background: var(--bg-control) !important;
+      color: var(--text) !important;
       border: 0 !important;
       border-radius: 0 !important;
       min-height: 22px !important;
@@ -2590,18 +2591,18 @@ def _style() -> str:
       padding: 0 !important;
       font-weight: 500;
     }
-    .transport-btn:hover { background: #f0f5f8 !important; }
-    .transport-btn-active { color: #225d82 !important; background: #e6eef4 !important; font-weight: 650; }
-    .transport-btn-warning { color: #ffffff !important; background: #b7791f !important; font-weight: 700; }
-    .transport-separator { width: 1px; align-self: stretch; background: #d7e2ea; }
-    .panel { background: #ffffff; border: 1px solid #d7e2ea; border-radius: 8px; }
-    .toc-title { color: #52677a; font-size: 11px; font-weight: 650; text-transform: uppercase; }
+    .transport-btn:hover { background: var(--bg-raised) !important; }
+    .transport-btn-active { color: var(--accent) !important; background: var(--bg-control-pressed) !important; font-weight: 650; }
+    .transport-btn-warning { color: var(--bg-control) !important; background: var(--warning) !important; font-weight: 700; }
+    .transport-separator { width: 1px; align-self: stretch; background: var(--border); }
+    .panel { background: var(--bg-control); border: 1px solid var(--border); border-radius: 8px; }
+    .toc-title { color: var(--text-muted); font-size: 11px; font-weight: 650; text-transform: uppercase; }
     .toc-row { min-height: 24px; border-radius: 6px; padding: 2px 4px; cursor: pointer; }
-    .toc-row:hover { background: #f0f5f8; }
-    .toc-dot { width: 8px; height: 8px; border-radius: 999px; background: #9aa7b2; border: 1px solid #d7e2ea; }
-    .toc-dot-active { background: #225d82; border-color: #225d82; }
-    .toc-dot-done { background: #185e49; border-color: #185e49; }
-    .toc-dot-skipped { background: #9aa7b2; border-color: #9aa7b2; }
+    .toc-row:hover { background: var(--bg-raised); }
+    .toc-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--text-disabled); border: 1px solid var(--border); }
+    .toc-dot-active { background: var(--accent); border-color: var(--accent); }
+    .toc-dot-done { background: var(--success-hover); border-color: var(--success-hover); }
+    .toc-dot-skipped { background: var(--text-disabled); border-color: var(--text-disabled); }
     .project-select { min-width: 360px; }
     .root-hint {
       max-width: 360px;
@@ -2615,10 +2616,10 @@ def _style() -> str:
     .source-display {
       min-height: 30px;
       padding: 5px 8px;
-      border: 1px solid #d7e2ea;
+      border: 1px solid var(--border);
       border-radius: 6px;
-      color: #16212b;
-      background: #ffffff;
+      color: var(--text);
+      background: var(--bg-control);
       font-size: 12px;
       font-weight: 600;
       overflow-wrap: anywhere;
@@ -2636,7 +2637,7 @@ def _style() -> str:
     .source-cell-name {
       min-width: 0;
       overflow-wrap: anywhere;
-      color: #16212b;
+      color: var(--text);
       font-weight: 600;
     }
     .browser-card {
@@ -2644,11 +2645,11 @@ def _style() -> str:
       max-height: 82vh;
       border-radius: 8px;
       box-shadow: none;
-      border: 1px solid #d7e2ea;
+      border: 1px solid var(--border);
       gap: 8px;
     }
     .browser-path {
-      color: #52677a;
+      color: var(--text-muted);
       font-family: Menlo, Consolas, monospace;
       font-size: 12px;
       overflow-wrap: anywhere;
@@ -2656,15 +2657,15 @@ def _style() -> str:
     .browser-list {
       max-height: 56vh;
       overflow-y: auto;
-      border-top: 1px solid #d7e2ea;
-      border-bottom: 1px solid #d7e2ea;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
       padding: 6px 0;
     }
     .browser-row {
       justify-content: flex-start !important;
       width: 100%;
       border-radius: 4px !important;
-      color: #16212b !important;
+      color: var(--text) !important;
       font-weight: 500 !important;
     }
     .plot-grid {
@@ -2684,9 +2685,9 @@ def _style() -> str:
       .plot-grid, .comparison-grid { grid-template-columns: 1fr; }
     }
     .plot-card {
-      border: 1px solid #d7e2ea;
+      border: 1px solid var(--border);
       border-radius: 8px;
-      background: #ffffff;
+      background: var(--bg-control);
       min-height: 260px;
       padding: 4px;
     }
@@ -2697,8 +2698,8 @@ def _style() -> str:
       height: clamp(220px, 42vh, 460px);
       overflow: hidden;
       border-radius: 8px;
-      border: 1px solid #d7e2ea;
-      background: #16212b;
+      border: 1px solid var(--border);
+      background: var(--text);
     }
     .opencv-preview {
       display: block;
@@ -2720,7 +2721,7 @@ def _style() -> str:
       width: 100%;
       height: 100%;
       object-fit: contain;
-      background: #16212b;
+      background: var(--text);
     }
     .admet-viewer-message {
       position: absolute;
@@ -2730,7 +2731,7 @@ def _style() -> str:
       justify-content: center;
       text-align: center;
       padding: 14px;
-      color: #52677a;
+      color: var(--text-muted);
       background: rgba(244, 247, 249, 0.72);
       font-size: 12px;
       line-height: 1.45;
@@ -2741,18 +2742,18 @@ def _style() -> str:
       text-transform: uppercase;
       font-size: 11px;
       letter-spacing: 0;
-      color: #16212b;
+      color: var(--text);
       margin-bottom: 6px;
     }
     .admet-viewer-placeholder-path {
-      color: #52677a;
+      color: var(--text-muted);
       font-family: Menlo, Consolas, monospace;
       font-size: 11px;
       margin-top: 6px;
     }
     .admet-roi {
       position: absolute;
-      border: 2px solid #e5f36a;
+      border: 2px solid var(--roi);
       box-shadow: 0 0 0 999px rgba(0,0,0,0.22);
     }
     .admet-playhead {
@@ -2776,12 +2777,12 @@ def _style() -> str:
       .media-editor-grid { grid-template-columns: 1fr; }
     }
     .editor-note {
-      border: 1px solid #d7e2ea;
-      border-left: 4px solid #225d82;
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
       border-radius: 4px;
       padding: 8px 10px;
-      color: #52677a;
-      background: #f7fafc;
+      color: var(--text-muted);
+      background: var(--bg-app);
       font-size: 12px;
       font-weight: 600;
     }
@@ -2796,7 +2797,7 @@ def _style() -> str:
       gap: 8px;
     }
     .editor-grid-roi {
-      border-top: 1px solid #d7e2ea;
+      border-top: 1px solid var(--border);
       padding-top: 8px;
     }
     .compact-number .q-field__control,
@@ -2817,7 +2818,7 @@ def _style() -> str:
       gap: 8px;
     }
     .slider-value {
-      color: #16212b;
+      color: var(--text);
       font-family: Menlo, Consolas, monospace;
       font-size: 12px;
       font-weight: 650;
@@ -2830,7 +2831,7 @@ def _style() -> str:
       display: none !important;
     }
     .shell .q-field__control {
-      background: #ffffff !important;
+      background: var(--bg-control) !important;
       box-shadow: none !important;
     }
     .shell .q-field__control:after,
@@ -2850,24 +2851,24 @@ def _style() -> str:
       gap: 8px;
     }
     .counter-card {
-      border: 1px solid #d7e2ea;
+      border: 1px solid var(--border);
       border-radius: 8px;
       padding: 8px;
-      background: #f7fafc;
+      background: var(--bg-app);
       gap: 6px;
     }
     .counter-value {
-      color: #16212b;
+      color: var(--text);
       font-size: 24px;
       line-height: 28px;
       font-weight: 650;
     }
     .log-text {
-      background: #f0f5f8;
-      border: 1px solid #d7e2ea;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
       border-radius: 8px;
       padding: 8px 10px;
-      color: #52677a;
+      color: var(--text-muted);
       font-family: Menlo, Consolas, monospace;
       font-size: 12px;
     }
@@ -2880,11 +2881,11 @@ def _style() -> str:
     }
     .matrix-table .q-table td { height: 42px; }
     .matrix-table .q-field__control { min-height: 28px; }
-    .muted { color: #52677a; }
-    .section-title { color: #52677a; font-size: 12px; text-transform: uppercase; font-weight: 700; }
+    .muted { color: var(--text-muted); }
+    .section-title { color: var(--text-muted); font-size: 12px; text-transform: uppercase; font-weight: 700; }
     .q-field__control { min-height: 34px; border-radius: 8px; }
     .q-btn { min-height: 30px; border-radius: 8px; text-transform: none; }
-    .q-table__card { box-shadow: none; border: 1px solid #d7e2ea; }
+    .q-table__card { box-shadow: none; border: 1px solid var(--border); }
     .q-table th, .q-table td { padding: 4px 8px; }
     </style>
     """

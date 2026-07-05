@@ -34,6 +34,7 @@ class Palette:
     video_caption: str = "#64748b"
     video_bubble: str = "rgba(148, 163, 184, 0.22)"
     white: str = "#ffffff"
+    roi: str = "#e5f36a"
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,28 @@ BUTTON_COLORS = {
     "danger": (PALETTE.danger, PALETTE.danger_hover),
     "warning": (PALETTE.warning_hover, PALETTE.warning),
 }
+
+
+_WEB_TOKENS = {
+    "text": PALETTE.text,
+    "text-muted": PALETTE.text_muted,
+    "text-disabled": PALETTE.text_disabled,
+    "border": PALETTE.border,
+    "accent": PALETTE.accent,
+    "success-hover": PALETTE.success_hover,
+    "danger-hover": PALETTE.danger_hover,
+    "warning": PALETTE.warning,
+    "bg-app": PALETTE.background,
+    "bg-raised": PALETTE.raised,
+    "bg-control": PALETTE.control,
+    "bg-control-pressed": PALETTE.control_pressed,
+    "roi": PALETTE.roi,
+}
+
+
+def css_variables() -> str:
+    """`--name:value;` declarations for a web `:root { ... }` block."""
+    return "".join(f"--{name}:{value};" for name, value in _WEB_TOKENS.items())
 
 
 def spacing_value(value: str | int | None = "default") -> int:
