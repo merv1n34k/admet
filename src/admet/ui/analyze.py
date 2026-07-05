@@ -711,17 +711,27 @@ class AnalyzeWorkflowView:
                 ui.label(label).classes("muted text-xs font-semibold")
                 value_label = ui.label(_format_slider_value(value, step)).classes("slider-value")
 
-            # During a drag only the label + row object update (cheap). The preview is
-            # decoded once on release (@change), not on every tick, so dragging no longer
-            # fires a full stage sync + video decode per step.
+            # Each drag tick updates the label + row object (cheap) and refreshes the
+            # preview live, but throttled to ~8x/sec so we get smooth scrubbing without
+            # the per-tick full-stage-sync + video-decode flood that used to lag/crash.
+            # Only the preview is synced here (not the whole stage), and frame decodes
+            # are lru-cached, so this stays light.
+            last_preview = {"t": -1.0}
+
             def update_slider(event: Any, item: MatrixRow = row, name: str = key, use_int: bool = step >= 1) -> None:
                 number = _numeric(event.value)
                 if number is None:
                     number = 0
                 value_label.set_text(_format_slider_value(number, step))
                 item.settings[name] = int(number) if use_int else float(number)
+                self.selected_uid = item.uid
+                now = time.monotonic()
+                if now - last_preview["t"] >= 0.12:
+                    last_preview["t"] = now
+                    self._sync_previews()
 
             def commit_slider(_event: Any, item: MatrixRow = row) -> None:
+                last_preview["t"] = time.monotonic()
                 self.selected_uid = item.uid
                 self._sync_previews()
 
