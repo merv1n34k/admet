@@ -21,8 +21,9 @@ from admet.core.session import session_path
 from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
 from admet.engines.opencv.settings import OPENCV_SETTINGS
 from admet.ui import design
-from admet.ui.window import structure_signature
 from admet.ui.scaffold import panel_specs
+from admet.ui.window import structure_signature
+from admet.ui.workflow_view import current_stage, guard_enabled, instruction_text, stage_by_id
 from admet.workflows import StageStatus, Workflow, WorkflowState
 from admet.workflows.analyze_runner import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
 
@@ -1280,7 +1281,7 @@ class AnalyzeWorkflowView:
             "handler": handler,
             "active": action.variant in {"primary", "success"},
             "warning": action.variant == "warning",
-            "enabled": self._guard_enabled(action.guard),
+            "enabled": guard_enabled(action.guard, self._guard_value),
         }
         return spec
 
@@ -1303,9 +1304,7 @@ class AnalyzeWorkflowView:
             return lambda: self._notify("Export is not wired yet.", "warning")
         return lambda: None
 
-    def _guard_enabled(self, guard: str) -> bool:
-        if not guard:
-            return True
+    def _guard_value(self, guard: str) -> bool:
         if guard == "project_ready":
             return (self._project_path() / "manifest.json").is_file()
         if guard == "has_matrix_rows":
@@ -1676,11 +1675,10 @@ class AnalyzeWorkflowView:
         return self._stage().id
 
     def _stage(self) -> Any:
-        index = max(0, min(self.state.index, len(self.workflow.stages) - 1))
-        return self.workflow.stages[index]
+        return current_stage(self.workflow, self.state)
 
     def _stage_by_id(self, stage_id: str) -> Any:
-        return next((stage for stage in self.workflow.stages if stage.id == stage_id), self._stage())
+        return stage_by_id(self.workflow, self.state, stage_id)
 
     def _project_path(self) -> Path:
         value = str(self.project_path or "").strip()
@@ -1693,10 +1691,7 @@ class AnalyzeWorkflowView:
         return projects_root(self.discovery_root) / f"admet_{time.strftime('%Y%m%d_%H%M%S')}.admetp"
 
     def _instruction(self) -> str:
-        stage = self._stage()
-        if stage.instructions:
-            return " ".join(stage.instructions)
-        return stage.description
+        return instruction_text(self._stage(), self._guard_value)
 
     def _notify(self, message: str, kind: str) -> None:
         self.notice = message

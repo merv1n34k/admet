@@ -50,9 +50,10 @@ from admet.engines.acquisition.fluidics.config import (
 )
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
 from admet.ui import theme as ui
-from admet.ui.window import structure_changed, structure_signature
 from admet.ui.scaffold import panel_specs
 from admet.ui.theme import Theme
+from admet.ui.window import structure_changed, structure_signature
+from admet.ui.workflow_view import active_when, guard_enabled, has_feature, instruction_text
 from admet.workflows import create_control_workflow
 
 
@@ -706,7 +707,7 @@ class ControlWindow(QMainWindow):
         preview_layout = QVBoxLayout(preview_column)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(8)
-        if self._stage_uses_camera(stage) and self._project_ready():
+        if has_feature(stage, "camera") and self._project_ready():
             preview_layout.addWidget(self._camera_selector_row())
         if self.preview is None:
             self.preview = PreviewDisplay()
@@ -834,11 +835,13 @@ class ControlWindow(QMainWindow):
         if action in {"stop_camera_live", "stop_recording", "stop_protocol", "resume_protocol"}:
             return None
         if control.kind == "toggle" and control.off_action is not None:
-            active = self._action_active(control)
+            active = active_when(control.active_when, self._guard_value)
             return (
                 _short_control_label(control.label),
-                lambda _checked=False, c=control: self._run(c.off_action if self._action_active(c) else c.action),
-                self._action_enabled(action) and self._guard_enabled(control.guard),
+                lambda _checked=False, c=control: self._run(
+                    c.off_action if active_when(c.active_when, self._guard_value) else c.action
+                ),
+                self._action_enabled(action) and guard_enabled(control.guard, self._guard_value),
                 active,
                 True,
             )
@@ -846,7 +849,7 @@ class ControlWindow(QMainWindow):
             return (
                 _short_control_label(control.label),
                 lambda _checked=False, s=stage: self._toggle_pipeline(s),
-                self._action_enabled("run_protocol") and self._guard_enabled(control.guard),
+                self._action_enabled("run_protocol") and guard_enabled(control.guard, self._guard_value),
                 self._pipeline_active(),
                 True,
             )
@@ -855,7 +858,7 @@ class ControlWindow(QMainWindow):
             return (
                 "Resume" if paused else "Pause",
                 lambda _checked=False: self._toggle_pause(),
-                self._action_enabled("pause_protocol") and self._guard_enabled(control.guard),
+                self._action_enabled("pause_protocol") and guard_enabled(control.guard, self._guard_value),
                 paused,
                 True,
             )
@@ -863,7 +866,7 @@ class ControlWindow(QMainWindow):
             return (
                 _short_control_label(control.label),
                 lambda _checked=False, s=stage: self._confirm_pipeline_step(s),
-                self._action_enabled(action) and self._guard_enabled(control.guard),
+                self._action_enabled(action) and guard_enabled(control.guard, self._guard_value),
                 False,
                 False,
             )
@@ -871,22 +874,23 @@ class ControlWindow(QMainWindow):
             return (
                 _short_control_label(control.label),
                 lambda _checked=False, s=stage: self._skip_pipeline_step(s),
-                self._action_enabled(action) and self._guard_enabled(control.guard),
+                self._action_enabled(action) and guard_enabled(control.guard, self._guard_value),
                 False,
                 False,
             )
         return (
             _short_control_label(control.label),
             lambda _checked=False, c=control: self._handle_control(stage, c),
-            (self._action_enabled(action) if action is not None else True) and self._guard_enabled(control.guard),
+            (self._action_enabled(action) if action is not None else True)
+            and guard_enabled(control.guard, self._guard_value),
             False,
             False,
         )
 
     def _render_channel_manager(self, stage: Stage) -> None:
         if self.channel_manager_panel is not None:
-            self.channel_manager_panel.setVisible(self._stage_uses_fluidics(stage))
-        if not self._stage_uses_fluidics(stage):
+            self.channel_manager_panel.setVisible(has_feature(stage, "fluidics"))
+        if not has_feature(stage, "fluidics"):
             return
         channels = self._channel_states()
         if not channels:
@@ -1056,7 +1060,7 @@ class ControlWindow(QMainWindow):
         return table
 
     def _render_results(self, stage: Stage) -> None:
-        if self._stage_uses_fluidics(stage):
+        if has_feature(stage, "fluidics"):
             if self.monitor_table is None:
                 self.monitor_table = FluidicsMonitorTable()
             state = getattr(getattr(self.api.engine, "hardware", None), "state", None)
@@ -1201,7 +1205,7 @@ class ControlWindow(QMainWindow):
         stage = self.workflow.current_stage(self.workflow_state)
         actions = set(stage.settings_options.get("auto_complete_actions", ()))
         guard = str(stage.settings_options.get("auto_complete_guard") or "")
-        if action in actions and self._guard_enabled(guard):
+        if action in actions and guard_enabled(guard, self._guard_value):
             self._complete_current_stage()
             return True
         return False
@@ -1712,7 +1716,7 @@ class ControlWindow(QMainWindow):
         status = self.workflow_state.statuses.get(stage.id, StageStatus.PENDING)
         if index == self.workflow_state.index and self.status_kind == "danger":
             return "error"
-        if self._stage_uses_camera(stage) and self._camera_scene_ready():
+        if has_feature(stage, "camera") and self._camera_scene_ready():
             return "done"
         if "fluidics_preflight" in stage.features and self._fluigent_ready():
             return "done"
@@ -1741,7 +1745,7 @@ class ControlWindow(QMainWindow):
             return 100.0
         if status in {"inactive", "error"}:
             return 0.0
-        if self._stage_uses_camera(stage):
+        if has_feature(stage, "camera"):
             if self.runtime_state["camera_live"]:
                 return 100.0
             if self.runtime_state["camera"]:
@@ -1769,27 +1773,6 @@ class ControlWindow(QMainWindow):
             return 0.0
         return min(99.0, max(0.0, (current + step_progress) / total * 100.0))
 
-    def _stage_uses_camera(self, stage: Stage) -> bool:
-        return "camera" in stage.features
-
-    def _stage_uses_fluidics(self, stage: Stage) -> bool:
-        return "fluidics" in stage.features
-
-    def _guard_enabled(self, guard: str) -> bool:
-        if not guard:
-            return True
-        for part in guard.split(" and "):
-            part = part.strip()
-            if not part:
-                continue
-            expected = True
-            if part.startswith("not "):
-                expected = False
-                part = part[4:].strip()
-            if self._guard_value(part) is not expected:
-                return False
-        return True
-
     def _guard_value(self, name: str) -> bool:
         self._refresh_runtime_state()
         if name == "project_ready":
@@ -1805,12 +1788,6 @@ class ControlWindow(QMainWindow):
         if name == "pipeline_waiting":
             return bool(self._pending_pipeline_confirmation()) and self.last_metadata.get("pipeline_state") == "running"
         return True
-
-    def _action_active(self, control: StageControl) -> bool:
-        active_when = control.active_when
-        if not active_when:
-            return False
-        return self._guard_value(active_when)
 
     def _refresh_runtime_state(self) -> None:
         camera = getattr(self.api.engine, "camera", None)
@@ -2279,13 +2256,7 @@ class ControlWindow(QMainWindow):
     def _show_stage_instruction(self, stage: Stage | None = None) -> None:
         if stage is None:
             stage = self.workflow.current_stage(self.workflow_state)
-        self._show_instruction_card(self._stage_instruction(stage))
-
-    def _stage_instruction(self, stage: Stage) -> str:
-        for instruction in stage.instruction_cards:
-            if not instruction.guard or self._guard_enabled(instruction.guard):
-                return instruction.text
-        return stage.description or stage.label
+        self._show_instruction_card(instruction_text(stage, self._guard_value))
 
     def _default_controls(self, stage: Stage) -> tuple[StageControl, ...]:
         if stage.pipeline:
