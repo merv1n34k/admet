@@ -85,10 +85,8 @@ def create_analyze_workflow() -> Workflow:
                 description="Run Cellpose on active imaging matrix rows.",
                 settings=ParamSchema(
                     (
-                        Param("config_path", "Config Path", ParamKind.PATH, default=""),
                         Param("px_to_um", "Pixels To Microns", ParamKind.FLOAT, default=1.14, minimum=0.0),
                         Param("frame_limit", "Frame Limit", ParamKind.INTEGER, default=None),
-                        Param("use_cache", "Use Cache", ParamKind.BOOLEAN, default=True),
                         Param("detect_inclusions", "Detect Inclusions", ParamKind.BOOLEAN, default=True),
                     )
                 ),
@@ -292,25 +290,45 @@ class AnalyzeBatchRunner:
                     shutil.rmtree(cache_dir)
 
                 job_id = f"{run_target.run_id}_{index}_{engine_id}"
-                result = AdmetAPI(engine, session=store.session, workdir=str(store.path)).run(
-                    RunJob(
-                        id=job_id,
+                rows_path = cache_dir / "rows.jsonl"
+                result_path = cache_dir / "result.json"
+                if cache_policy == "use" and result_path.is_file() and rows_path.is_file():
+                    # Idempotent: same file + ROI + frame settings already analysed. Reuse
+                    # the cached result instead of running the engine again.
+                    metadata = dict(_read_json(result_path))
+                    metadata["cached"] = True
+                    _replay_rows(rows_path, sink, job_id=job_id, item_id=sample_id, file_id=file.id)
+                    result = RunResult(
+                        job_id=job_id,
                         engine=engine_id,
                         action="analyze",
-                        settings=action_settings,
-                        inputs=_job_inputs(engine_id, target.source_path),
-                        cache_dir=cache_dir,
-                        sink=sink,
-                        metadata={
-                            "project_id": store.session.project_id,
-                            "run_id": run_target.run_id,
-                            "sample_id": sample_id,
-                            "file_id": file.id,
-                            "item_id": sample_id,
-                            "cache_policy": cache_policy,
-                        },
+                        status="cached",
+                        metadata=metadata,
                     )
-                )
+                else:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    with JsonlRunSink(rows_path) as target_sink:
+                        result = AdmetAPI(engine, session=store.session, workdir=str(store.path)).run(
+                            RunJob(
+                                id=job_id,
+                                engine=engine_id,
+                                action="analyze",
+                                settings=action_settings,
+                                inputs=_job_inputs(engine_id, target.source_path),
+                                cache_dir=cache_dir,
+                                sink=target_sink,
+                                metadata={
+                                    "project_id": store.session.project_id,
+                                    "run_id": run_target.run_id,
+                                    "sample_id": sample_id,
+                                    "file_id": file.id,
+                                    "item_id": sample_id,
+                                    "cache_policy": cache_policy,
+                                },
+                            )
+                        )
+                    _write_json(result_path, dict(result.metadata))
+                    _replay_rows(rows_path, sink, job_id=job_id, item_id=sample_id, file_id=file.id)
                 job_reports.append(
                     _job_report(
                         result,
@@ -399,6 +417,35 @@ def _skipped_matrix_row(
         "status": "skipped",
         "reason": reason,
     }
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, default=str) + "\n", encoding="utf-8")
+
+
+def _replay_rows(rows_path: Path, sink: Any, *, job_id: str, item_id: str, file_id: str) -> None:
+    with rows_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict):
+                row["job_id"] = job_id
+                row["item_id"] = item_id
+                row["file_id"] = file_id
+                sink.write(row)
 
 
 # Cache is keyed by raw file content plus only the settings that change the

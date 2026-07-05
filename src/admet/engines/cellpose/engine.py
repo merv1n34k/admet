@@ -79,7 +79,7 @@ class CellposeAnalysisEngine:
         return rows, config, detector, row_count
 
     def _config_from_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
-        config = load_config(settings["config_path"] or None)
+        config = load_config()
         config["px_to_um"] = settings["px_to_um"]
         config.setdefault("cache", {})["enabled"] = settings.get("use_cache", True)
         return config

@@ -873,15 +873,6 @@ class AnalyzeWorkflowView:
                         )
                         self._bool_editor(target, "overlay_masks", "Show masks", True)
                         self._bool_editor(target, "overlay_inclusions", "Show inclusions", True)
-                    ui.input(
-                        "Config path",
-                        value=str(_row_setting(target, "config_path", self.settings["cellpose_config_path"])),
-                        on_change=lambda event, row=target: self._set_row_setting(
-                            row,
-                            "config_path",
-                            event.value or "",
-                        ),
-                    ).classes("w-full")
                     with ui.element("div").classes("correction-grid"):
                         self._counter_editor(target, "disabled_droplets", "Disabled droplets")
                         self._counter_editor(target, "added_inclusions", "Added inclusions")
@@ -1276,7 +1267,6 @@ class AnalyzeWorkflowView:
         return {
             "opencv_microns_per_pixel": 1.0,
             "opencv_fps": 0.0,
-            "cellpose_config_path": "",
             "cellpose_px_to_um": 1.14,
             "cellpose_frame_limit": 0,
             "cellpose_detect_inclusions": True,
@@ -1401,7 +1391,6 @@ class AnalyzeWorkflowView:
         if row.engine == "cellpose":
             frame_limit = _row_int(row, "frame_limit", self.settings["cellpose_frame_limit"])
             return {
-                "config_path": str(_row_setting(row, "config_path", self.settings["cellpose_config_path"]) or ""),
                 "px_to_um": _row_float(row, "px_to_um", self.settings["cellpose_px_to_um"]),
                 "frame_limit": frame_limit or None,
                 "detect_inclusions": _row_bool(

@@ -222,20 +222,16 @@ class NiceGuiAnalyzeRuntimeTests(unittest.TestCase):
             engine="cellpose",
             sample_id="set01",
             settings={
-                "config_path": "/tmp/cellpose.json",
                 "px_to_um": 1.9,
                 "frame_limit": 20,
-                "use_cache": False,
                 "detect_inclusions": False,
             },
         )
 
         target = view.target_to_run(row)
 
-        self.assertEqual(target.settings["config_path"], "/tmp/cellpose.json")
         self.assertEqual(target.settings["px_to_um"], 1.9)
         self.assertEqual(target.settings["frame_limit"], 20)
-        self.assertFalse(target.settings["use_cache"])
         self.assertFalse(target.settings["detect_inclusions"])
 
     def test_raw_rows_are_summarized_for_view_plots(self):

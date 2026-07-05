@@ -17,28 +17,15 @@ from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
 
 
 class CellposeHelperTests(unittest.TestCase):
-    def test_load_config_deep_merges_defaults(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.json"
-            config_path.write_text(
-                json.dumps(
-                    {
-                        "min_droplet_diameter": 100,
-                        "cache": {"enabled": False, "dir": "custom-cache"},
-                        "settings": {"inclusions": False},
-                    }
-                ),
-                encoding="utf-8",
-            )
+    def test_load_config_returns_builtin_defaults(self):
+        config = load_config()
 
-            config = load_config(config_path)
-
-        self.assertEqual(config["min_droplet_diameter"], 100)
-        self.assertFalse(config["cache"]["enabled"])
-        self.assertEqual(config["cache"]["dir"], "custom-cache")
+        self.assertEqual(config["min_droplet_diameter"], 80)
+        self.assertTrue(config["cache"]["enabled"])
         self.assertEqual(config["cache"]["max_entries"], 100)
-        self.assertFalse(config["settings"]["inclusions"])
         self.assertEqual(config["settings"]["dilution"], 500)
+        # each call returns an independent copy
+        self.assertIsNot(load_config(), config)
 
     def test_cache_uses_configurable_dir_and_inclusion_hash_inputs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
