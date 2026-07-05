@@ -7,6 +7,7 @@ import json
 import math
 import mimetypes
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from statistics import mean, median, pstdev
@@ -33,6 +34,65 @@ WORKFLOW_STAGES = (
 )
 VIDEO_SUFFIXES = {".avi", ".mp4", ".mov", ".mkv"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
+
+
+@dataclass(frozen=True)
+class _StageSpec:
+    buttons: Callable[[Any], list[dict[str, Any]]]
+    panel: Callable[[Any], None]
+    editor: Callable[[Any], None]
+    instruction: str
+
+
+# Per-stage config lives here, once per stage: action-box buttons, action-panel content
+# (matrix or settings), the main-window editor, and the instruction text. The generic
+# components read this registry instead of branching on stage id. Only the editor (and
+# this small config) is per-stage; everything else is shared.
+_STAGES: dict[str, _StageSpec] = {
+    "import": _StageSpec(
+        buttons=lambda v: [
+            {"label": "Browse File", "handler": v._open_source_browser, "active": True},
+            {"label": "Reset Settings", "handler": v._reset_settings},
+            {"label": "Clear Matrix", "handler": v._clear_matrix},
+        ],
+        panel=lambda v: v._render_matrix(),
+        editor=lambda v: v._render_import_inventory(),
+        instruction="Create or load a project, then browse source files or folders. Sample names are edited in the matrix.",
+    ),
+    "video": _StageSpec(
+        buttons=lambda v: [{"label": "Run OpenCV", "handler": lambda: v._run_engine("opencv"), "active": True}],
+        panel=lambda v: v._render_engine_matrix("opencv"),
+        editor=lambda v: v._render_video_stage(),
+        instruction="Configure OpenCV values and run the active video rows.",
+    ),
+    "imaging": _StageSpec(
+        buttons=lambda v: [{"label": "Run Cellpose", "handler": lambda: v._run_engine("cellpose"), "active": True}],
+        panel=lambda v: v._render_engine_matrix("cellpose"),
+        editor=lambda v: v._render_imaging_stage(),
+        instruction="Configure Cellpose values and run the active imaging rows.",
+    ),
+    "view": _StageSpec(
+        buttons=lambda v: [
+            {"label": "Refresh View", "handler": v._refresh_view, "active": True},
+            {"label": "Run All", "handler": lambda: v._run_engine(None)},
+        ],
+        panel=lambda v: v._render_view_panel(),
+        editor=lambda v: v._render_view_results(),
+        instruction="Review stored raw runs and current execution summaries.",
+    ),
+    "export": _StageSpec(
+        buttons=lambda v: [
+            {"label": "Export Later", "handler": lambda: v._notify("Export is not wired yet.", "warning")}
+        ],
+        panel=lambda v: v._render_export_panel(),
+        editor=lambda v: v._render_analysis_runs(),
+        instruction="Export will derive tables and figures from stored raw runs.",
+    ),
+}
+
+
+def _stage_spec(stage_id: str) -> _StageSpec:
+    return _STAGES.get(stage_id, _STAGES["export"])
 
 
 @dataclass
@@ -286,38 +346,26 @@ class AnalyzeWorkflowView:
             button.set_enabled(bool(spec.get("enabled", True)))
 
     def _mount_action_panel(self) -> None:
-        from nicegui import ui
-
         body = self._refs["action_panel_body"]
         with body:
-            if self._stage_id() == "import":
-                self._render_matrix()
-                return
-            if self._stage_id() == "video":
-                self._render_engine_matrix("opencv")
-                return
-            if self._stage_id() == "imaging":
-                self._render_engine_matrix("cellpose")
-                return
-            with ui.column().classes("panel w-full gap-2 p-2"):
-                if self._stage_id() == "view":
-                    self._render_view_settings()
-                else:
-                    ui.label("Export will use stored raw analysis data.").classes("muted text-xs")
+            _stage_spec(self._stage_id()).panel(self)
+
+    def _render_view_panel(self) -> None:
+        from nicegui import ui
+
+        with ui.column().classes("panel w-full gap-2 p-2"):
+            self._render_view_settings()
+
+    def _render_export_panel(self) -> None:
+        from nicegui import ui
+
+        with ui.column().classes("panel w-full gap-2 p-2"):
+            ui.label("Export will use stored raw analysis data.").classes("muted text-xs")
 
     def _mount_main_window(self) -> None:
         body = self._refs["main_body"]
         with body:
-            if self._stage_id() == "import":
-                self._render_import_inventory()
-            elif self._stage_id() == "video":
-                self._render_video_stage()
-            elif self._stage_id() == "imaging":
-                self._render_imaging_stage()
-            elif self._stage_id() == "view":
-                self._render_view_results()
-            else:
-                self._render_analysis_runs()
+            _stage_spec(self._stage_id()).editor(self)
 
     def _mount_results(self) -> None:
         from nicegui import ui
@@ -1393,22 +1441,7 @@ class AnalyzeWorkflowView:
         return True
 
     def _action_specs(self, stage_id: str) -> list[dict[str, Any]]:
-        if stage_id == "import":
-            return [
-                {"label": "Browse File", "handler": self._open_source_browser, "active": True},
-                {"label": "Reset Settings", "handler": self._reset_settings},
-                {"label": "Clear Matrix", "handler": self._clear_matrix},
-            ]
-        if stage_id == "video":
-            return [{"label": "Run OpenCV", "handler": lambda: self._run_engine("opencv"), "active": True}]
-        if stage_id == "imaging":
-            return [{"label": "Run Cellpose", "handler": lambda: self._run_engine("cellpose"), "active": True}]
-        if stage_id == "view":
-            return [
-                {"label": "Refresh View", "handler": self._refresh_view, "active": True},
-                {"label": "Run All", "handler": lambda: self._run_engine(None)},
-            ]
-        return [{"label": "Export Later", "handler": lambda: self._notify("Export is not wired yet.", "warning")}]
+        return _stage_spec(stage_id).buttons(self)
 
     def _default_settings(self) -> dict[str, Any]:
         return {
@@ -1759,16 +1792,7 @@ class AnalyzeWorkflowView:
         return projects_root(self.discovery_root) / f"admet_{time.strftime('%Y%m%d_%H%M%S')}.admetp"
 
     def _instruction(self) -> str:
-        stage_id = self._stage_id()
-        if stage_id == "import":
-            return "Create or load a project, then browse source files or folders. Cache policy and sample names are edited in the matrix."
-        if stage_id == "video":
-            return "Configure OpenCV values and run the active video rows."
-        if stage_id == "imaging":
-            return "Configure Cellpose values and run the active imaging rows."
-        if stage_id == "view":
-            return "Review stored raw runs and current execution summaries."
-        return "Export will derive tables and figures from stored raw runs."
+        return _stage_spec(self._stage_id()).instruction
 
     def _notify(self, message: str, kind: str) -> None:
         self.notice = message
