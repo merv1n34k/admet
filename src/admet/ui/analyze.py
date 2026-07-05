@@ -472,95 +472,6 @@ class AnalyzeWorkflowView:
             ui.label("Notification").classes("notification-title")
             ui.label(self.notice).classes("notification-text")
 
-    def _render_action_box(self) -> None:
-        from nicegui import ui
-
-        stage_id = self._stage_id()
-        progress = self.stage_progress.get(stage_id, 0)
-        with ui.column().classes("control-box w-full"):
-            ui.label("Action Box").classes("control-box-title")
-            with ui.column().classes("process-bar w-full gap-0 overflow-hidden"):
-                ui.linear_progress(value=progress / 100.0).classes("w-full")
-                with ui.row().classes("transport-buttons w-full items-center gap-0"):
-                    for index, spec in enumerate(self._action_specs(stage_id)):
-                        if index:
-                            ui.element("span").classes("transport-separator")
-                        button = ui.button(spec["label"], on_click=spec["handler"]).props(
-                            "unelevated dense no-caps"
-                        )
-                        classes = "transport-btn grow"
-                        if spec.get("active"):
-                            classes += " transport-btn-active"
-                        if spec.get("warning"):
-                            classes += " transport-btn-warning"
-                        button.classes(classes)
-
-    def _render_action_panel(self) -> None:
-        from nicegui import ui
-
-        with ui.column().classes("control-box w-full"):
-            ui.label("Action Panel").classes("control-box-title")
-            with ui.column().classes("panel w-full gap-2 p-2"):
-                if self._stage_id() == "import":
-                    self._render_import_controls()
-                elif self._stage_id() == "video":
-                    self._render_opencv_settings()
-                elif self._stage_id() == "imaging":
-                    self._render_cellpose_settings()
-                elif self._stage_id() == "view":
-                    self._render_view_settings()
-                else:
-                    ui.label("Export will use stored raw analysis data.").classes("muted text-xs")
-
-    def _render_import_controls(self) -> None:
-        from nicegui import ui
-
-        with ui.row().classes("w-full gap-2 items-end"):
-            with ui.column().classes("source-picker grow gap-1"):
-                ui.label("Source").classes("muted text-xs font-semibold")
-                with ui.row().classes("w-full gap-2 items-center"):
-                    ui.label(self._source_display()).classes("source-display grow")
-                    ui.button("Browse", on_click=self._open_source_browser).props("dense no-caps outline")
-            ui.label(f"Project: {Path(self.project_path).name}").classes("muted text-xs source-project")
-
-    def _render_opencv_settings(self) -> None:
-        from nicegui import ui
-
-        with ui.row().classes("w-full gap-2 items-end"):
-            self._setting_number("opencv_microns_per_pixel", "Microns / px", step=0.01)
-            self._setting_number("opencv_fps", "FPS", step=1)
-            ui.label(f"{len(self._targets('opencv'))} active file(s)").classes("muted self-center")
-
-    def _render_cellpose_settings(self) -> None:
-        from nicegui import ui
-
-        with ui.grid(columns="repeat(4, minmax(0, 1fr))").classes("w-full gap-2"):
-            ui.input(
-                "Config path",
-                value=self.settings["cellpose_config_path"],
-                on_change=lambda event: self._set_setting("cellpose_config_path", event.value or ""),
-            )
-            self._setting_slider(
-                "cellpose_px_to_um",
-                "px to um",
-                0.01,
-                10.0,
-                0.01,
-            )
-            self._setting_slider(
-                "cellpose_frame_limit",
-                "Frame limit",
-                0,
-                10000,
-                1,
-                integer=True,
-            )
-            ui.checkbox(
-                "Detect inclusions",
-                value=bool(self.settings["cellpose_detect_inclusions"]),
-                on_change=lambda event: self._set_setting("cellpose_detect_inclusions", bool(event.value)),
-            )
-
     def _render_view_settings(self) -> None:
         from nicegui import ui
 
@@ -569,72 +480,6 @@ class AnalyzeWorkflowView:
             value=self.settings["cache_root"],
             on_change=lambda event: self._set_setting("cache_root", event.value or ""),
         ).classes("w-full")
-
-    def _setting_slider(
-        self,
-        key: str,
-        label: str,
-        minimum: float,
-        maximum: float,
-        step: float,
-        *,
-        integer: bool = False,
-    ) -> None:
-        from nicegui import ui
-
-        value = _numeric(self.settings.get(key)) or 0
-        value = max(minimum, min(maximum, value))
-        if integer:
-            value = int(value)
-        with ui.column().classes("slider-field w-full gap-0"):
-            with ui.row().classes("slider-label-row w-full"):
-                ui.label(label).classes("muted text-xs font-semibold")
-                value_label = ui.label(_format_slider_value(value, step)).classes("slider-value")
-
-            def update_slider(event: Any, name: str = key, use_int: bool = integer) -> None:
-                number = int(float(event.value or 0)) if use_int else float(event.value or 0)
-                self._set_setting(name, number)
-                value_label.set_text(_format_slider_value(number, step))
-
-            ui.slider(
-                min=minimum,
-                max=maximum,
-                step=step,
-                value=value,
-                on_change=update_slider,
-            ).props("dense").classes("w-full")
-
-    def _setting_number(self, key: str, label: str, *, step: float) -> None:
-        from nicegui import ui
-
-        value = _numeric(self.settings.get(key)) or 0
-        ui.number(
-            label,
-            value=int(value) if step >= 1 else value,
-            min=0,
-            step=step,
-            on_change=lambda event, name=key, use_int=step >= 1: self._set_setting(
-                name,
-                int(float(event.value or 0)) if use_int else float(event.value or 0),
-            ),
-        ).classes("flat-number grow")
-
-    def _render_main_window(self) -> None:
-        from nicegui import ui
-
-        with ui.column().classes("control-box w-full"):
-            ui.label("Main Window").classes("control-box-title")
-            if self._stage_id() == "import":
-                self._render_matrix()
-                self._render_import_inventory()
-            elif self._stage_id() == "video":
-                self._render_video_stage()
-            elif self._stage_id() == "imaging":
-                self._render_imaging_stage()
-            elif self._stage_id() == "view":
-                self._render_view_results()
-            else:
-                self._render_analysis_runs()
 
     def _render_matrix(self) -> None:
         from nicegui import ui
@@ -1231,11 +1076,6 @@ class AnalyzeWorkflowView:
                     "+",
                     on_click=lambda item=row, name=key: self._increment_row_counter(item, name, 1),
                 ).props("dense no-caps outline").classes("grow")
-
-    def _source_display(self) -> str:
-        selected = self._selected_row()
-        source = selected.source_path if selected is not None else self.source_path
-        return Path(source).name if source else "Browse a video file or imaging folder"
 
     def _open_project_browser(self) -> None:
         start = self._project_path()
