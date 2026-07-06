@@ -390,7 +390,7 @@ class AnalyzeWorkflowView:
             ),
             "view_fluidics": lambda: _fluidics_rows(self._fluidics_runs()),
             "view_summary": lambda: _view_summary_rows(self._raw_summaries()),
-            "analysis_runs": self._analysis_run_rows,
+            "analysis_runs": lambda: analysis_run_rows(self._analysis_project_paths()),
             "run_summary": lambda: result_rows(self.last_report),
         }
         for key, tables in self._table_refs.items():
@@ -917,36 +917,6 @@ class AnalyzeWorkflowView:
             self._register_table("analysis_runs", table)
             if not rows:
                 ui.label("No stored analysis runs found for the matrix projects.").classes("muted text-xs")
-
-    def _render_results(self) -> None:
-        from nicegui import ui
-
-        with ui.column().classes("control-box w-full"):
-            ui.label("Results").classes("control-box-title")
-            with ui.column().classes("panel w-full gap-2 p-3"):
-                ui.label("Run summary").classes("section-title")
-                rows = result_rows(self.last_report)
-                table = ui.table(
-                    columns=[
-                        {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
-                        {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
-                        {"name": "status", "label": "Status", "field": "status", "align": "left"},
-                        {"name": "rows", "label": "Rows", "field": "rows", "align": "right"},
-                        {"name": "frames", "label": "Frames", "field": "frames", "align": "right"},
-                        {"name": "cache", "label": "Cache", "field": "cache", "align": "left"},
-                    ],
-                    rows=rows,
-                ).classes("w-full").props("dense flat hide-bottom")
-                self._register_table("run_summary", table)
-                if not rows:
-                    ui.label("No results yet. Run OpenCV, Cellpose, or Run All.").classes("muted text-xs")
-
-    def _render_log(self) -> None:
-        from nicegui import ui
-
-        with ui.column().classes("control-box w-full"):
-            ui.label("Action Log").classes("control-box-title")
-            ui.html("<br>".join(self.action_log[-80:])).classes("log-text w-full")
 
     def _project_file_rows(self) -> list[dict[str, str]]:
         rows = []
