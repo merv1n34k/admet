@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+import unittest
+from types import SimpleNamespace
+
+from admet.ui.analyze_data import matrix_row, result_columns, result_rows
+from admet.ui.control_data import recording_video_key, prefer_video_row, video_metadata, video_row
+
+
+class AnalyzeDataTests(unittest.TestCase):
+    def test_matrix_row_shapes_batch_target(self) -> None:
+        row = SimpleNamespace(
+            uid="row-1",
+            project_path="/tmp/project.admetp",
+            source_path="/tmp/data/movie.avi",
+            engine="opencv",
+            sample_id="sample-a",
+            active=True,
+        )
+
+        self.assertEqual(
+            matrix_row(row),
+            {
+                "uid": "row-1",
+                "project": "project.admetp",
+                "project_path": "/tmp/project.admetp",
+                "source": "movie.avi",
+                "source_path": "/tmp/data/movie.avi",
+                "engine": "opencv",
+                "sample_id": "sample-a",
+                "active": True,
+            },
+        )
+
+    def test_result_rows_shape_runner_report(self) -> None:
+        report = SimpleNamespace(
+            jobs=[
+                SimpleNamespace(
+                    sample_id="sample-a",
+                    engine="opencv",
+                    status="completed",
+                    metadata={
+                        "total_droplets": 10,
+                        "mean_diameter_um": 20.0,
+                        "std_diameter_um": 1.0,
+                        "mean_speed_mm_s": 3.5,
+                        "frequency_hz": 12.0,
+                        "threshold": 122,
+                        "true_stats": {"droplet_volume_nl": 4.25},
+                    },
+                )
+            ]
+        )
+
+        rows = result_rows(report)
+        self.assertEqual(rows[0]["sample"], "sample-a")
+        self.assertEqual(rows[0]["cv"], "5.00")
+        self.assertEqual(rows[0]["volume_nl"], "4.250")
+        self.assertEqual(result_columns()[0]["name"], "sample")
+
+
+class ControlDataTests(unittest.TestCase):
+    def test_video_metadata_and_row_shape_recording(self) -> None:
+        recording = {
+            "video_path": "/tmp/control/camera/set01_rep02.avi",
+            "width": 640,
+            "height": 480,
+            "acquisition_fps": 29.95,
+            "converted_fps": 30.0,
+            "frames_recorded": 120,
+            "duration_s": 4.0,
+        }
+
+        metadata = video_metadata(recording)
+        self.assertEqual(metadata["dimensions"], "640x480")
+        self.assertEqual(video_row(recording)["video"], "set01_rep02.avi")
+        self.assertEqual(video_row(recording)["duration"], "4.00 s")
+
+    def test_recording_video_key_and_preference(self) -> None:
+        row = {"video": "set01_rep02.avi"}
+
+        self.assertEqual(recording_video_key({"recording_id": "set01_rep02"}, row), "set01_rep02")
+        self.assertTrue(prefer_video_row({"video": "set01_rep02"}, row))
+        self.assertFalse(prefer_video_row({"video": "set01_rep02.avi"}, {"video": "set01_rep02"}))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -21,6 +21,7 @@ from admet.core.session import session_path
 from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
 from admet.engines.opencv.settings import OPENCV_SETTINGS
 from admet.ui import design
+from admet.ui.analyze_data import analysis_run_rows, matrix_row, result_columns, result_rows
 from admet.ui.window import log_state, panel_specs, settings_panel_state, structure_signature, table_state
 from admet.ui.workflow_view import action_button_state, current_stage, instruction_text, stage_by_id, toc_row_states
 from admet.workflows import StageStatus, Workflow, WorkflowState
@@ -351,8 +352,8 @@ class AnalyzeWorkflowView:
                 ui.label("Run summary").classes("section-title")
                 state = table_state(
                     "run_summary",
-                    self._result_rows(),
-                    columns=_result_columns(),
+                    result_rows(self.last_report),
+                    columns=result_columns(),
                     empty_text="No results yet. Run OpenCV, Cellpose, or Run All.",
                 )
                 table = ui.table(
@@ -372,7 +373,7 @@ class AnalyzeWorkflowView:
 
     def _sync_tables(self) -> None:
         row_sources = {
-            "matrix": lambda: [self._matrix_row(row) for row in self.matrix],
+            "matrix": lambda: [matrix_row(row) for row in self.matrix],
             "project_files": self._project_file_rows,
             "recording_inventory": self._recording_inventory_rows,
             "opencv_matrix": lambda: [
@@ -390,7 +391,7 @@ class AnalyzeWorkflowView:
             "view_fluidics": lambda: _fluidics_rows(self._fluidics_runs()),
             "view_summary": lambda: _view_summary_rows(self._raw_summaries()),
             "analysis_runs": self._analysis_run_rows,
-            "run_summary": self._result_rows,
+            "run_summary": lambda: result_rows(self.last_report),
         }
         for key, tables in self._table_refs.items():
             source = row_sources.get(key)
@@ -474,7 +475,7 @@ class AnalyzeWorkflowView:
 
         table = ui.table(
             columns=_matrix_columns(),
-            rows=[self._matrix_row(row) for row in rows],
+            rows=[matrix_row(row) for row in rows],
             row_key="uid",
         ).classes("slim-table matrix-table w-full").props("dense flat hide-bottom")
         self._register_table("matrix", table)
@@ -903,7 +904,7 @@ class AnalyzeWorkflowView:
 
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("Stored analysis runs").classes("section-title")
-            rows = self._analysis_run_rows()
+            rows = analysis_run_rows(self._analysis_project_paths())
             table = ui.table(
                 columns=[
                     {"name": "project", "label": "Project", "field": "project", "align": "left"},
@@ -924,7 +925,7 @@ class AnalyzeWorkflowView:
             ui.label("Results").classes("control-box-title")
             with ui.column().classes("panel w-full gap-2 p-3"):
                 ui.label("Run summary").classes("section-title")
-                rows = self._result_rows()
+                rows = result_rows(self.last_report)
                 table = ui.table(
                     columns=[
                         {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
@@ -1504,72 +1505,12 @@ class AnalyzeWorkflowView:
         return settings
 
     def _refresh_view(self) -> None:
-        self.stage_progress["view"] = 100 if self._analysis_run_rows() else 0
+        self.stage_progress["view"] = 100 if analysis_run_rows(self._analysis_project_paths()) else 0
         self._notify("view refreshed.", "success")
         self._render_current_stage(force_mount=True)
 
-    def _analysis_run_rows(self) -> list[dict[str, Any]]:
-        rows = []
-        for project_path in sorted({row.project_path for row in self.matrix} | {self.project_path}):
-            path = session_path(project_path)
-            metadata_path = path / "analysis" / "metadata.json"
-            if not metadata_path.is_file():
-                continue
-            try:
-                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            for run in metadata.get("runs", []):
-                if not isinstance(run, dict):
-                    continue
-                raw = str(run.get("raw_path") or "")
-                rows.append(
-                    {
-                        "project": path.name,
-                        "run_id": str(run.get("run_id") or ""),
-                        "jobs": len((run.get("metadata") or {}).get("jobs", [])),
-                        "raw": raw,
-                    }
-                )
-        return rows
-
-    def _result_rows(self) -> list[dict[str, Any]]:
-        if self.last_report is None:
-            return []
-        rows = []
-        for job in self.last_report.jobs:
-            metadata = job.metadata
-            true_stats = metadata.get("true_stats") if isinstance(metadata.get("true_stats"), dict) else {}
-            mean_d = _numeric(metadata.get("mean_diameter_um"))
-            std_d = _numeric(metadata.get("std_diameter_um"))
-            cv = (std_d / mean_d * 100.0) if mean_d and std_d else None
-            rows.append(
-                {
-                    "sample": job.sample_id,
-                    "engine": job.engine,
-                    "status": job.status,
-                    "droplets": metadata.get("total_droplets", ""),
-                    "mean_um": _fmt(mean_d),
-                    "cv": _fmt(cv),
-                    "speed": _fmt(metadata.get("mean_speed_mm_s")),
-                    "freq": _fmt(metadata.get("frequency_hz")),
-                    "volume_nl": _fmt(true_stats.get("droplet_volume_nl"), 3),
-                    "threshold": metadata.get("threshold", ""),
-                }
-            )
-        return rows
-
-    def _matrix_row(self, row: MatrixRow) -> dict[str, Any]:
-        return {
-            "uid": row.uid,
-            "project": Path(row.project_path).name,
-            "project_path": row.project_path,
-            "source": Path(row.source_path).name or row.source_path,
-            "source_path": row.source_path,
-            "engine": row.engine,
-            "sample_id": row.sample_id,
-            "active": row.active,
-        }
+    def _analysis_project_paths(self) -> set[str]:
+        return {row.project_path for row in self.matrix} | {self.project_path}
 
     def _schema_matrix_row(self, row: MatrixRow, params: tuple[Param, ...]) -> dict[str, Any]:
         data = {
@@ -2043,21 +1984,6 @@ def _fmt(value: Any, digits: int = 2) -> str:
     if number is None or not math.isfinite(number) or number == 0:
         return ""
     return f"{number:.{digits}f}"
-
-
-def _result_columns() -> list[dict[str, Any]]:
-    return [
-        {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
-        {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
-        {"name": "status", "label": "Status", "field": "status", "align": "left"},
-        {"name": "droplets", "label": "Droplets", "field": "droplets", "align": "right"},
-        {"name": "mean_um", "label": "Mean Ø µm", "field": "mean_um", "align": "right"},
-        {"name": "cv", "label": "CV %", "field": "cv", "align": "right"},
-        {"name": "speed", "label": "Speed mm/s", "field": "speed", "align": "right"},
-        {"name": "freq", "label": "Freq Hz", "field": "freq", "align": "right"},
-        {"name": "volume_nl", "label": "Vol nL", "field": "volume_nl", "align": "right"},
-        {"name": "threshold", "label": "Thr", "field": "threshold", "align": "right"},
-    ]
 
 
 def _summary_table_rows(summaries: list[RawSummary]) -> list[dict[str, Any]]:

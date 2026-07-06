@@ -50,6 +50,13 @@ from admet.engines.acquisition.fluidics.config import (
 )
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
 from admet.ui import theme as ui
+from admet.ui.control_data import (
+    VIDEO_TABLE_COLUMNS,
+    prefer_video_row,
+    recording_video_key,
+    video_metadata,
+    video_row,
+)
 from admet.ui.theme import Theme
 from admet.ui.window import log_state, panel_specs, structure_changed, structure_signature
 from admet.ui.workflow_view import (
@@ -129,16 +136,6 @@ PREVIEW_MIN_HEIGHT = 280
 PREVIEW_MAX_HEIGHT = 520
 
 LEFT_RAIL_WIDTH = 246
-_VIDEO_TABLE_COLUMNS = (
-    ("video", "Video"),
-    ("acquisition_fps", "Acq FPS"),
-    ("dimensions", "Dimensions"),
-    ("converted_fps", "Converted FPS"),
-    ("frames", "Frames"),
-    ("duration", "Duration"),
-)
-
-
 def _panel_box(title: str, object_name: str = "Panel") -> tuple[QFrame, QVBoxLayout]:
     panel = QFrame()
     panel.setObjectName(object_name)
@@ -1144,7 +1141,7 @@ class ControlWindow(QMainWindow):
         if self.video_table is None or self.video_table.rowCount() != len(rows):
             return
         for row_index, row in enumerate(rows):
-            for column_index, (key, _label) in enumerate(_VIDEO_TABLE_COLUMNS):
+            for column_index, (key, _label) in enumerate(VIDEO_TABLE_COLUMNS):
                 item = self.video_table.item(row_index, column_index)
                 if item is not None and item.text() != row.get(key, ""):
                     item.setText(row.get(key, ""))
@@ -2153,7 +2150,7 @@ class ControlWindow(QMainWindow):
             video_path, video_external = _session_stored_path(video_path, self.project_path)
             recording = {**recording, "video_path": video_path}
         if video_path:
-            metadata = _video_metadata(recording)
+            metadata = video_metadata(recording)
             if video_external:
                 metadata["external"] = True
             file_id = _video_file_id(video_path, files)
@@ -2251,13 +2248,13 @@ class ControlWindow(QMainWindow):
                     continue
                 data = dict(file.metadata)
                 data.setdefault("video_path", file.path)
-                row = _video_row(data)
-                rows[_recording_video_key(data, row)] = row
+                row = video_row(data)
+                rows[recording_video_key(data, row)] = row
 
         for recording in self._recording_metadata_sources():
-            row = _video_row(recording)
-            key = _recording_video_key(recording, row)
-            if _prefer_video_row(rows.get(key), row):
+            row = video_row(recording)
+            key = recording_video_key(recording, row)
+            if prefer_video_row(rows.get(key), row):
                 rows[key] = row
         return list(rows.values())
 
@@ -3039,19 +3036,19 @@ class PreviewDisplay(QWidget):
 
 
 def _video_table(rows: list[dict[str, str]]) -> QTableWidget:
-    table = QTableWidget(len(rows), len(_VIDEO_TABLE_COLUMNS))
+    table = QTableWidget(len(rows), len(VIDEO_TABLE_COLUMNS))
     table.setObjectName("RawConfigTable")
-    table.setHorizontalHeaderLabels(tuple(label for _key, label in _VIDEO_TABLE_COLUMNS))
+    table.setHorizontalHeaderLabels(tuple(label for _key, label in VIDEO_TABLE_COLUMNS))
     table.verticalHeader().hide()
     table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-    for column in range(1, len(_VIDEO_TABLE_COLUMNS)):
+    for column in range(1, len(VIDEO_TABLE_COLUMNS)):
         table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
     table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
     table.setShowGrid(True)
     for row_index, row in enumerate(rows):
-        for column_index, (key, _label) in enumerate(_VIDEO_TABLE_COLUMNS):
+        for column_index, (key, _label) in enumerate(VIDEO_TABLE_COLUMNS):
             item = QTableWidgetItem(row.get(key, ""))
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row_index, column_index, item)
@@ -3067,28 +3064,6 @@ def _fit_table_height(table: QTableWidget, *, max_rows: int | None = None) -> No
     table.setFixedHeight(height)
 
 
-def _video_metadata(recording: dict[str, Any]) -> dict[str, Any]:
-    width = int(float(recording.get("width") or 0))
-    height = int(float(recording.get("height") or 0))
-    converted_fps = float(recording.get("converted_fps") or recording.get("fps") or 0.0)
-    acquisition_fps = float(recording.get("acquisition_fps") or 0.0)
-    return {
-        "video_path": str(recording.get("video_path") or ""),
-        "video_prefix": str(recording.get("video_prefix") or ""),
-        "started_at": str(recording.get("started_at") or ""),
-        "stopped_at": str(recording.get("stopped_at") or ""),
-        "duration_s": float(recording.get("duration_s") or 0.0),
-        "frames_recorded": recording.get("frames_recorded"),
-        "frames_written": recording.get("frames_written"),
-        "width": width,
-        "height": height,
-        "dimensions": f"{width}x{height}" if width and height else "",
-        "acquisition_fps": acquisition_fps,
-        "converted_fps": converted_fps,
-        "fluidics_csv": str(recording.get("fluidics_csv") or ""),
-    }
-
-
 def _fluidics_csv_metadata(recording: dict[str, Any]) -> dict[str, Any]:
     return {
         "fluidics_csv": str(recording.get("fluidics_csv") or ""),
@@ -3100,7 +3075,7 @@ def _fluidics_csv_metadata(recording: dict[str, Any]) -> dict[str, Any]:
 
 
 def _recording_item_metadata(recording: dict[str, Any]) -> dict[str, Any]:
-    metadata = _video_metadata(recording)
+    metadata = video_metadata(recording)
     metadata.update(_fluidics_csv_metadata(recording))
     metadata["report_dir"] = str(recording.get("report_dir") or "")
     return metadata
@@ -3184,45 +3159,6 @@ def _session_stored_path(path_value: str, project_path: Path | None) -> tuple[st
         return str(path), True
 
 
-def _video_row(recording: dict[str, Any]) -> dict[str, str]:
-    metadata = _video_metadata(recording)
-    video_path = metadata["video_path"]
-    frames = metadata["frames_recorded"]
-    if frames is None:
-        frames = metadata["frames_written"]
-    return {
-        "video": Path(video_path).name if video_path else str(recording.get("video_prefix") or "recording"),
-        "acquisition_fps": _format_number(metadata["acquisition_fps"], digits=2),
-        "dimensions": metadata["dimensions"],
-        "converted_fps": _format_number(metadata["converted_fps"], digits=2),
-        "frames": "" if frames is None else str(frames),
-        "duration": _format_duration(metadata["duration_s"]),
-    }
-
-
-def _recording_video_key(recording: dict[str, Any], row: dict[str, str]) -> str:
-    for value in (
-        recording.get("recording_id"),
-        recording.get("video_prefix"),
-        Path(str(recording.get("video_path") or "")).stem,
-        Path(str(row.get("video") or "")).stem,
-        row.get("video"),
-    ):
-        text = str(value or "").strip()
-        if text:
-            stem = Path(text).stem
-            return stem or text
-    return "recording"
-
-
-def _prefer_video_row(existing: dict[str, str] | None, candidate: dict[str, str]) -> bool:
-    if existing is None:
-        return True
-    return bool(Path(str(candidate.get("video") or "")).suffix) and not bool(
-        Path(str(existing.get("video") or "")).suffix
-    )
-
-
 def _video_file_id(video_path: str, files: list[SessionFile]) -> str:
     return _session_file_id("video", video_path, files)
 
@@ -3281,26 +3217,6 @@ def _upsert_session_item(items: list[SessionItem], stored: SessionItem) -> list[
             return items
     items.append(stored)
     return items
-
-
-def _format_number(value: Any, *, digits: int) -> str:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return ""
-    if number <= 0:
-        return ""
-    return f"{number:.{digits}f}"
-
-
-def _format_duration(value: Any) -> str:
-    try:
-        seconds = float(value)
-    except (TypeError, ValueError):
-        return ""
-    if seconds <= 0:
-        return ""
-    return f"{seconds:.2f} s"
 
 
 def _short_control_label(label: str) -> str:
