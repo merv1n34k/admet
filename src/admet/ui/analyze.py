@@ -19,7 +19,7 @@ from admet.core.project import ProjectStore
 from admet.core.session import session_path
 from admet.engines.cellpose.detection import CellposeDetection, read_image_8bit
 from admet.ui import design
-from admet.ui.analyze_data import analysis_run_rows, matrix_row
+from admet.ui.data import analysis_run_rows, matrix_row
 from admet.ui.analyze_matrix import (
     cast_matrix_value,
     matrix_columns,

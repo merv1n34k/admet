@@ -49,7 +49,7 @@ from admet.engines.acquisition.fluidics.config import (
 )
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
 from admet.ui import theme as ui
-from admet.ui.control_data import (
+from admet.ui.data import (
     VIDEO_TABLE_COLUMNS,
     prefer_video_row,
     recording_video_key,
