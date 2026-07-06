@@ -4,6 +4,8 @@ import unittest
 from types import SimpleNamespace
 
 from admet.ui.analyze_data import matrix_row, result_columns, result_rows
+from admet.ui.analyze_matrix import cast_matrix_value, matrix_columns, matrix_params, schema_matrix_row
+from admet.core.engine import ParamKind
 from admet.ui.control_data import recording_video_key, prefer_video_row, video_metadata, video_row
 
 
@@ -57,6 +59,25 @@ class AnalyzeDataTests(unittest.TestCase):
         self.assertEqual(rows[0]["cv"], "5.00")
         self.assertEqual(rows[0]["volume_nl"], "4.250")
         self.assertEqual(result_columns()[0]["name"], "sample")
+
+    def test_analyze_matrix_helpers_shape_schema_rows(self) -> None:
+        row = SimpleNamespace(
+            uid="row-1",
+            project_path="/tmp/project.admetp",
+            source_path="/tmp/data/movie.avi",
+            engine="opencv",
+            sample_id="sample-a",
+            active=True,
+            settings={"start_frame": "10", "microns_per_pixel": "1.25"},
+        )
+        params = matrix_params("opencv")
+        shaped = schema_matrix_row(row, params)
+
+        self.assertEqual(matrix_columns()[0]["name"], "active")
+        self.assertEqual(shaped["source"], "movie.avi")
+        self.assertEqual(shaped["start_frame"], 10)
+        self.assertEqual(shaped["microns_per_pixel"], 1.25)
+        self.assertEqual(cast_matrix_value(ParamKind.INTEGER, "5"), 5)
 
 
 class ControlDataTests(unittest.TestCase):

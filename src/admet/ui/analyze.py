@@ -14,14 +14,22 @@ from statistics import mean, median, pstdev
 from typing import Any
 
 from admet.core.discovery import ProjectRef, discover_projects, projects_root
-from admet.core.engine import EngineRegistry, Param, ParamKind
+from admet.core.engine import EngineRegistry
 from admet.core.project import ProjectStore
 from admet.core.session import session_path
 from admet.engines.cellpose.detection import CellposeDetection, read_image_8bit
-from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
-from admet.engines.opencv.settings import OPENCV_SETTINGS
 from admet.ui import design
 from admet.ui.analyze_data import analysis_run_rows, matrix_row
+from admet.ui.analyze_matrix import (
+    cast_matrix_value,
+    matrix_columns,
+    matrix_field_kind,
+    matrix_params,
+    schema_matrix_columns,
+    schema_matrix_row,
+    wire_matrix_table,
+    wire_schema_matrix_table,
+)
 from admet.ui.window import log_state, panel_specs, settings_panel_state, structure_signature
 from admet.ui.workflow_view import action_button_state, current_stage, instruction_text, stage_by_id, toc_row_states
 from admet.workflows import StageStatus, Workflow, WorkflowState
@@ -356,10 +364,10 @@ class AnalyzeWorkflowView:
             "project_files": self._project_file_rows,
             "recording_inventory": self._recording_inventory_rows,
             "opencv_matrix": lambda: [
-                self._schema_matrix_row(row, _matrix_params("opencv")) for row in self._targets("opencv")
+                schema_matrix_row(row, matrix_params("opencv")) for row in self._targets("opencv")
             ],
             "cellpose_matrix": lambda: [
-                self._schema_matrix_row(row, _matrix_params("cellpose")) for row in self._targets("cellpose")
+                schema_matrix_row(row, matrix_params("cellpose")) for row in self._targets("cellpose")
             ],
             "opencv_summary": lambda: _view_summary_rows(
                 [summary for summary in self._raw_summaries() if summary.engine == "opencv"]
@@ -453,52 +461,13 @@ class AnalyzeWorkflowView:
         from nicegui import ui
 
         table = ui.table(
-            columns=_matrix_columns(),
+            columns=matrix_columns(),
             rows=[matrix_row(row) for row in rows],
             row_key="uid",
         ).classes("slim-table matrix-table w-full").props("dense flat hide-bottom")
         self._register_table("matrix", table)
-        self._wire_matrix_table(table)
+        wire_matrix_table(table, self._handle_matrix_change)
         table.on("rowClick", self._select_row_event)
-
-    def _wire_matrix_table(self, table: Any) -> None:
-        table.add_slot("body-cell-active", _bool_cell_slot("active"))
-        table.add_slot(
-            "body-cell-project",
-            """
-            <q-td :props="props">
-              <div class="source-cell-name">{{ props.row.project }}</div>
-            </q-td>
-            """,
-        )
-        table.add_slot(
-            "body-cell-source",
-            """
-            <q-td :props="props">
-              <div class="source-cell-name">{{ props.row.source }}</div>
-            </q-td>
-            """,
-        )
-        table.add_slot(
-            "body-cell-engine",
-            """
-            <q-td :props="props">
-              <div class="source-cell-name">{{ props.row.engine }}</div>
-            </q-td>
-            """,
-        )
-        table.add_slot(
-            "body-cell-sample_id",
-            """
-            <q-td :props="props">
-              <q-input dense outlined v-model="props.row.sample_id"
-                @click.stop @mousedown.stop
-                @blur="$parent.$emit('matrix-change', {uid: props.row.uid, field: 'sample_id', value: props.row.sample_id})"
-                @keyup.enter="$event.target.blur()" />
-            </q-td>
-            """,
-        )
-        table.on("matrix-change", self._handle_matrix_change)
 
     def _render_import_inventory(self) -> None:
         from nicegui import ui
@@ -537,16 +506,16 @@ class AnalyzeWorkflowView:
         # Which files run is decided only by the Use checkbox on the import stage;
         # the engine stages just show the files tagged for use.
         rows = [row for row in self.matrix if row.active and row.engine == engine]
-        params = _matrix_params(engine)
+        params = matrix_params(engine)
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label(f"{engine.title()} files").classes("section-title")
             table = ui.table(
-                columns=_schema_matrix_columns(params),
-                rows=[self._schema_matrix_row(row, params) for row in rows],
+                columns=schema_matrix_columns(params),
+                rows=[schema_matrix_row(row, params) for row in rows],
                 row_key="uid",
             ).classes("slim-table matrix-table w-full").props("dense flat hide-bottom")
             self._register_table(f"{engine}_matrix", table)
-            self._wire_schema_matrix(table, params)
+            wire_schema_matrix_table(table, params, self._handle_matrix_change)
             table.on("rowClick", self._select_row_event)
             if not rows:
                 ui.label(f"No active {engine} files.").classes("muted text-xs")
@@ -1400,21 +1369,6 @@ class AnalyzeWorkflowView:
     def _analysis_project_paths(self) -> set[str]:
         return {row.project_path for row in self.matrix} | {self.project_path}
 
-    def _schema_matrix_row(self, row: MatrixRow, params: tuple[Param, ...]) -> dict[str, Any]:
-        data = {
-            "uid": row.uid,
-            "sample_id": row.sample_id,
-            "source": Path(row.source_path).name or row.source_path,
-        }
-        for param in params:
-            data[param.name] = _schema_cell_value(row, param)
-        return data
-
-    def _wire_schema_matrix(self, table: Any, params: tuple[Param, ...]) -> None:
-        for param in params:
-            table.add_slot(f"body-cell-{param.name}", _schema_cell_slot(param))
-        table.on("matrix-change", self._handle_matrix_change)
-
     def _targets(self, engine: str | None = None) -> list[MatrixRow]:
         return [
             row
@@ -1452,10 +1406,10 @@ class AnalyzeWorkflowView:
         if field == "sample_id":
             row.sample_id = str(value or "")
             return
-        kind = _FIELD_KINDS.get(field)
+        kind = matrix_field_kind(field)
         if kind is None:
             return
-        row.settings[field] = _cast_by_kind(kind, value)
+        row.settings[field] = cast_matrix_value(kind, value)
 
     def _set_setting(self, key: str, value: Any) -> None:
         self.settings[key] = value
@@ -1521,104 +1475,6 @@ class AnalyzeWorkflowView:
 
     def _refresh(self) -> None:
         self._render_current_stage()
-
-
-def _matrix_columns() -> list[dict[str, Any]]:
-    return [
-        {"name": "active", "label": "Use", "field": "active", "align": "center"},
-        {"name": "project", "label": "Project", "field": "project", "align": "left"},
-        {"name": "source", "label": "Source", "field": "source", "align": "left"},
-        {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
-        {"name": "sample_id", "label": "Sample ID", "field": "sample_id", "align": "left"},
-    ]
-
-
-# The per-engine matrix is generated from the engine's ParamSchema: one column per
-# editable Param, its `kind` chooses the cell widget and the value cast. Declare a Param
-# once in the engine settings and it appears, editable, in the matrix.
-_ENGINE_SCHEMAS = {"opencv": OPENCV_SETTINGS, "cellpose": CELLPOSE_SETTINGS}
-_MATRIX_HIDDEN_PARAMS = {"video_path", "input_dir"}
-_FIELD_KINDS = {param.name: param.kind for schema in _ENGINE_SCHEMAS.values() for param in schema.params}
-
-
-def _matrix_params(engine: str) -> tuple[Param, ...]:
-    schema = _ENGINE_SCHEMAS.get(engine)
-    if schema is None:
-        return ()
-    return tuple(param for param in schema.params if param.name not in _MATRIX_HIDDEN_PARAMS)
-
-
-def _cast_by_kind(kind: ParamKind, value: Any) -> Any:
-    if kind is ParamKind.BOOLEAN:
-        return bool(value)
-    if kind is ParamKind.INTEGER:
-        return int(_numeric(value) or 0)
-    if kind is ParamKind.FLOAT:
-        return float(_numeric(value) or 0.0)
-    return str(value or "")
-
-
-def _schema_matrix_columns(params: tuple[Param, ...]) -> list[dict[str, Any]]:
-    columns = [
-        {"name": "sample_id", "label": "Sample", "field": "sample_id", "align": "left"},
-        {"name": "source", "label": "Source", "field": "source", "align": "left"},
-    ]
-    for param in params:
-        align = "right" if param.kind in {ParamKind.INTEGER, ParamKind.FLOAT} else "left"
-        columns.append({"name": param.name, "label": param.label, "field": param.name, "align": align})
-    return columns
-
-
-def _schema_cell_value(row: MatrixRow, param: Param) -> Any:
-    default = param.default
-    if param.kind is ParamKind.BOOLEAN:
-        return _row_bool(row, param.name, bool(default))
-    if param.kind is ParamKind.INTEGER:
-        return _row_int(row, param.name, int(default) if default is not None else 0)
-    if param.kind is ParamKind.FLOAT:
-        return _row_float(row, param.name, float(default) if default is not None else 0.0)
-    return str(_row_setting(row, param.name, default if default is not None else ""))
-
-
-def _numeric_cell_slot(field: str) -> str:
-    return f"""
-    <q-td :props="props">
-      <q-input dense outlined type="number" input-class="matrix-num"
-        v-model.number="props.row.{field}"
-        @click.stop @mousedown.stop
-        @blur="$parent.$emit('matrix-change', {{uid: props.row.uid, field: '{field}', value: props.row.{field}}})"
-        @keyup.enter="$event.target.blur()" />
-    </q-td>
-    """
-
-
-def _text_cell_slot(field: str) -> str:
-    return f"""
-    <q-td :props="props">
-      <q-input dense outlined v-model="props.row.{field}"
-        @click.stop @mousedown.stop
-        @blur="$parent.$emit('matrix-change', {{uid: props.row.uid, field: '{field}', value: props.row.{field}}})"
-        @keyup.enter="$event.target.blur()" />
-    </q-td>
-    """
-
-
-def _bool_cell_slot(field: str) -> str:
-    return f"""
-    <q-td :props="props">
-      <q-checkbox dense v-model="props.row.{field}"
-        @click.stop @mousedown.stop
-        @update:model-value="val => $parent.$emit('matrix-change', {{uid: props.row.uid, field: '{field}', value: val}})" />
-    </q-td>
-    """
-
-
-def _schema_cell_slot(param: Param) -> str:
-    if param.kind is ParamKind.BOOLEAN:
-        return _bool_cell_slot(param.name)
-    if param.kind in {ParamKind.INTEGER, ParamKind.FLOAT}:
-        return _numeric_cell_slot(param.name)
-    return _text_cell_slot(param.name)
 
 
 def _project_ref_label(ref: ProjectRef) -> str:
