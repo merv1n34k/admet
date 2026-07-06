@@ -3,10 +3,75 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from admet.ui import design
-
 ButtonVariant = Literal["neutral", "primary", "success", "danger", "warning"]
 ControlSize = Literal["inline", "default", "large", "stage"]
+
+
+@dataclass(frozen=True)
+class Palette:
+    background: str = "#f7fafc"
+    background_alt: str = "#edf3f7"
+    raised: str = "#f0f5f8"
+    control: str = "#ffffff"
+    control_hover: str = "#f0f5f8"
+    control_pressed: str = "#e6eef4"
+    text: str = "#16212b"
+    text_heading: str = "#28323f"
+    text_step: str = "#334155"
+    text_muted: str = "#52677a"
+    text_subtle: str = "#7b8c9a"
+    text_disabled: str = "#9aa7b2"
+    border: str = "#d7e2ea"
+    border_hover: str = "#a9bac8"
+    accent: str = "#225d82"
+    accent_hover: str = "#1b4a68"
+    success: str = "#1b6b53"
+    success_hover: str = "#185e49"
+    danger: str = "#8b2b2b"
+    danger_hover: str = "#742323"
+    warning: str = "#b7791f"
+    warning_hover: str = "#9d661a"
+    notice_success: str = "#9ed4b4"
+    notice_warning: str = "#f4bf71"
+    notice_danger: str = "#ee9b9b"
+    video_placeholder: str = "#f1f4f8"
+    video_caption: str = "#64748b"
+    video_bubble: str = "rgba(148, 163, 184, 0.22)"
+    white: str = "#ffffff"
+    roi: str = "#e5f36a"
+
+
+@dataclass(frozen=True)
+class Spacing:
+    none: int = 0
+    tight: int = 4
+    control: int = 4
+    default: int = 8
+    panel: int = 12
+    window: int = 16
+    body_gap: int = 14
+    topbar_y: int = 10
+    topbar_x: int = 14
+    sidebar_width: int = 250
+    surface_min_height: int = 140
+    preview_min_height: int = 260
+
+
+@dataclass(frozen=True)
+class Typography:
+    family: str = "Inter, system-ui, sans-serif"
+    small: int = 11
+    body: int = 13
+    title: int = 16
+    panel_title_weight: int = 650
+    button_weight: int = 500
+
+
+@dataclass(frozen=True)
+class Radii:
+    control: int = 8
+    panel: int = 10
+    round: int = 999
 
 
 @dataclass(frozen=True)
@@ -15,47 +80,105 @@ class _ControlSize:
     font_size: int
 
 
+PALETTE = Palette()
+SPACING = Spacing()
+TYPOGRAPHY = Typography()
+RADII = Radii()
+
+STATUS_COLORS = {
+    "done": PALETTE.success,
+    "processing": PALETTE.warning,
+    "error": PALETTE.danger,
+    "inactive": PALETTE.text_subtle,
+    "complete": PALETTE.success,
+    "active": PALETTE.warning,
+    "skipped": PALETTE.text_subtle,
+    "pending": PALETTE.text_subtle,
+}
+
+NOTICE_COLORS = {
+    "primary": PALETTE.border,
+    "success": PALETTE.notice_success,
+    "warning": PALETTE.notice_warning,
+    "danger": PALETTE.notice_danger,
+}
+
+TEXT_COLORS = {
+    "default": PALETTE.text,
+    "muted": PALETTE.text_muted,
+    "subtle": PALETTE.text_subtle,
+    "primary": PALETTE.accent,
+    "success": PALETTE.success,
+    "danger": PALETTE.danger_hover,
+    "warning": PALETTE.warning,
+}
+
+BUTTON_COLORS = {
+    "neutral": (PALETTE.control, PALETTE.control_hover),
+    "primary": (PALETTE.accent, PALETTE.accent_hover),
+    "success": (PALETTE.success, PALETTE.success_hover),
+    "danger": (PALETTE.danger, PALETTE.danger_hover),
+    "warning": (PALETTE.warning_hover, PALETTE.warning),
+}
+
+_WEB_TOKENS = {
+    "text": PALETTE.text,
+    "text-muted": PALETTE.text_muted,
+    "text-disabled": PALETTE.text_disabled,
+    "border": PALETTE.border,
+    "accent": PALETTE.accent,
+    "success-hover": PALETTE.success_hover,
+    "danger-hover": PALETTE.danger_hover,
+    "warning": PALETTE.warning,
+    "bg-app": PALETTE.background,
+    "bg-raised": PALETTE.raised,
+    "bg-control": PALETTE.control,
+    "bg-control-pressed": PALETTE.control_pressed,
+    "roi": PALETTE.roi,
+}
+
+
 class Theme:
     BG_BLACK = "#101820"
-    BG_DARK = design.PALETTE.background
-    BG_DARKER = design.PALETTE.background_alt
-    BG_MEDIUM = design.PALETTE.background_alt
-    BG_RAISED = design.PALETTE.raised
-    BG_CONTROL = design.PALETTE.control
-    BG_CONTROL_HOVER = design.PALETTE.control_hover
-    BG_CONTROL_PRESSED = design.PALETTE.control_pressed
+    BG_DARK = PALETTE.background
+    BG_DARKER = PALETTE.background_alt
+    BG_MEDIUM = PALETTE.background_alt
+    BG_RAISED = PALETTE.raised
+    BG_CONTROL = PALETTE.control
+    BG_CONTROL_HOVER = PALETTE.control_hover
+    BG_CONTROL_PRESSED = PALETTE.control_pressed
 
-    TEXT_WHITE = design.PALETTE.text
-    TEXT_MUTED = design.PALETTE.text_muted
-    TEXT_SUBTLE = design.PALETTE.text_subtle
-    TEXT_DISABLED = design.PALETTE.text_disabled
+    TEXT_WHITE = PALETTE.text
+    TEXT_MUTED = PALETTE.text_muted
+    TEXT_SUBTLE = PALETTE.text_subtle
+    TEXT_DISABLED = PALETTE.text_disabled
 
-    BORDER_COOL = design.PALETTE.border
-    BORDER_HOVER = design.PALETTE.border_hover
+    BORDER_COOL = PALETTE.border
+    BORDER_HOVER = PALETTE.border_hover
 
-    ACCENT = design.PALETTE.accent
-    ACCENT_HOVER = design.PALETTE.accent_hover
-    SUCCESS = design.PALETTE.success
-    SUCCESS_HOVER = design.PALETTE.success_hover
-    DANGER = design.PALETTE.danger
-    DANGER_HOVER = design.PALETTE.danger_hover
-    WARNING = design.PALETTE.warning
-    WARNING_DARK = design.PALETTE.warning_hover
+    ACCENT = PALETTE.accent
+    ACCENT_HOVER = PALETTE.accent_hover
+    SUCCESS = PALETTE.success
+    SUCCESS_HOVER = PALETTE.success_hover
+    DANGER = PALETTE.danger
+    DANGER_HOVER = PALETTE.danger_hover
+    WARNING = PALETTE.warning
+    WARNING_DARK = PALETTE.warning_hover
 
-    FONT_SIZE_SMALL = 11
-    FONT_SIZE_BODY = 13
-    FONT_SIZE_TITLE = 16
+    FONT_SIZE_SMALL = TYPOGRAPHY.small
+    FONT_SIZE_BODY = TYPOGRAPHY.body
+    FONT_SIZE_TITLE = TYPOGRAPHY.title
 
-    SPACE_0 = 0
-    SPACE_1 = 4
-    SPACE_2 = 8
-    SPACE_3 = 12
-    SPACE_4 = 16
+    SPACE_0 = SPACING.none
+    SPACE_1 = SPACING.tight
+    SPACE_2 = SPACING.default
+    SPACE_3 = SPACING.panel
+    SPACE_4 = SPACING.window
     CONTROL_GAP = SPACE_1
     GROUP_GAP = SPACE_2
     PANEL_PADDING = SPACE_3
     WINDOW_PADDING = SPACE_4
-    RADIUS = 8
+    RADIUS = RADII.control
     SPLITTER_HANDLE_WIDTH = 8
 
 
@@ -76,25 +199,6 @@ _SPACING = {
     "window": Theme.WINDOW_PADDING,
 }
 
-_TEXT_COLORS = {
-    "default": Theme.TEXT_WHITE,
-    "muted": Theme.TEXT_MUTED,
-    "subtle": Theme.TEXT_SUBTLE,
-    "primary": Theme.ACCENT,
-    "success": Theme.SUCCESS,
-    "danger": Theme.DANGER_HOVER,
-    "warning": Theme.WARNING,
-}
-
-_BUTTON_COLORS = {
-    "neutral": (Theme.BG_CONTROL, Theme.BG_CONTROL_HOVER),
-    "primary": (Theme.ACCENT, Theme.ACCENT_HOVER),
-    "success": (Theme.SUCCESS, Theme.SUCCESS_HOVER),
-    "danger": (Theme.DANGER, Theme.DANGER_HOVER),
-    "warning": (Theme.WARNING_DARK, Theme.WARNING),
-}
-
-
 def control_size(size: ControlSize = "default") -> _ControlSize:
     return _SIZES.get(size, _SIZES["default"])
 
@@ -105,6 +209,14 @@ def spacing(value: str | int | None = "default") -> int:
     if isinstance(value, int):
         return value
     return _SPACING.get(value, Theme.GROUP_GAP)
+
+
+def spacing_value(value: str | int | None = "default") -> int:
+    return spacing(value)
+
+
+def css_variables() -> str:
+    return "".join(f"--{name}:{value};" for name, value in _WEB_TOKENS.items())
 
 
 def box_padding(value: str | int | tuple[int, int, int, int] | None = "none") -> tuple[int, int, int, int]:
@@ -121,7 +233,7 @@ def text_qss(
     bold: bool = False,
     padding: str | None = None,
 ) -> str:
-    parts = [f"color: {_TEXT_COLORS.get(kind, kind)};"]
+    parts = [f"color: {TEXT_COLORS.get(kind, kind)};"]
     if font_size is not None:
         parts.append(f"font-size: {font_size}px;")
     if bold:
@@ -132,7 +244,7 @@ def text_qss(
 
 
 def button_qss(kind: ButtonVariant = "neutral", *, size: ControlSize = "default") -> str:
-    bg, hover = _BUTTON_COLORS.get(kind, _BUTTON_COLORS["neutral"])
+    bg, hover = BUTTON_COLORS.get(kind, BUTTON_COLORS["neutral"])
     token = control_size(size)
     text = "#ffffff" if kind != "neutral" else Theme.TEXT_WHITE
     border = bg if kind != "neutral" else Theme.BORDER_COOL

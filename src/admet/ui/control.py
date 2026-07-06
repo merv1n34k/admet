@@ -55,7 +55,7 @@ from admet.ui.data import (
     recording_video_key,
     video_row,
 )
-from admet.ui.theme import Theme
+from admet.ui.theme import STATUS_COLORS, Theme
 from admet.ui.window import log_state, panel_specs, structure_changed, structure_signature
 from admet.ui.workflow_view import (
     action_button_state,
@@ -104,13 +104,6 @@ def run_control_app(api: AdmetAPI, argv: list[str] | None = None) -> int:
         return 0 if interrupted else return_code
     return 0
 
-
-STATUS_COLORS = {
-    "done": Theme.SUCCESS,
-    "processing": Theme.WARNING,
-    "error": Theme.DANGER,
-    "inactive": Theme.TEXT_SUBTLE,
-}
 
 CAMERA_AUTO_APPLY_PARAMS = {
     "camera_width",

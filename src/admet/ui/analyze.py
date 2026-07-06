@@ -18,7 +18,7 @@ from admet.core.engine import EngineRegistry
 from admet.core.project import ProjectStore
 from admet.core.session import session_path
 from admet.engines.cellpose.detection import CellposeDetection, read_image_8bit
-from admet.ui import design
+from admet.ui import theme
 from admet.ui.data import analysis_run_rows, matrix_row
 from admet.ui.analyze_matrix import (
     cast_matrix_value,
@@ -1838,14 +1838,14 @@ def _category_axis(labels: list[str], *, rotate: int) -> dict[str, Any]:
 
 
 _CHART_COLORS = (
-    design.PALETTE.accent,
-    design.PALETTE.success,
-    design.PALETTE.warning,
-    design.PALETTE.danger,
-    design.PALETTE.accent_hover,
-    design.PALETTE.success_hover,
-    design.PALETTE.warning_hover,
-    design.PALETTE.danger_hover,
+    theme.PALETTE.accent,
+    theme.PALETTE.success,
+    theme.PALETTE.warning,
+    theme.PALETTE.danger,
+    theme.PALETTE.accent_hover,
+    theme.PALETTE.success_hover,
+    theme.PALETTE.warning_hover,
+    theme.PALETTE.danger_hover,
 )
 
 
@@ -1858,7 +1858,7 @@ def _diameter_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         "Mean diameter",
         [summary.sample_id for summary in summaries],
         [round(summary.mean_diameter, 3) for summary in summaries],
-        design.PALETTE.accent,
+        theme.PALETTE.accent,
     )
 
 
@@ -1867,7 +1867,7 @@ def _count_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         "Droplet rows",
         [summary.sample_id for summary in summaries],
         [summary.droplets for summary in summaries],
-        design.PALETTE.success_hover,
+        theme.PALETTE.success_hover,
     )
 
 
@@ -1876,7 +1876,7 @@ def _cv_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         "CV %",
         [summary.sample_id for summary in summaries],
         [round(summary.cv_percent, 3) for summary in summaries],
-        design.PALETTE.danger_hover,
+        theme.PALETTE.danger_hover,
     )
 
 
@@ -1885,7 +1885,7 @@ def _frequency_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         "Frequency (Hz)",
         [summary.sample_id for summary in summaries],
         [round(summary.frequency_hz, 2) for summary in summaries],
-        design.PALETTE.warning,
+        theme.PALETTE.warning,
     )
 
 
@@ -1893,7 +1893,7 @@ def _diameter_hist_chart(summaries: list[RawSummary]) -> dict[str, Any]:
     plotted = [summary for summary in summaries if summary.diameters]
     values = [value for summary in plotted for value in summary.diameters]
     if not values:
-        return _bar_chart("Diameter distribution (µm)", [], [], design.PALETTE.accent)
+        return _bar_chart("Diameter distribution (µm)", [], [], theme.PALETTE.accent)
     low = min(values)
     high = max(values)
     if high <= low:
@@ -2009,7 +2009,7 @@ def _inclusion_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         "Inclusions per droplet",
         [str(key) for key in keys],
         [counts[key] for key in keys],
-        design.PALETTE.success_hover,
+        theme.PALETTE.success_hover,
     )
 
 
@@ -2375,7 +2375,7 @@ def _uid() -> str:
 
 
 def _style() -> str:
-    return "<style>:root{" + design.css_variables() + "}</style>" + """
+    return "<style>:root{" + theme.css_variables() + "}</style>" + """
     <style>
     body { background: var(--bg-app); }
     .shell { min-height: 100vh; color: var(--text); font-size: 13px; padding: 18px 20px 20px; gap: 8px; }
