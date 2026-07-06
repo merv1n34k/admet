@@ -1988,6 +1988,32 @@ def _fluidics_rows(runs: list[FluidicsRun]) -> list[dict[str, Any]]:
     return rows
 
 
+def _chart_grid(*, left: int = 58, right: int = 18, top: int = 42, bottom: int = 52) -> dict[str, Any]:
+    return {"left": left, "right": right, "top": top, "bottom": bottom, "containLabel": True}
+
+
+def _value_axis(name: str, *, inverse: bool = False) -> dict[str, Any]:
+    axis = {
+        "type": "value",
+        "name": name,
+        "nameLocation": "middle",
+        "nameGap": 34 if name else 22,
+        "axisLabel": {"fontSize": 10, "hideOverlap": True},
+    }
+    if inverse:
+        axis["inverse"] = True
+    return axis
+
+
+def _category_axis(labels: list[str], *, rotate: int) -> dict[str, Any]:
+    return {
+        "type": "category",
+        "data": labels,
+        "nameGap": 28,
+        "axisLabel": {"rotate": rotate, "fontSize": 10, "hideOverlap": True},
+    }
+
+
 def _diameter_chart(summaries: list[RawSummary]) -> dict[str, Any]:
     return _bar_chart(
         "Mean diameter",
@@ -2042,9 +2068,9 @@ def _diameter_hist_chart(summaries: list[RawSummary]) -> dict[str, Any]:
     return {
         "title": {"text": "Diameter distribution (µm)", "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
         "tooltip": {"trigger": "axis"},
-        "grid": {"left": 48, "right": 12, "top": 36, "bottom": 46},
-        "xAxis": {"type": "category", "data": labels, "axisLabel": {"rotate": 45, "fontSize": 9}},
-        "yAxis": {"type": "value", "name": "count"},
+        "grid": _chart_grid(bottom=58),
+        "xAxis": _category_axis(labels, rotate=45),
+        "yAxis": _value_axis("count"),
         "series": [{"type": "bar", "data": counts, "itemStyle": {"color": design.PALETTE.accent}}],
     }
 
@@ -2059,9 +2085,9 @@ def _scatter_chart(title: str, xname: str, yname: str, summaries, project, *, in
         "title": {"text": title, "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
         "tooltip": {},
         "legend": {"top": 4, "right": 8, "textStyle": {"fontSize": 9}},
-        "grid": {"left": 52, "right": 12, "top": 36, "bottom": 40},
-        "xAxis": {"type": "value", "name": xname},
-        "yAxis": {"type": "value", "name": yname, "inverse": invert_y},
+        "grid": _chart_grid(),
+        "xAxis": _value_axis(xname),
+        "yAxis": _value_axis(yname, inverse=invert_y),
         "series": series,
     }
     return chart
@@ -2089,24 +2115,25 @@ def _area_position_chart(summaries: list[RawSummary]) -> dict[str, Any]:
 
 
 def _track_timeline_chart(summaries: list[RawSummary]) -> dict[str, Any]:
-    data = []
+    series = []
     for summary in summaries[:3]:
         for droplet_id, first_frame, last_frame in summary.spans[:600]:
-            data.append({"coords": [[first_frame, droplet_id], [last_frame, droplet_id]]})
+            series.append(
+                {
+                    "type": "line",
+                    "showSymbol": False,
+                    "silent": True,
+                    "data": [[first_frame, droplet_id], [last_frame, droplet_id]],
+                    "lineStyle": {"width": 2, "color": design.PALETTE.accent, "opacity": 0.7},
+                }
+            )
     return {
         "title": {"text": "Droplet timeline (frame)", "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
         "tooltip": {},
-        "grid": {"left": 52, "right": 12, "top": 36, "bottom": 40},
-        "xAxis": {"type": "value", "name": "frame"},
-        "yAxis": {"type": "value", "name": "droplet id"},
-        "series": [
-            {
-                "type": "lines",
-                "coordinateSystem": "cartesian2d",
-                "data": data,
-                "lineStyle": {"width": 2, "color": design.PALETTE.accent, "opacity": 0.7},
-            }
-        ],
+        "grid": _chart_grid(),
+        "xAxis": _value_axis("frame"),
+        "yAxis": _value_axis("droplet id"),
+        "series": series,
     }
 
 
@@ -2174,9 +2201,9 @@ def _fluidics_chart(runs: list[FluidicsRun], field: str) -> dict[str, Any]:
     return {
         "title": {"text": field.title(), "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
         "tooltip": {"trigger": "axis"},
-        "grid": {"left": 44, "right": 12, "top": 36, "bottom": 34},
-        "xAxis": {"type": "value", "name": "s"},
-        "yAxis": {"type": "value"},
+        "grid": _chart_grid(bottom=44),
+        "xAxis": _value_axis("s"),
+        "yAxis": _value_axis(""),
         "series": series,
     }
 
@@ -2185,9 +2212,9 @@ def _bar_chart(title: str, labels: list[str], values: list[float | int], color: 
     return {
         "title": {"text": title, "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
         "tooltip": {},
-        "grid": {"left": 48, "right": 12, "top": 36, "bottom": 54},
-        "xAxis": {"type": "category", "data": labels, "axisLabel": {"rotate": 25}},
-        "yAxis": {"type": "value"},
+        "grid": _chart_grid(bottom=60),
+        "xAxis": _category_axis(labels, rotate=25),
+        "yAxis": _value_axis(""),
         "series": [{"type": "bar", "data": values, "itemStyle": {"color": color}}],
     }
 
