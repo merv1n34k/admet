@@ -123,9 +123,9 @@ class CellposeDetection:
             coords.extend([str(point[0][0]), str(point[0][1])])
         return ",".join(coords)
 
-    def coordinates_to_mask(self, coord_string: str, image_shape: tuple[int, int]):
+    def coordinates_to_mask(self, coordinates, image_shape: tuple[int, int]):
         cv2 = _require_cv2()
-        coords = [float(value) for value in coord_string.split(",")]
+        coords = _coordinate_values(coordinates)
         points = np.array(coords).reshape(-1, 2).astype(np.int32)
         mask = np.zeros(image_shape, dtype=np.uint8)
         cv2.fillPoly(mask, [points], 255)
@@ -194,7 +194,7 @@ class CellposeDetection:
 
         return filtered_mask, inclusion_count
 
-    def process_frame(self, frame_idx: int, min_projection, droplet_coords: list[str] | None = None) -> None:
+    def process_frame(self, frame_idx: int, min_projection, droplet_coords: list | None = None) -> None:
         cv2 = _require_cv2()
         store_viz = self.store_visualizations
         save_overlay = self._frame_output is not None
@@ -402,3 +402,19 @@ def _require_cv2():
     except ImportError as exc:
         raise ImportError("OpenCV is required for Cellpose image processing.") from exc
     return cv2
+
+
+def _coordinate_values(coordinates) -> list[float]:
+    if isinstance(coordinates, str):
+        return [float(value) for value in coordinates.split(",") if value != ""]
+    if isinstance(coordinates, np.ndarray):
+        coordinates = coordinates.tolist()
+    values: list[float] = []
+    for value in coordinates:
+        if isinstance(value, str):
+            values.extend(float(part) for part in value.split(",") if part != "")
+        elif isinstance(value, (list, tuple, np.ndarray)):
+            values.extend(_coordinate_values(value))
+        else:
+            values.append(float(value))
+    return values

@@ -39,7 +39,7 @@ class Cache:
         self._touch(cache_key)
         return {
             "min_projection": data["min_projection"],
-            "droplet_coords": [_plain_tuple(coords) for coords in data["droplet_coords"]],
+            "droplet_coords": [_plain_coordinate(coords) for coords in data["droplet_coords"]],
         }
 
     def save_frame(self, source_filename: str, min_proj, droplet_coords) -> None:
@@ -118,7 +118,11 @@ class Cache:
             self.metadata["frames"].pop(oldest_key, None)
 
 
-def _plain_tuple(value) -> tuple:
+def _plain_coordinate(value):
+    if isinstance(value, str):
+        return value
     if isinstance(value, np.ndarray):
-        return tuple(value.tolist())
+        value = value.tolist()
+    if isinstance(value, str):
+        return value
     return tuple(value)

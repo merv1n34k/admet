@@ -10,7 +10,7 @@ from admet.core.run import JsonlRunSink, RunJob
 from admet.engines.cellpose.cache import Cache
 from admet.engines.cellpose.config import load_config
 from admet.engines.cellpose.correction import update_results_with_inclusions
-from admet.engines.cellpose.detection import CellposeDetection, CellposeUnavailableError
+from admet.engines.cellpose.detection import CellposeDetection, CellposeUnavailableError, _coordinate_values
 from admet.engines.cellpose.engine import create_engine
 from admet.engines.cellpose.scanprotocol import build_layout, field_cells
 from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
@@ -63,6 +63,29 @@ class CellposeHelperTests(unittest.TestCase):
             changed = dict(config)
             changed["min_inclusion_area"] = 9
             self.assertNotEqual(cache.get_config_hash(), Cache(changed).get_config_hash())
+
+    def test_cache_preserves_string_coordinates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache = Cache(
+                {
+                    "px_to_um": 1.14,
+                    "cache": {"enabled": True, "max_entries": 10, "dir": tmpdir},
+                }
+            )
+
+            cache.save_frame(
+                "field-001.tif",
+                np.array([[1, 2], [3, 4]], dtype=np.uint8),
+                ["10,12,20,12,20,22"],
+            )
+            cached = cache.load_frame("field-001.tif")
+
+        self.assertEqual(cached["droplet_coords"], ["10,12,20,12,20,22"])
+
+    def test_coordinate_values_accept_cached_tuple_coordinates(self):
+        self.assertEqual(_coordinate_values("10,12,20,12"), [10.0, 12.0, 20.0, 12.0])
+        self.assertEqual(_coordinate_values((10, 12, 20, 12)), [10.0, 12.0, 20.0, 12.0])
+        self.assertEqual(_coordinate_values(("10,12", "20,12")), [10.0, 12.0, 20.0, 12.0])
 
     def test_cache_default_dir_is_external_to_project(self):
         cache = Cache({"cache": {"enabled": True}})
