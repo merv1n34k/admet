@@ -53,6 +53,48 @@ class ProjectStore:
     def save(self) -> None:
         self.path = save_session(self.path, self.session)
 
+    def update_metadata(self, **metadata: Any) -> None:
+        self.session = replace(
+            self.session,
+            metadata={**self.session.metadata, **{key: value for key, value in metadata.items() if value is not None}},
+        )
+        self.save()
+
+    def upsert_file_path(
+        self,
+        source_path: str | Path,
+        *,
+        role: str,
+        media_type: str = "",
+        metadata: dict[str, Any] | None = None,
+        id_hint: str = "",
+    ) -> SessionFile:
+        resolved = Path(source_path).resolve()
+        stored_path = self._stored_path(resolved)
+        file_metadata = dict(metadata or {})
+        if Path(stored_path).is_absolute():
+            file_metadata.setdefault("external", True)
+
+        existing = next((file for file in self.session.files if file.path == stored_path), None)
+        file = SessionFile(
+            id=existing.id if existing is not None else _unique_file_id(_safe_id(id_hint or resolved.stem), self.session.files),
+            path=stored_path,
+            role=role,
+            media_type=media_type,
+            metadata=file_metadata,
+        )
+        files = _upsert_file(list(self.session.files), file)
+        self.session = replace(self.session, files=tuple(files))
+        return file
+
+    def files_by_role(self, roles: set[str] | frozenset[str] | tuple[str, ...]) -> tuple[SessionFile, ...]:
+        role_set = set(roles)
+        return tuple(file for file in self.session.files if file.role in role_set)
+
+    def resolve_file_path(self, file: SessionFile) -> Path:
+        path = Path(file.path)
+        return path if path.is_absolute() else self.path / path
+
     @property
     def records_dir(self) -> Path:
         return self.path / "records"
@@ -106,33 +148,19 @@ class ProjectStore:
         engine: str,
         sample_id: str = "",
     ) -> SessionFile:
-        resolved = Path(source_path).resolve()
-        stored_path = self._stored_path(resolved)
-        for file in self.session.files:
-            if file.path == stored_path:
-                return file
-
+        stored_path = self._stored_path(Path(source_path).resolve())
         metadata: dict[str, Any] = {
             "engine": engine,
-            "sample_id": sample_id or resolved.stem,
+            "sample_id": sample_id or Path(source_path).stem,
             "source_path": stored_path,
         }
-        if Path(stored_path).is_absolute():
-            metadata["external"] = True
-
-        file_id = _unique_file_id(
-            f"analysis-{engine}-{_safe_id(resolved.stem)}",
-            self.session.files,
-        )
-        file = SessionFile(
-            id=file_id,
-            path=stored_path,
+        file = self.upsert_file_path(
+            source_path,
             role="analysis_video" if engine == "opencv" else "analysis_image_dir",
-            media_type=_analysis_media_type(resolved, engine),
+            media_type=_analysis_media_type(Path(source_path), engine),
             metadata=metadata,
+            id_hint=f"analysis-{engine}-{Path(source_path).stem}",
         )
-        files = _upsert_file(list(self.session.files), file)
-        self.session = replace(self.session, files=tuple(files))
         return file
 
     def finish_analysis_run(

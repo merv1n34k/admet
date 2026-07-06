@@ -206,6 +206,30 @@ class SessionProjectTests(unittest.TestCase):
         self.assertEqual(loaded.items[0].id, "acq-records")
         self.assertEqual(loaded.items[0].metadata["recording_count"], 1)
 
+    def test_project_store_upserts_files_by_role_and_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            store = ProjectStore.create(root / "study", "study")
+            media = store.path / "media" / "movie.avi"
+            media.parent.mkdir()
+            media.write_bytes(b"avi")
+            store.update_metadata(cache_root=str(root / "cache"))
+
+            stored = store.upsert_file_path(
+                media,
+                role="analysis_video",
+                media_type="video/avi",
+                metadata={"engine": "opencv"},
+                id_hint="analysis-opencv-movie",
+            )
+            store.save()
+            loaded = ProjectStore(store.path)
+
+        self.assertEqual(loaded.session.metadata["cache_root"], str(root / "cache"))
+        self.assertEqual(stored.path, "media/movie.avi")
+        self.assertEqual(len(loaded.files_by_role(("analysis_video",))), 1)
+        self.assertEqual(loaded.resolve_file_path(loaded.session.files[0]), media)
+
     def test_project_store_registers_analysis_run_raw_sink(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             store = ProjectStore.create(Path(tmpdir) / "study", "study")

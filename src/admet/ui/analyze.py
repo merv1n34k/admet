@@ -842,9 +842,7 @@ class AnalyzeWorkflowView:
                 store = ProjectStore(project_path)
             except Exception:
                 continue
-            for file in store.session.files:
-                if file.role not in {"control_video", "analysis_video", "analysis_image_dir"}:
-                    continue
+            for file in store.files_by_role(("control_video", "analysis_video", "analysis_image_dir")):
                 rows.append(
                     {
                         "project": project_path.name,
@@ -1114,7 +1112,17 @@ class AnalyzeWorkflowView:
         try:
             path = session_path(self.project_path)
             store = ProjectStore(path) if (path / "manifest.json").is_file() else ProjectStore.create(path, path.stem)
-            store.register_analysis_file(str(source), engine=engine, sample_id=sample_id)
+            store.upsert_file_path(
+                str(source),
+                role=_analysis_role(engine),
+                media_type=_analysis_media_type(source, engine),
+                metadata={
+                    "engine": engine,
+                    "sample_id": sample_id,
+                    "source_path": str(source),
+                },
+                id_hint=f"analysis-{engine}-{source.stem}",
+            )
             store.save()
             self.project_refs = discover_projects(self.discovery_root)
         except Exception as exc:
@@ -1197,11 +1205,7 @@ class AnalyzeWorkflowView:
             self._notify(f"project create failed: {exc}", "danger")
             self._refresh()
             return
-        store.session = replace(
-            store.session,
-            metadata={**store.session.metadata, "cache_root": self.settings["cache_root"]},
-        )
-        store.save()
+        store.update_metadata(cache_root=self.settings["cache_root"])
         self.project_path = str(store.path)
         self.stage_progress["import"] = max(self.stage_progress["import"], 30)
         self._mark_stage("import", StageStatus.ACTIVE)
@@ -1238,11 +1242,9 @@ class AnalyzeWorkflowView:
 
     def _load_project_files(self, store: ProjectStore) -> None:
         existing = {row.source_path for row in self.matrix}
-        for file in store.session.files:
-            if file.role not in {"control_video", "analysis_video", "analysis_image_dir"}:
-                continue
+        for file in store.files_by_role(("control_video", "analysis_video", "analysis_image_dir")):
             engine = str(file.metadata.get("engine") or ("cellpose" if file.role == "analysis_image_dir" else "opencv"))
-            source_path = str(store.path / file.path) if not Path(file.path).is_absolute() else file.path
+            source_path = str(store.resolve_file_path(file))
             if source_path in existing:
                 continue
             self.matrix.append(
@@ -1482,6 +1484,18 @@ def _project_ref_label(ref: ProjectRef) -> str:
         f"{ref.project_id} · {(ref.updated or 'unknown')[:10]} · "
         f"{ref.file_count} files / {ref.run_count} runs"
     )
+
+
+def _analysis_role(engine: str) -> str:
+    return "analysis_image_dir" if engine == "cellpose" else "analysis_video"
+
+
+def _analysis_media_type(path: Path, engine: str) -> str:
+    if engine == "cellpose" or path.is_dir():
+        return "inode/directory"
+    if path.suffix.lower() == ".avi":
+        return "video/avi"
+    return "video"
 
 
 def _load_stored_runs(project_paths: list[Path]) -> list[StoredRun]:
