@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import signal
 import sys
@@ -42,7 +41,7 @@ from admet.core.api import AdmetAPI
 from admet.core.run import RunJob, RunResult
 from admet.core.project import ProjectStore
 from admet.core.engine import Param, ParamKind
-from admet.core.session import SessionFile, SessionItem, load_session, new_session, save_session, session_path
+from admet.core.session import load_session, new_session, save_session, session_path
 from admet.workflows import Stage, StageControl, StageStatus
 from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNEL_LABELS,
@@ -54,7 +53,6 @@ from admet.ui.control_data import (
     VIDEO_TABLE_COLUMNS,
     prefer_video_row,
     recording_video_key,
-    video_metadata,
     video_row,
 )
 from admet.ui.theme import Theme
@@ -515,7 +513,6 @@ class ControlWindow(QMainWindow):
         self.project_path = session_path(Path(path))
         self.api.workdir = str(self.project_path)
         self._control_recording_dir = None
-        self._load_project_recordings()
         self._sync_project_badge()
         self._set_status("Project selected", "success")
         self._notify("Project selected", "success")
@@ -2138,107 +2135,6 @@ class ControlWindow(QMainWindow):
         except Exception as exc:
             self._append_log(f"project: acquisition metadata save failed: {exc}")
 
-    def _register_recording_artifact(self, recording: Any) -> bool:
-        if not isinstance(recording, dict) or self.api.session is None:
-            return False
-        file_ids: list[str] = []
-        files = list(self.api.session.files)
-
-        video_path = str(recording.get("video_path") or "")
-        video_external = False
-        if video_path:
-            video_path, video_external = _session_stored_path(video_path, self.project_path)
-            recording = {**recording, "video_path": video_path}
-        if video_path:
-            metadata = video_metadata(recording)
-            if video_external:
-                metadata["external"] = True
-            file_id = _video_file_id(video_path, files)
-            files = _upsert_session_file(
-                files,
-                SessionFile(
-                    id=file_id,
-                    path=video_path,
-                    role="control_video",
-                    media_type="video/avi",
-                    metadata=metadata,
-                ),
-            )
-            file_ids.append(file_id)
-
-        fluidics_csv = str(recording.get("fluidics_csv") or "")
-        fluidics_external = False
-        if fluidics_csv:
-            fluidics_csv, fluidics_external = _session_stored_path(fluidics_csv, self.project_path)
-            recording = {**recording, "fluidics_csv": fluidics_csv}
-        if fluidics_csv:
-            csv_metadata = _fluidics_csv_metadata(recording)
-            if fluidics_external:
-                csv_metadata["external"] = True
-            file_id = _session_file_id("fluidics", fluidics_csv, files)
-            files = _upsert_session_file(
-                files,
-                SessionFile(
-                    id=file_id,
-                    path=fluidics_csv,
-                    role="control_fluidics_csv",
-                    media_type="text/csv",
-                    metadata=csv_metadata,
-                ),
-            )
-            file_ids.append(file_id)
-
-        if not file_ids:
-            return False
-        item_id = _recording_item_id(recording)
-        existing_item = _find_session_item(self.api.session.items, item_id)
-        item_files = list(existing_item.files if existing_item is not None else ())
-        for file_id in file_ids:
-            if file_id not in item_files:
-                item_files.append(file_id)
-        item = SessionItem(
-            id=item_id,
-            project_type="control_acquisition",
-            engine=self.api.engine.id,
-            settings={"recording_label": str(recording.get("recording_id") or recording.get("video_prefix") or "")},
-            files=tuple(item_files),
-            metadata=_recording_item_metadata(recording),
-        )
-        items = _upsert_session_item(list(self.api.session.items), item)
-        self.api.session = replace(self.api.session, files=tuple(files), items=tuple(items))
-        return True
-
-    def _load_project_recordings(self) -> None:
-        if self.project_path is None or self.api.session is None:
-            return
-        records_root = self.project_path / "records"
-        if not records_root.is_dir():
-            return
-        processed = 0
-        changed = False
-        metadata_path = records_root / "metadata.json"
-        if not metadata_path.is_file():
-            return
-        try:
-            with metadata_path.open("r", encoding="utf-8") as handle:
-                metadata = json.load(handle)
-        except Exception as exc:
-            self._append_log(f"project: skipped recording metadata {metadata_path}: {exc}")
-            return
-        for recording in _recordings_from_metadata(metadata):
-            normalized = _normalize_recording_metadata(recording, records_root)
-            if self._register_recording_artifact(normalized):
-                changed = True
-                processed += 1
-        if processed:
-            self._append_log(f"project: loaded {processed} recording metadata item(s)")
-        if changed:
-            try:
-                self.project_path = save_session(self.project_path, self.api.session)
-                self.api.workdir = str(self.project_path)
-            except Exception as exc:
-                self._append_log(f"project: recording metadata save failed: {exc}")
-
     def _video_rows(self) -> list[dict[str, str]]:
         rows: dict[str, dict[str, str]] = {}
         session = self.api.session
@@ -2264,14 +2160,6 @@ class ControlWindow(QMainWindow):
             result_recording = self.last_result.metadata.get("recording")
             if isinstance(result_recording, dict):
                 recordings.append(result_recording)
-
-        for key in ("current_recording", "last_recording"):
-            value = self.last_metadata.get(key)
-            if isinstance(value, dict):
-                recordings.append(value)
-        value = self.last_metadata.get("recordings")
-        if isinstance(value, list):
-            recordings.extend(item for item in value if isinstance(item, dict))
 
         metadata_sources = getattr(self.api.engine, "recording_metadata_sources", None)
         if callable(metadata_sources):
@@ -3062,161 +2950,6 @@ def _fit_table_height(table: QTableWidget, *, max_rows: int | None = None) -> No
     row_count = table.rowCount() if max_rows is None else min(table.rowCount(), max_rows)
     height += sum(table.rowHeight(row) for row in range(row_count))
     table.setFixedHeight(height)
-
-
-def _fluidics_csv_metadata(recording: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "fluidics_csv": str(recording.get("fluidics_csv") or ""),
-        "recording_id": str(recording.get("recording_id") or recording.get("video_prefix") or ""),
-        "started_at": str(recording.get("started_at") or ""),
-        "stopped_at": str(recording.get("stopped_at") or ""),
-        "duration_s": float(recording.get("duration_s") or 0.0),
-    }
-
-
-def _recording_item_metadata(recording: dict[str, Any]) -> dict[str, Any]:
-    metadata = video_metadata(recording)
-    metadata.update(_fluidics_csv_metadata(recording))
-    metadata["report_dir"] = str(recording.get("report_dir") or "")
-    return metadata
-
-
-def _recordings_from_metadata(metadata: Any) -> list[dict[str, Any]]:
-    if not isinstance(metadata, dict):
-        return []
-    recordings = metadata.get("recordings")
-    if isinstance(recordings, list):
-        return [recording for recording in recordings if isinstance(recording, dict)]
-    current = metadata.get("current_recording")
-    if isinstance(current, dict):
-        return [current]
-    return []
-
-
-def _normalize_recording_metadata(recording: dict[str, Any], report_dir: Path) -> dict[str, Any]:
-    normalized = dict(recording)
-    normalized["report_dir"] = str(report_dir)
-    video_prefix = str(
-        normalized.get("video_prefix")
-        or normalized.get("recording_id")
-        or Path(str(normalized.get("video_path") or "")).stem
-    )
-    if video_prefix:
-        normalized["video_prefix"] = video_prefix
-        normalized.setdefault("recording_id", video_prefix)
-    video_path = _recording_member_path(
-        normalized.get("video_path"),
-        report_dir,
-        "camera",
-        video_prefix,
-        ".avi",
-    )
-    fluidics_csv = _recording_member_path(
-        normalized.get("fluidics_csv"),
-        report_dir,
-        "fluidics",
-        video_prefix,
-        ".csv",
-    )
-    if video_path is not None:
-        normalized["video_path"] = str(video_path)
-        normalized["output_dir"] = str(video_path.parent)
-    if fluidics_csv is not None:
-        normalized["fluidics_csv"] = str(fluidics_csv)
-    return normalized
-
-
-def _recording_member_path(
-    raw_path: Any,
-    report_dir: Path,
-    subdir: str,
-    stem: str,
-    suffix: str,
-) -> Path | None:
-    raw_text = str(raw_path or "").strip()
-    if raw_text:
-        path = Path(raw_text)
-        candidates = [path] if path.is_absolute() else [report_dir / path, report_dir.parent / path]
-        for candidate in candidates:
-            if candidate.exists():
-                return candidate.resolve()
-    if stem:
-        candidate = report_dir / subdir / f"{stem}{suffix}"
-        if candidate.exists():
-            return candidate.resolve()
-    return None
-
-
-def _session_stored_path(path_value: str, project_path: Path | None) -> tuple[str, bool]:
-    path = Path(path_value)
-    if project_path is None:
-        return str(path), path.is_absolute()
-    root = project_path.resolve()
-    path = (root / path).resolve() if not path.is_absolute() else path.resolve()
-    try:
-        return path.relative_to(root).as_posix(), False
-    except ValueError:
-        return str(path), True
-
-
-def _video_file_id(video_path: str, files: list[SessionFile]) -> str:
-    return _session_file_id("video", video_path, files)
-
-
-def _session_file_id(prefix: str, path: str, files: list[SessionFile]) -> str:
-    for file in files:
-        if file.path == path or file.metadata.get("video_path") == path or file.metadata.get("fluidics_csv") == path:
-            return file.id
-    stem = Path(path).stem or prefix
-    base = prefix + "-" + "".join(ch.lower() if ch.isalnum() else "-" for ch in stem).strip("-")
-    existing = {file.id for file in files}
-    candidate = base or prefix
-    index = 2
-    while candidate in existing:
-        candidate = f"{base}-{index}"
-        index += 1
-    return candidate
-
-
-def _recording_item_id(recording: dict[str, Any]) -> str:
-    source = str(
-        Path(str(recording.get("report_dir") or "")).name
-        or recording.get("recording_id")
-        or recording.get("video_prefix")
-        or Path(str(recording.get("video_path") or "")).stem
-    )
-    base = "acq-" + "".join(ch.lower() if ch.isalnum() else "-" for ch in source).strip("-")
-    return base or "acq-recording"
-
-
-def _find_session_item(items: tuple[SessionItem, ...], item_id: str) -> SessionItem | None:
-    for item in items:
-        if item.id == item_id:
-            return item
-    return None
-
-
-def _upsert_session_file(files: list[SessionFile], stored: SessionFile) -> list[SessionFile]:
-    for index, file in enumerate(files):
-        if (
-            file.id == stored.id
-            or file.path == stored.path
-            or file.metadata.get("video_path") == stored.path
-            or file.metadata.get("fluidics_csv") == stored.path
-        ):
-            files[index] = stored
-            return files
-    files.append(stored)
-    return files
-
-
-def _upsert_session_item(items: list[SessionItem], stored: SessionItem) -> list[SessionItem]:
-    for index, item in enumerate(items):
-        if item.id == stored.id:
-            items[index] = stored
-            return items
-    items.append(stored)
-    return items
 
 
 def _short_control_label(label: str) -> str:
