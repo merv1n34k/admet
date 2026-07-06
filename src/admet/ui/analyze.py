@@ -215,6 +215,7 @@ class AnalyzeWorkflowView:
     def _structure_signature(self) -> tuple[Any, ...]:
         return structure_signature(
             self._stage_id(),
+            self.selected_uid,
             tuple(str(ref.path) for ref in self.project_refs),
             id(self.last_report),
         )

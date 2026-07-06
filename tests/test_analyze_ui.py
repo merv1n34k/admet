@@ -55,6 +55,18 @@ class MatrixChangeTargetingTests(unittest.TestCase):
 
         self.assertEqual([row.sample_id for row in targets], ["b"])
 
+    def test_selected_row_changes_structure_signature(self):
+        view = _make_view()
+        view.matrix = [_row(sample="a"), _row(sample="b")]
+
+        view.selected_uid = view.matrix[0].uid
+        first_signature = view._structure_signature()
+        view.selected_uid = view.matrix[1].uid
+        second_signature = view._structure_signature()
+
+        self.assertNotEqual(first_signature, second_signature)
+        self.assertIn(view.matrix[1].uid, second_signature)
+
 
 if __name__ == "__main__":
     unittest.main()
