@@ -1494,7 +1494,6 @@ class AnalyzeWorkflowView:
         return data
 
     def _wire_schema_matrix(self, table: Any, params: tuple[Param, ...]) -> None:
-        table.add_slot("body-cell-sample_id", _text_cell_slot("sample_id"))
         for param in params:
             table.add_slot(f"body-cell-{param.name}", _schema_cell_slot(param))
         table.on("matrix-change", self._handle_matrix_change)
@@ -2015,6 +2014,22 @@ def _category_axis(labels: list[str], *, rotate: int) -> dict[str, Any]:
     }
 
 
+_CHART_COLORS = (
+    design.PALETTE.accent,
+    design.PALETTE.success,
+    design.PALETTE.warning,
+    design.PALETTE.danger,
+    design.PALETTE.accent_hover,
+    design.PALETTE.success_hover,
+    design.PALETTE.warning_hover,
+    design.PALETTE.danger_hover,
+)
+
+
+def _chart_color(index: int) -> str:
+    return _CHART_COLORS[index % len(_CHART_COLORS)]
+
+
 def _diameter_chart(summaries: list[RawSummary]) -> dict[str, Any]:
     return _bar_chart(
         "Mean diameter",
@@ -2052,7 +2067,8 @@ def _frequency_chart(summaries: list[RawSummary]) -> dict[str, Any]:
 
 
 def _diameter_hist_chart(summaries: list[RawSummary]) -> dict[str, Any]:
-    values = [value for summary in summaries for value in summary.diameters]
+    plotted = [summary for summary in summaries if summary.diameters]
+    values = [value for summary in plotted for value in summary.diameters]
     if not values:
         return _bar_chart("Diameter distribution (µm)", [], [], design.PALETTE.accent)
     low = min(values)
@@ -2061,18 +2077,32 @@ def _diameter_hist_chart(summaries: list[RawSummary]) -> dict[str, Any]:
         high = low + 1.0
     bins = 24
     width = (high - low) / bins
-    counts = [0] * bins
-    for value in values:
-        index = min(bins - 1, int((value - low) / width))
-        counts[index] += 1
     labels = [f"{low + (index + 0.5) * width:.1f}" for index in range(bins)]
+    series = []
+    for sample_index, summary in enumerate(plotted):
+        counts = [0] * bins
+        for value in summary.diameters:
+            index = min(bins - 1, int((value - low) / width))
+            counts[index] += 1
+        series.append(
+            {
+                "name": summary.sample_id,
+                "type": "bar",
+                "data": counts,
+                "barMaxWidth": 18,
+                "itemStyle": {"color": _chart_color(sample_index), "opacity": 0.82},
+                "emphasis": {"focus": "series"},
+            }
+        )
     return {
         "title": {"text": "Diameter distribution (µm)", "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
+        "animation": False,
         "tooltip": {"trigger": "axis"},
+        "legend": {"top": 4, "right": 8, "textStyle": {"fontSize": 9}},
         "grid": _chart_grid(bottom=58),
         "xAxis": _category_axis(labels, rotate=45),
         "yAxis": _value_axis("count"),
-        "series": [{"type": "bar", "data": counts, "itemStyle": {"color": design.PALETTE.accent}}],
+        "series": series,
     }
 
 
@@ -2117,21 +2147,29 @@ def _area_position_chart(summaries: list[RawSummary]) -> dict[str, Any]:
 
 def _track_timeline_chart(summaries: list[RawSummary]) -> dict[str, Any]:
     series = []
-    for summary in summaries[:3]:
-        for droplet_id, first_frame, last_frame in summary.spans[:600]:
-            series.append(
-                {
-                    "type": "line",
-                    "showSymbol": False,
-                    "silent": True,
-                    "data": [[first_frame, droplet_id], [last_frame, droplet_id]],
-                    "lineStyle": {"width": 2, "color": design.PALETTE.accent, "opacity": 0.7},
-                }
-            )
+    for sample_index, summary in enumerate(summary for summary in summaries if summary.spans):
+        data: list[list[float | str]] = []
+        for droplet_id, first_frame, last_frame in summary.spans:
+            data.extend(([first_frame, droplet_id], [last_frame, droplet_id], ["-", "-"]))
+        series.append(
+            {
+                "name": summary.sample_id,
+                "type": "line",
+                "showSymbol": False,
+                "connectNulls": False,
+                "progressive": 500,
+                "progressiveThreshold": 1000,
+                "silent": True,
+                "data": data,
+                "lineStyle": {"width": 2, "color": _chart_color(sample_index), "opacity": 0.72},
+            }
+        )
     return {
         "title": {"text": "Droplet timeline (frame)", "left": 8, "top": 4, "textStyle": {"fontSize": 13}},
+        "animation": False,
         "tooltip": {},
-        "grid": _chart_grid(),
+        "legend": {"top": 4, "right": 8, "textStyle": {"fontSize": 9}},
+        "grid": _chart_grid(right=28),
         "xAxis": _value_axis("frame"),
         "yAxis": _value_axis("droplet id"),
         "series": series,
