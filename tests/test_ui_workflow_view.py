@@ -10,7 +10,6 @@ from admet.ui.workflow_view import (
     stage_by_id,
     stage_controls,
     toc_row_states,
-    workflow_progress_percent,
 )
 from admet.workflows import Stage, StageAction, StageInstruction, StageStatus, Workflow, WorkflowState
 
@@ -104,12 +103,6 @@ class WorkflowViewTests(unittest.TestCase):
         )
 
         self.assertEqual([row.status for row in rows], ["done", "inactive"])
-
-    def test_workflow_progress_percent_counts_done_and_active_stage(self) -> None:
-        workflow = Workflow("test", "Test", (Stage("one", "One"), Stage("two", "Two")))
-        state = WorkflowState(index=1, statuses={"one": StageStatus.COMPLETE, "two": StageStatus.ACTIVE})
-
-        self.assertEqual(workflow_progress_percent(workflow, state), 77.5)
 
     def test_stage_controls_use_declared_actions_or_fallbacks(self) -> None:
         explicit = Stage("explicit", "Explicit", actions=(StageAction("Run", "run"),))

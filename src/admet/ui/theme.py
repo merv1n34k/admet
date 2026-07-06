@@ -16,8 +16,6 @@ class Palette:
     control_hover: str = "#f0f5f8"
     control_pressed: str = "#e6eef4"
     text: str = "#16212b"
-    text_heading: str = "#28323f"
-    text_step: str = "#334155"
     text_muted: str = "#52677a"
     text_subtle: str = "#7b8c9a"
     text_disabled: str = "#9aa7b2"
@@ -31,13 +29,6 @@ class Palette:
     danger_hover: str = "#742323"
     warning: str = "#b7791f"
     warning_hover: str = "#9d661a"
-    notice_success: str = "#9ed4b4"
-    notice_warning: str = "#f4bf71"
-    notice_danger: str = "#ee9b9b"
-    video_placeholder: str = "#f1f4f8"
-    video_caption: str = "#64748b"
-    video_bubble: str = "rgba(148, 163, 184, 0.22)"
-    white: str = "#ffffff"
     roi: str = "#e5f36a"
 
 
@@ -45,33 +36,20 @@ class Palette:
 class Spacing:
     none: int = 0
     tight: int = 4
-    control: int = 4
     default: int = 8
     panel: int = 12
     window: int = 16
-    body_gap: int = 14
-    topbar_y: int = 10
-    topbar_x: int = 14
-    sidebar_width: int = 250
-    surface_min_height: int = 140
-    preview_min_height: int = 260
 
 
 @dataclass(frozen=True)
 class Typography:
-    family: str = "Inter, system-ui, sans-serif"
-    small: int = 11
     body: int = 13
     title: int = 16
-    panel_title_weight: int = 650
-    button_weight: int = 500
 
 
 @dataclass(frozen=True)
 class Radii:
     control: int = 8
-    panel: int = 10
-    round: int = 999
 
 
 @dataclass(frozen=True)
@@ -94,23 +72,6 @@ STATUS_COLORS = {
     "active": PALETTE.warning,
     "skipped": PALETTE.text_subtle,
     "pending": PALETTE.text_subtle,
-}
-
-NOTICE_COLORS = {
-    "primary": PALETTE.border,
-    "success": PALETTE.notice_success,
-    "warning": PALETTE.notice_warning,
-    "danger": PALETTE.notice_danger,
-}
-
-TEXT_COLORS = {
-    "default": PALETTE.text,
-    "muted": PALETTE.text_muted,
-    "subtle": PALETTE.text_subtle,
-    "primary": PALETTE.accent,
-    "success": PALETTE.success,
-    "danger": PALETTE.danger_hover,
-    "warning": PALETTE.warning,
 }
 
 BUTTON_COLORS = {
@@ -141,7 +102,6 @@ _WEB_TOKENS = {
 class Theme:
     BG_BLACK = "#101820"
     BG_DARK = PALETTE.background
-    BG_DARKER = PALETTE.background_alt
     BG_MEDIUM = PALETTE.background_alt
     BG_RAISED = PALETTE.raised
     BG_CONTROL = PALETTE.control
@@ -165,7 +125,6 @@ class Theme:
     WARNING = PALETTE.warning
     WARNING_DARK = PALETTE.warning_hover
 
-    FONT_SIZE_SMALL = TYPOGRAPHY.small
     FONT_SIZE_BODY = TYPOGRAPHY.body
     FONT_SIZE_TITLE = TYPOGRAPHY.title
 
@@ -179,7 +138,6 @@ class Theme:
     PANEL_PADDING = SPACE_3
     WINDOW_PADDING = SPACE_4
     RADIUS = RADII.control
-    SPLITTER_HANDLE_WIDTH = 8
 
 
 _SIZES = {
@@ -199,6 +157,7 @@ _SPACING = {
     "window": Theme.WINDOW_PADDING,
 }
 
+
 def control_size(size: ControlSize = "default") -> _ControlSize:
     return _SIZES.get(size, _SIZES["default"])
 
@@ -211,36 +170,8 @@ def spacing(value: str | int | None = "default") -> int:
     return _SPACING.get(value, Theme.GROUP_GAP)
 
 
-def spacing_value(value: str | int | None = "default") -> int:
-    return spacing(value)
-
-
 def css_variables() -> str:
     return "".join(f"--{name}:{value};" for name, value in _WEB_TOKENS.items())
-
-
-def box_padding(value: str | int | tuple[int, int, int, int] | None = "none") -> tuple[int, int, int, int]:
-    if isinstance(value, tuple):
-        return value
-    pad = spacing(value)
-    return pad, pad, pad, pad
-
-
-def text_qss(
-    kind: str = "default",
-    *,
-    font_size: int | None = None,
-    bold: bool = False,
-    padding: str | None = None,
-) -> str:
-    parts = [f"color: {TEXT_COLORS.get(kind, kind)};"]
-    if font_size is not None:
-        parts.append(f"font-size: {font_size}px;")
-    if bold:
-        parts.append("font-weight: 600;")
-    if padding is not None:
-        parts.append(f"padding: {padding};")
-    return " ".join(parts)
 
 
 def button_qss(kind: ButtonVariant = "neutral", *, size: ControlSize = "default") -> str:
@@ -284,157 +215,6 @@ def button(
     widget = QPushButton(text)
     widget.setCheckable(checkable)
     return apply_button_style(widget, variant=variant, size=size)
-
-
-def stage_button(text: str, *, active: bool = False):
-    from PySide6.QtWidgets import QSizePolicy
-
-    widget = button(text, variant="primary" if active else "neutral", size="stage", checkable=True)
-    widget.setChecked(active)
-    widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-    return widget
-
-
-def line_edit(text: str = "", *, width: int | None = None):
-    from PySide6.QtWidgets import QLineEdit
-
-    widget = QLineEdit(text)
-    _apply_control_size(widget)
-    if width is not None:
-        widget.setFixedWidth(width)
-    return widget
-
-
-def int_box(
-    *,
-    minimum: int = 0,
-    maximum: int = 100,
-    value: int = 0,
-    step: int = 1,
-    width: int | None = None,
-):
-    from PySide6.QtWidgets import QSpinBox
-
-    widget = QSpinBox()
-    widget.setRange(minimum, maximum)
-    widget.setValue(value)
-    widget.setSingleStep(step)
-    _apply_control_size(widget)
-    if width is not None:
-        widget.setFixedWidth(width)
-    return widget
-
-
-def double_box(
-    *,
-    minimum: float = 0.0,
-    maximum: float = 100.0,
-    value: float = 0.0,
-    step: float = 1.0,
-    decimals: int = 2,
-    suffix: str = "",
-    width: int | None = None,
-):
-    from PySide6.QtWidgets import QDoubleSpinBox
-
-    widget = QDoubleSpinBox()
-    widget.setRange(minimum, maximum)
-    widget.setValue(value)
-    widget.setSingleStep(step)
-    widget.setDecimals(decimals)
-    widget.setSuffix(suffix)
-    _apply_control_size(widget)
-    if width is not None:
-        widget.setFixedWidth(width)
-    return widget
-
-
-def combo_box(items=(), *, width: int | None = None):
-    from PySide6.QtWidgets import QComboBox
-
-    widget = QComboBox()
-    widget.addItems([str(item) for item in items])
-    _apply_control_size(widget)
-    if width is not None:
-        widget.setFixedWidth(width)
-    return widget
-
-
-def check_box(text: str, *, checked: bool = False):
-    from PySide6.QtWidgets import QCheckBox
-
-    widget = QCheckBox(text)
-    widget.setChecked(checked)
-    return widget
-
-
-def section(title: str):
-    from PySide6.QtWidgets import QGroupBox, QVBoxLayout
-
-    group = QGroupBox(title)
-    layout = QVBoxLayout(group)
-    layout.setContentsMargins(*box_padding("panel"))
-    layout.setSpacing(spacing("group"))
-    return group, layout
-
-
-def button_row(*widgets, align: str = "left"):
-    from PySide6.QtWidgets import QHBoxLayout, QWidget
-
-    container = QWidget()
-    layout = QHBoxLayout(container)
-    layout.setContentsMargins(*box_padding("none"))
-    layout.setSpacing(spacing("control"))
-    if align == "right":
-        layout.addStretch()
-    for widget in widgets:
-        layout.addWidget(widget)
-    if align == "left":
-        layout.addStretch()
-    return container
-
-
-def field_row(*widgets):
-    from PySide6.QtWidgets import QHBoxLayout, QWidget
-
-    container = QWidget()
-    layout = QHBoxLayout(container)
-    layout.setContentsMargins(*box_padding("none"))
-    layout.setSpacing(spacing("control"))
-    for widget in widgets:
-        layout.addWidget(widget)
-    layout.addStretch()
-    return container
-
-
-def control_row(label: str, control, *actions, label_width: int = 90):
-    from PySide6.QtWidgets import QLabel, QHBoxLayout, QWidget
-
-    container = QWidget()
-    layout = QHBoxLayout(container)
-    layout.setContentsMargins(*box_padding("none"))
-    layout.setSpacing(spacing("control"))
-    label_widget = QLabel(label)
-    label_widget.setFixedWidth(label_width)
-    layout.addWidget(label_widget)
-    layout.addWidget(control, 1)
-    for action in actions:
-        layout.addWidget(action)
-    return container
-
-
-def toolbar(title: str):
-    from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
-
-    widget = QWidget()
-    layout = QHBoxLayout(widget)
-    layout.setContentsMargins(*box_padding("none"))
-    layout.setSpacing(spacing("control"))
-    label = QLabel(title)
-    label.setStyleSheet(text_qss("default", font_size=Theme.FONT_SIZE_TITLE, bold=True))
-    layout.addWidget(label)
-    layout.addStretch()
-    return widget
 
 
 def stylesheet() -> str:
@@ -760,9 +540,3 @@ QScrollBar:vertical {{
     border: 0;
 }}
 """
-
-
-def _apply_control_size(widget, size: ControlSize = "default") -> None:
-    token = control_size(size)
-    widget.setMinimumHeight(token.height)
-    widget.setMaximumHeight(token.height)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from admet.ui.window import log_state, settings_panel_state, table_state
+from admet.ui.window import log_state, settings_panel_state
 from admet.workflows import SettingsSpec, Stage
 
 
@@ -31,19 +31,6 @@ class WindowContractTests(unittest.TestCase):
 
         self.assertEqual(state.kind, "none")
         self.assertEqual(state.stage_id, "view")
-
-    def test_table_state_freezes_rows_and_columns(self) -> None:
-        state = table_state(
-            "summary",
-            [{"sample": "a"}],
-            columns=[{"name": "sample"}],
-            empty_text="No rows.",
-        )
-
-        self.assertEqual(state.key, "summary")
-        self.assertEqual(state.rows, ({"sample": "a"},))
-        self.assertEqual(state.columns, ({"name": "sample"},))
-        self.assertEqual(state.empty_text, "No rows.")
 
     def test_log_state_limits_lines_and_keeps_empty_text(self) -> None:
         state = log_state(["one", "two", "three"], limit=2, empty_text="Empty")

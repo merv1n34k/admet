@@ -112,18 +112,6 @@ def toc_row_states(
     return tuple(rows)
 
 
-def workflow_progress_percent(workflow: Workflow, state: WorkflowState) -> float:
-    total = max(1, len(workflow.stages))
-    done = sum(
-        1
-        for stage in workflow.stages
-        if state.statuses.get(stage.id) in {StageStatus.COMPLETE, StageStatus.SKIPPED}
-    )
-    if state.statuses.get(current_stage(workflow, state).id) is StageStatus.ACTIVE:
-        done += 0.55
-    return min(100.0, done / total * 100.0)
-
-
 def instruction_text(stage: Stage, guard_value: Callable[[str], bool]) -> str:
     for instruction in stage.instruction_cards:
         if not instruction.guard or guard_enabled(instruction.guard, guard_value):
