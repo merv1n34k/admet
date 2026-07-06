@@ -6,7 +6,6 @@ import html
 import itertools
 import json
 import math
-import mimetypes
 import time
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
@@ -18,6 +17,7 @@ from admet.core.discovery import ProjectRef, discover_projects, projects_root
 from admet.core.engine import EngineRegistry, Param, ParamKind
 from admet.core.project import ProjectStore
 from admet.core.session import session_path
+from admet.engines.cellpose.detection import CellposeDetection, read_image_8bit
 from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
 from admet.engines.opencv.settings import OPENCV_SETTINGS
 from admet.ui import design
@@ -389,6 +389,13 @@ class AnalyzeWorkflowView:
             "cellpose_summary": lambda: _view_summary_rows(
                 [summary for summary in self._raw_summaries() if summary.engine == "cellpose"]
             ),
+            "view_targets": lambda: _view_target_rows(self._raw_summaries(), self.matrix),
+            "view_opencv_summary": lambda: _view_summary_rows(
+                [summary for summary in self._raw_summaries() if summary.engine == "opencv"]
+            ),
+            "view_cellpose_summary": lambda: _view_summary_rows(
+                [summary for summary in self._raw_summaries() if summary.engine == "cellpose"]
+            ),
             "view_fluidics": lambda: _fluidics_rows(self._fluidics_runs()),
             "view_summary": lambda: _view_summary_rows(self._raw_summaries()),
             "analysis_runs": lambda: analysis_run_rows(self._analysis_project_paths()),
@@ -578,7 +585,6 @@ class AnalyzeWorkflowView:
         self._render_engine_plots("opencv")
 
     def _render_imaging_stage(self) -> None:
-        self._render_engine_matrix("cellpose")
         self._render_cellpose_editor()
         self._render_engine_plots("cellpose")
 
@@ -586,21 +592,55 @@ class AnalyzeWorkflowView:
         from nicegui import ui
 
         summaries = self._raw_summaries()
+        opencv = [summary for summary in summaries if summary.engine == "opencv"]
+        cellpose = [summary for summary in summaries if summary.engine == "cellpose"]
         with ui.column().classes("panel w-full gap-2 p-3"):
-            ui.label("1. Analysis summary").classes("section-title")
+            ui.label("1. Analysis targets").classes("section-title")
             table = ui.table(
-                columns=_view_summary_columns(),
-                rows=_view_summary_rows(summaries),
-            ).classes("w-full").props("dense flat hide-bottom")
-            self._register_table("view_summary", table)
+                columns=_view_target_columns(),
+                rows=_view_target_rows(summaries, self.matrix),
+                row_key="sample",
+            ).classes("slim-table w-full").props("dense flat hide-bottom")
+            self._register_table("view_targets", table)
             if not summaries:
                 ui.label("No stored analysis yet. Run OpenCV or Cellpose first.").classes("muted text-xs")
         with ui.column().classes("panel w-full gap-2 p-3"):
-            ui.label("2. Droplet plots").classes("section-title")
-            self._render_droplet_plots(summaries)
+            ui.label("2. Summary plots").classes("section-title")
+            with ui.element("div").classes("comparison-grid w-full"):
+                _plot_card(_diameter_hist_chart(summaries))
+                _plot_card(_cv_chart(summaries))
         with ui.column().classes("panel w-full gap-2 p-3"):
-            ui.label("3. Fluidics summary").classes("section-title")
+            ui.label("2. Detailed OpenCV report").classes("section-title")
+            if opencv:
+                self._render_droplet_plots(opencv)
+                with ui.column().classes("plot-card"):
+                    ui.label("Batch Summary").classes("text-sm font-semibold px-2 pt-1")
+                    table = ui.table(
+                        columns=_view_summary_columns(),
+                        rows=_view_summary_rows(opencv),
+                    ).classes("w-full").props("dense flat hide-bottom")
+                    self._register_table("view_opencv_summary", table)
+            else:
+                ui.label("No active OpenCV targets.").classes("muted text-xs")
+        with ui.column().classes("panel w-full gap-2 p-3"):
+            ui.label("2. Detailed Cellpose report").classes("section-title")
+            if cellpose:
+                with ui.column().classes("plot-card"):
+                    ui.label("Sample Comparison").classes("text-sm font-semibold px-2 pt-1")
+                    table = ui.table(
+                        columns=_view_summary_columns(),
+                        rows=_view_summary_rows(cellpose),
+                    ).classes("w-full").props("dense flat hide-bottom")
+                    self._register_table("view_cellpose_summary", table)
+                self._render_droplet_plots(cellpose)
+            else:
+                ui.label("No active Cellpose targets.").classes("muted text-xs")
+        with ui.column().classes("panel w-full gap-2 p-3"):
+            ui.label("3. DropleGen / Fluigent CSV reports").classes("section-title")
             fluidics = self._fluidics_runs()
+            if not fluidics:
+                ui.label("No fluidics CSV reports selected by the target table.").classes("muted text-xs")
+                return
             with ui.element("div").classes("comparison-grid w-full"):
                 _plot_card(_fluidics_chart(fluidics, "pressure"))
                 _plot_card(_fluidics_chart(fluidics, "flow"))
@@ -635,36 +675,20 @@ class AnalyzeWorkflowView:
                 _preview_frame_index(target),
             )
             preview_ok = not bool(preview["error"])
-            with ui.element("div").classes("media-editor-grid w-full"):
-                with ui.column().classes("media-editor-video min-w-0 gap-2"):
-                    ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
-                    ui.label(_compact_path(target.source_path)).classes("muted text-xs path-label").props(
-                        f'title="{html.escape(target.source_path)}"'
+            with ui.column().classes("w-full gap-2"):
+                ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
+                ui.label(_compact_path(target.source_path)).classes("muted text-xs path-label").props(
+                    f'title="{html.escape(target.source_path)}"'
+                )
+                self._refs["opencv_preview"] = ui.html(self._opencv_preview_html(target, preview)).classes(
+                    "opencv-preview w-full"
+                )
+                if not preview_ok:
+                    ui.label("Preview unavailable. Relocate the source or use the arm64 analyze environment before editing crop/frame values.").classes(
+                        "editor-note"
                     )
-                    self._refs["opencv_preview"] = ui.html(self._opencv_preview_html(target, preview)).classes(
-                        "opencv-preview w-full"
-                    )
-                    with ui.row().classes("calibration-row w-full gap-2"):
-                        self._number_editor(
-                            target,
-                            "microns_per_pixel",
-                            "Microns / px",
-                            float(self.settings["opencv_microns_per_pixel"]),
-                            step=0.01,
-                        )
-                        self._number_editor(
-                            target,
-                            "fps",
-                            "FPS",
-                            int(self.settings["opencv_fps"]),
-                            step=1,
-                        )
-                with ui.column().classes("media-editor-controls min-w-0 gap-3"):
-                    if not preview_ok:
-                        ui.label("Preview unavailable. Relocate the source or use the arm64 analyze environment before editing crop/frame values.").classes(
-                            "editor-note"
-                        )
-                    self._slider_editor(target, "preview_frame", "Preview frame", 0, frame_max, 1, 0)
+                self._slider_editor(target, "preview_frame", "Preview frame", 0, frame_max, 1, 0)
+                with ui.element("div").classes("editor-slider-grid w-full"):
                     self._slider_editor(target, "start_frame", "Start frame", 0, frame_max, 1, 0)
                     self._slider_editor(target, "end_frame", "End frame", 0, frame_max + 1, 1, frame_max)
                     self._slider_editor(target, "roi_x", "ROI X", 0, width_max, 1, 0)
@@ -726,50 +750,6 @@ class AnalyzeWorkflowView:
             ).props("dense").classes("w-full")
             slider.on("change", commit_slider)
 
-    def _number_editor(
-        self,
-        row: MatrixRow,
-        key: str,
-        label: str,
-        default: Any,
-        *,
-        step: float,
-        maximum: float | None = None,
-        enabled: bool = True,
-    ) -> None:
-        from nicegui import ui
-
-        value = _row_float(row, key, default) if step < 1 else _row_int(row, key, default)
-        field = ui.number(
-            label,
-            value=value,
-            min=0,
-            max=maximum,
-            step=step,
-            on_change=lambda event, item=row, name=key, use_int=step >= 1: self._set_row_number(
-                item,
-                name,
-                event.value,
-                integer=use_int,
-            ),
-        ).classes("flat-number grow")
-        field.set_enabled(enabled)
-
-    def _set_row_number(
-        self,
-        row: MatrixRow,
-        key: str,
-        value: Any,
-        *,
-        integer: bool,
-    ) -> None:
-        number = _numeric(value)
-        if number is None:
-            number = 0
-        row.settings[key] = int(number) if integer else float(number)
-        self.selected_uid = row.uid
-        self._sync_previews()
-
     def _opencv_preview_html(self, target: MatrixRow, frame: dict[str, Any] | None = None) -> str:
         source = self._resolve_media_path(target.source_path, target.project_path)
         frame_index = _preview_frame_index(target)
@@ -789,8 +769,9 @@ class AnalyzeWorkflowView:
         roi = ""
         if roi_width_raw or roi_height_raw:
             roi = f'<div class="admet-roi" style="left:{left}%; top:{top}%; width:{width}%; height:{height}%;"></div>'
+        style = _viewer_style(width_px, height_px)
         return f"""
-        <div class="admet-viewer">
+        <div class="admet-viewer" style="{style}">
           <img class="admet-video-frame" src="{frame['src']}" alt="{html.escape(target.sample_id)} frame {frame_index}">
           {roi}
           <div class="admet-playhead">{html.escape(target.sample_id or Path(target.source_path).stem)} - frame {frame_index}</div>
@@ -802,8 +783,9 @@ class AnalyzeWorkflowView:
         image = _read_image_source(source, _row_int(target, "image_frame", 1))
         if image["error"]:
             return _viewer_error_html(target, source, str(image["error"]))
+        style = _viewer_style(int(image.get("width") or 16), int(image.get("height") or 9))
         return f"""
-        <div class="admet-viewer">
+        <div class="admet-viewer" style="{style}">
           <img class="admet-video-frame" src="{image['src']}" alt="{html.escape(target.sample_id)} image {image['index']}">
           <div class="admet-playhead">{html.escape(target.sample_id or Path(target.source_path).stem)} - image {image['index']}</div>
         </div>
@@ -822,6 +804,9 @@ class AnalyzeWorkflowView:
             return 1
         if not source.is_dir():
             return 48
+        groups = CellposeDetection(use_cache=False).load_and_group_images(source)
+        if groups:
+            return len(groups)
         return max(1, len([item for item in source.iterdir() if item.is_file() and item.suffix.lower() in IMAGE_SUFFIXES]))
 
     def _render_cellpose_editor(self) -> None:
@@ -841,36 +826,24 @@ class AnalyzeWorkflowView:
                 with ui.column().classes("gap-2"):
                     ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
                     ui.label(target.source_path).classes("muted text-xs path-label")
-                    with ui.element("div").classes("editor-grid"):
-                        self._number_editor(
-                            target,
-                            "px_to_um",
-                            "px to um",
-                            float(self.settings["cellpose_px_to_um"]),
-                            step=0.01,
-                        )
-                        self._number_editor(
-                            target,
-                            "frame_limit",
-                            "Frame limit",
-                            0,
-                            step=1,
-                            maximum=max(image_max, 500),
-                        )
-                        self._bool_editor(
-                            target,
-                            "detect_inclusions",
-                            "Detect inclusions",
-                            bool(self.settings["cellpose_detect_inclusions"]),
-                        )
-                        self._bool_editor(target, "overlay_masks", "Show masks", True)
-                        self._bool_editor(target, "overlay_inclusions", "Show inclusions", True)
-                    with ui.element("div").classes("correction-grid"):
-                        self._counter_editor(target, "disabled_droplets", "Disabled droplets")
-                        self._counter_editor(target, "added_inclusions", "Added inclusions")
+                    self._render_correction_table(target)
                     ui.label("Correction edits will apply to raw droplet rows in View Results.").classes(
                         "editor-note"
                     )
+
+    def _render_correction_table(self, target: MatrixRow) -> None:
+        from nicegui import ui
+
+        ui.table(
+            columns=[
+                {"name": "item", "label": "Correction", "field": "item", "align": "left"},
+                {"name": "value", "label": "Value", "field": "value", "align": "right"},
+            ],
+            rows=[
+                {"item": "Disabled droplets", "value": _row_int(target, "disabled_droplets", 0)},
+                {"item": "Added inclusions", "value": _row_int(target, "added_inclusions", 0)},
+            ],
+        ).classes("w-full").props("dense flat hide-bottom")
 
     def _render_droplet_plots(self, summaries: list[RawSummary]) -> None:
         from nicegui import ui
@@ -983,41 +956,6 @@ class AnalyzeWorkflowView:
         if selected is not None and selected.engine == engine and selected.active:
             return selected
         return next((row for row in self.matrix if row.active and row.engine == engine), None)
-
-    def _bool_editor(
-        self,
-        row: MatrixRow,
-        key: str,
-        label: str,
-        default: Any,
-    ) -> None:
-        from nicegui import ui
-
-        ui.checkbox(
-            label,
-            value=_row_bool(row, key, default),
-            on_change=lambda event, item=row, name=key: self._set_row_setting(
-                item,
-                name,
-                bool(event.value),
-            ),
-        ).classes("compact-checkbox")
-
-    def _counter_editor(self, row: MatrixRow, key: str, label: str) -> None:
-        from nicegui import ui
-
-        with ui.column().classes("counter-card"):
-            ui.label(label).classes("muted text-xs font-semibold")
-            ui.label(str(_row_int(row, key, 0))).classes("counter-value")
-            with ui.row().classes("w-full gap-1"):
-                ui.button(
-                    "-",
-                    on_click=lambda item=row, name=key: self._increment_row_counter(item, name, -1),
-                ).props("dense no-caps outline").classes("grow")
-                ui.button(
-                    "+",
-                    on_click=lambda item=row, name=key: self._increment_row_counter(item, name, 1),
-                ).props("dense no-caps outline").classes("grow")
 
     def _open_project_browser(self) -> None:
         start = self._project_path()
@@ -1543,16 +1481,6 @@ class AnalyzeWorkflowView:
     def _set_setting(self, key: str, value: Any) -> None:
         self.settings[key] = value
 
-    def _set_row_setting(self, row: MatrixRow, key: str, value: Any) -> None:
-        row.settings[key] = value
-        self.selected_uid = row.uid
-        self._refresh()
-
-    def _increment_row_counter(self, row: MatrixRow, key: str, delta: int) -> None:
-        row.settings[key] = max(0, _row_int(row, key, 0) + delta)
-        self.selected_uid = row.uid
-        self._refresh()
-
     def _project_options(self) -> dict[str, str]:
         return {str(ref.path): _project_ref_label(ref) for ref in self.project_refs}
 
@@ -1988,6 +1916,52 @@ def _fluidics_rows(runs: list[FluidicsRun]) -> list[dict[str, Any]]:
     return rows
 
 
+def _view_target_columns() -> list[dict[str, Any]]:
+    return [
+        {"name": "sample", "label": "Sample", "field": "sample", "align": "left"},
+        {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
+        {"name": "project", "label": "Project", "field": "project", "align": "left"},
+        {"name": "source", "label": "Source", "field": "source", "align": "left"},
+        {"name": "status", "label": "Status", "field": "status", "align": "center"},
+        {"name": "droplets", "label": "Droplets", "field": "droplets", "align": "right"},
+    ]
+
+
+def _view_target_rows(summaries: list[RawSummary], matrix: list[MatrixRow]) -> list[dict[str, Any]]:
+    summary_by_key = {(summary.engine, summary.sample_id): summary for summary in summaries}
+    rows = []
+    for row in matrix:
+        if not row.active:
+            continue
+        summary = summary_by_key.get((row.engine, row.sample_id))
+        rows.append(
+            {
+                "sample": row.sample_id,
+                "engine": row.engine,
+                "project": Path(row.project_path).name,
+                "source": _compact_path(row.source_path),
+                "status": "stored" if summary else "pending",
+                "droplets": summary.droplets if summary else "",
+            }
+        )
+    seen = {(row["engine"], row["sample"]) for row in rows}
+    for summary in summaries:
+        key = (summary.engine, summary.sample_id)
+        if key in seen:
+            continue
+        rows.append(
+            {
+                "sample": summary.sample_id,
+                "engine": summary.engine,
+                "project": summary.project,
+                "source": "",
+                "status": "stored",
+                "droplets": summary.droplets,
+            }
+        )
+    return rows
+
+
 def _chart_grid(*, left: int = 58, right: int = 18, top: int = 42, bottom: int = 52) -> dict[str, Any]:
     return {"left": left, "right": right, "top": top, "bottom": bottom, "containLabel": True}
 
@@ -2321,16 +2295,39 @@ def _decode_video_frame(path_str: str, _mtime: float, frame_index: int) -> dict[
 
 
 def _read_image_source(path: Path, index: int) -> dict[str, Any]:
-    image_path = _select_image_path(path, index)
-    if image_path is None:
+    try:
+        image, label = _cellpose_preview_image(path, index)
+    except Exception as exc:
+        return {"error": f"Cannot read Cellpose image preview: {exc}", "src": "", "index": index}
+    if image is None:
         return {"error": f"No readable image found at {path}", "src": "", "index": index}
     try:
-        data = image_path.read_bytes()
-    except OSError as exc:
-        return {"error": f"Cannot read image {image_path}: {exc}", "src": "", "index": index}
-    media_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
-    encoded = base64.b64encode(data).decode("ascii")
-    return {"error": "", "src": f"data:{media_type};base64,{encoded}", "index": index}
+        import cv2
+    except Exception as exc:
+        return {"error": f"OpenCV is unavailable in this environment: {exc}", "src": "", "index": index}
+    ok, encoded = cv2.imencode(".jpg", image)
+    if not ok:
+        return {"error": f"Cannot encode image preview for {label}", "src": "", "index": index}
+    height, width = image.shape[:2]
+    data = base64.b64encode(encoded.tobytes()).decode("ascii")
+    return {"error": "", "src": f"data:image/jpeg;base64,{data}", "index": index, "width": width, "height": height}
+
+
+def _cellpose_preview_image(path: Path, index: int) -> tuple[Any | None, str]:
+    if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
+        return read_image_8bit(path), str(path)
+    if not path.is_dir():
+        return None, str(path)
+    detector = CellposeDetection(use_cache=False)
+    groups = detector.load_and_group_images(path)
+    if groups:
+        frame_ids = sorted(groups)
+        frame_id = frame_ids[max(0, min(index - 1, len(frame_ids) - 1))]
+        return detector.create_min_projection(groups[frame_id]), f"{path} frame {frame_id}"
+    image_path = _select_image_path(path, index)
+    if image_path is None:
+        return None, str(path)
+    return read_image_8bit(image_path), str(image_path)
 
 
 def _select_image_path(path: Path, index: int) -> Path | None:
@@ -2349,7 +2346,7 @@ def _viewer_error_html(target: MatrixRow, source: Path, message: str) -> str:
     detail = html.escape(_friendly_video_error(message))
     source_label = html.escape(str(source))
     return f"""
-    <div class="admet-viewer admet-viewer-placeholder">
+    <div class="admet-viewer admet-viewer-placeholder" style="{_viewer_style(16, 9)}">
       <div class="admet-viewer-message">
         <div>
           <div class="admet-viewer-placeholder-title">Preview unavailable</div>
@@ -2360,6 +2357,13 @@ def _viewer_error_html(target: MatrixRow, source: Path, message: str) -> str:
       </div>
     </div>
     """
+
+
+def _viewer_style(width: int, height: int) -> str:
+    width = max(int(width or 16), 1)
+    height = max(int(height or 9), 1)
+    ratio = width / height
+    return f"--frame-ratio:{ratio:.8f}; --frame-aspect:{width} / {height};"
 
 
 def _preview_frame_index(row: MatrixRow) -> int:
@@ -2742,9 +2746,11 @@ def _style() -> str:
     }
     .admet-viewer {
       position: relative;
-      width: 100%;
+      width: min(100%, calc(460px * var(--frame-ratio, 1.77777778)));
       max-width: 100%;
-      height: clamp(220px, 42vh, 460px);
+      height: auto;
+      aspect-ratio: var(--frame-aspect, 16 / 9);
+      margin: 0 auto;
       overflow: hidden;
       border-radius: 8px;
       border: 1px solid var(--border);
@@ -2754,9 +2760,18 @@ def _style() -> str:
       display: block;
       width: 100%;
     }
+    .editor-slider-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 14px;
+      align-items: start;
+    }
     .media-editor-controls { min-width: 0; }
     .media-editor-controls .slider-field { width: 100%; }
     .media-editor-controls .q-slider { width: 100% !important; }
+    @media (max-width: 760px) {
+      .editor-slider-grid { grid-template-columns: 1fr; }
+    }
     .admet-viewer-placeholder {
       background:
         radial-gradient(circle at 18% 34%, rgba(214, 223, 230, 0.78) 0 24px, transparent 25px),
@@ -2836,23 +2851,6 @@ def _style() -> str:
       font-weight: 600;
     }
     .editor-control-row { align-items: center; gap: 8px; }
-    .calibration-row > .flat-number {
-      flex: 1 1 0;
-      min-width: 0;
-    }
-    .editor-grid {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 8px;
-    }
-    .editor-grid-roi {
-      border-top: 1px solid var(--border);
-      padding-top: 8px;
-    }
-    .compact-number .q-field__control,
-    .compact-checkbox .q-checkbox__inner {
-      min-height: 30px;
-    }
     .slider-field {
       width: 100%;
     }
@@ -2893,24 +2891,6 @@ def _style() -> str:
       overflow: hidden;
       text-overflow: ellipsis;
       line-height: 1.3;
-    }
-    .correction-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-    }
-    .counter-card {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px;
-      background: var(--bg-app);
-      gap: 6px;
-    }
-    .counter-value {
-      color: var(--text);
-      font-size: 24px;
-      line-height: 28px;
-      font-weight: 650;
     }
     .log-text {
       background: var(--bg-raised);

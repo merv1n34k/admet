@@ -15,6 +15,18 @@ from .cache import Cache
 from .config import load_config
 
 
+def read_image_8bit(filepath: str | Path):
+    cv2 = _require_cv2()
+    image = cv2.imread(str(filepath), cv2.IMREAD_ANYDEPTH | cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        return None
+    if image.dtype == np.uint16:
+        image = image.astype(np.float32) * 64
+        image = np.clip(image, 0, 65535)
+        return (image / 256).astype(np.uint8)
+    return np.clip(image, 0, 255).astype(np.uint8)
+
+
 class CellposeUnavailableError(ImportError):
     """Raised when Cellpose is required but not installed."""
 
@@ -71,15 +83,9 @@ class CellposeDetection:
         cv2 = _require_cv2()
         images = []
         for _, filepath in z_stack_files:
-            image = cv2.imread(str(filepath), cv2.IMREAD_ANYDEPTH | cv2.IMREAD_GRAYSCALE)
+            image = read_image_8bit(filepath)
             if image is None:
                 continue
-            if image.dtype == np.uint16:
-                image = image.astype(np.float32) * 64
-                image = np.clip(image, 0, 65535)
-                image = (image / 256).astype(np.uint8)
-            else:
-                image = np.clip(image, 0, 255).astype(np.uint8)
             images.append(image)
 
         if not images:
