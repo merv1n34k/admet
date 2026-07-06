@@ -69,6 +69,7 @@ class AnalyzeBatchRunnerTests(unittest.TestCase):
         self.assertFalse((project / "analysis" / "runs").exists())
         self.assertFalse((project / "cache").exists())
         self.assertEqual(analysis_metadata["run_count"], 1)
+        self.assertEqual(session.metadata["cache_root"], str(cache_root))
         self.assertTrue(engine.calls[0]["cache_dir"].is_relative_to(cache_root))
 
     def test_rerunning_same_batch_is_idempotent(self):

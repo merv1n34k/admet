@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from admet.core.engine import Param, ParamKind, ParamSchema
 
-from .model import EditorSpec, ResultsSpec, SettingsSpec, Stage, StageAction, Workflow
+from .model import EditorSpec, SettingsSpec, Stage, StageAction, Workflow
 
 
 IMPORT_SETTINGS = SettingsSpec(
@@ -49,13 +49,6 @@ IMAGING_EDITOR = EditorSpec("cellpose_editor", options={"engine": "cellpose"})
 VIEW_EDITOR = EditorSpec("analysis_results", options={"charts": ("diameter", "cv", "count")})
 EXPORT_EDITOR = EditorSpec("analysis_export")
 
-ANALYZE_RESULTS = ResultsSpec(
-    "analysis_runs",
-    "Analysis Runs",
-    options={"columns": ("project", "run", "engine", "sample", "status", "rows")},
-)
-
-
 def create_analyze_workflow() -> Workflow:
     return Workflow(
         workflow_id="analyze",
@@ -79,10 +72,9 @@ def create_analyze_workflow() -> Workflow:
                 actions=(
                     StageAction("Browse File", "browse_source", guard="project_ready", variant="secondary"),
                     StageAction("Reset Settings", "reset_settings", guard="has_matrix_rows", variant="secondary"),
-                    StageAction("Clear Matrix", "clear_matrix", guard="has_matrix_rows", variant="warning"),
+                    StageAction("Clear Matrix", "clear_matrix", guard="has_matrix_rows", variant="secondary"),
                 ),
                 editor=IMPORT_EDITOR,
-                results=ANALYZE_RESULTS,
             ),
             Stage(
                 "video",
@@ -105,7 +97,6 @@ def create_analyze_workflow() -> Workflow:
                     ),
                 ),
                 editor=VIDEO_EDITOR,
-                results=ANALYZE_RESULTS,
             ),
             Stage(
                 "imaging",
@@ -129,7 +120,6 @@ def create_analyze_workflow() -> Workflow:
                     ),
                 ),
                 editor=IMAGING_EDITOR,
-                results=ANALYZE_RESULTS,
             ),
             Stage(
                 "view",
@@ -145,7 +135,6 @@ def create_analyze_workflow() -> Workflow:
                     StageAction("Run All", "analyze_all", guard="has_matrix_rows"),
                 ),
                 editor=VIEW_EDITOR,
-                results=ANALYZE_RESULTS,
             ),
             Stage(
                 "export",
@@ -156,7 +145,6 @@ def create_analyze_workflow() -> Workflow:
                 settings_panel=EXPORT_SETTINGS,
                 actions=(StageAction("Export Later", "export_later", variant="warning"),),
                 editor=EXPORT_EDITOR,
-                results=ANALYZE_RESULTS,
             ),
         ),
     )

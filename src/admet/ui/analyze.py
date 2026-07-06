@@ -21,8 +21,8 @@ from admet.engines.cellpose.detection import CellposeDetection, read_image_8bit
 from admet.engines.cellpose.settings import CELLPOSE_SETTINGS
 from admet.engines.opencv.settings import OPENCV_SETTINGS
 from admet.ui import design
-from admet.ui.analyze_data import analysis_run_rows, matrix_row, result_columns, result_rows
-from admet.ui.window import log_state, panel_specs, settings_panel_state, structure_signature, table_state
+from admet.ui.analyze_data import analysis_run_rows, matrix_row
+from admet.ui.window import log_state, panel_specs, settings_panel_state, structure_signature
 from admet.ui.workflow_view import action_button_state, current_stage, instruction_text, stage_by_id, toc_row_states
 from admet.workflows import StageStatus, Workflow, WorkflowState
 from admet.workflows.analyze_runner import AnalyzeBatchReport, AnalyzeBatchRunner, AnalyzeTarget, infer_engine
@@ -196,7 +196,7 @@ class AnalyzeWorkflowView:
             return
         content.clear()
         with content:
-            for spec in panel_specs():
+            for spec in panel_specs(include_results=False):
                 with ui.column().classes("admet-panel w-full gap-0") as box:
                     ui.label(spec.title).classes("admet-box-title")
                     body = ui.column().classes("admet-panel-body w-full gap-2")
@@ -221,7 +221,7 @@ class AnalyzeWorkflowView:
         )
 
     def _mount_stage(self) -> None:
-        for key in ("action_box_body", "action_panel_body", "main_body", "results_body", "log_body"):
+        for key in ("action_box_body", "action_panel_body", "main_body", "log_body"):
             body = self._refs.get(key)
             if body is not None:
                 body.clear()
@@ -235,7 +235,6 @@ class AnalyzeWorkflowView:
         self._mount_action_box()
         self._mount_action_panel()
         self._mount_main_window()
-        self._mount_results()
         self._mount_log()
 
     def _sync_stage(self) -> None:
@@ -344,27 +343,6 @@ class AnalyzeWorkflowView:
         else:
             self._render_analysis_runs()
 
-    def _mount_results(self) -> None:
-        from nicegui import ui
-
-        body = self._refs["results_body"]
-        with body:
-            with ui.column().classes("panel w-full gap-2 p-3"):
-                ui.label("Run summary").classes("section-title")
-                state = table_state(
-                    "run_summary",
-                    result_rows(self.last_report),
-                    columns=result_columns(),
-                    empty_text="No results yet. Run OpenCV, Cellpose, or Run All.",
-                )
-                table = ui.table(
-                    columns=list(state.columns),
-                    rows=list(state.rows),
-                ).classes("w-full").props("dense flat hide-bottom")
-                self._register_table(state.key, table)
-                if not state.rows:
-                    ui.label(state.empty_text).classes("muted text-xs")
-
     def _mount_log(self) -> None:
         from nicegui import ui
 
@@ -399,7 +377,6 @@ class AnalyzeWorkflowView:
             "view_fluidics": lambda: _fluidics_rows(self._fluidics_runs()),
             "view_summary": lambda: _view_summary_rows(self._raw_summaries()),
             "analysis_runs": lambda: analysis_run_rows(self._analysis_project_paths()),
-            "run_summary": lambda: result_rows(self.last_report),
         }
         for key, tables in self._table_refs.items():
             source = row_sources.get(key)
@@ -461,13 +438,7 @@ class AnalyzeWorkflowView:
             ui.label(self.notice).classes("notification-text")
 
     def _render_view_settings(self) -> None:
-        from nicegui import ui
-
-        ui.input(
-            "Cache root",
-            value=self.settings["cache_root"],
-            on_change=lambda event: self._set_setting("cache_root", event.value or ""),
-        ).classes("w-full")
+        return
 
     def _render_matrix(self) -> None:
         from nicegui import ui
@@ -605,21 +576,24 @@ class AnalyzeWorkflowView:
             if not summaries:
                 ui.label("No stored analysis yet. Run OpenCV or Cellpose first.").classes("muted text-xs")
         with ui.column().classes("panel w-full gap-2 p-3"):
-            ui.label("2. Summary plots").classes("section-title")
+            ui.label("2. Summary").classes("section-title")
             with ui.element("div").classes("comparison-grid w-full"):
                 _plot_card(_diameter_hist_chart(summaries))
                 _plot_card(_cv_chart(summaries))
+            table = ui.table(
+                columns=_view_summary_columns(),
+                rows=_view_summary_rows(summaries),
+            ).classes("slim-table w-full").props("dense flat hide-bottom")
+            self._register_table("view_summary", table)
         with ui.column().classes("panel w-full gap-2 p-3"):
             ui.label("2. Detailed OpenCV report").classes("section-title")
             if opencv:
                 self._render_droplet_plots(opencv)
-                with ui.column().classes("plot-card"):
-                    ui.label("Batch Summary").classes("text-sm font-semibold px-2 pt-1")
-                    table = ui.table(
-                        columns=_view_summary_columns(),
-                        rows=_view_summary_rows(opencv),
-                    ).classes("w-full").props("dense flat hide-bottom")
-                    self._register_table("view_opencv_summary", table)
+                table = ui.table(
+                    columns=_view_summary_columns(),
+                    rows=_view_summary_rows(opencv),
+                ).classes("slim-table w-full").props("dense flat hide-bottom")
+                self._register_table("view_opencv_summary", table)
             else:
                 ui.label("No active OpenCV targets.").classes("muted text-xs")
         with ui.column().classes("panel w-full gap-2 p-3"):
@@ -850,9 +824,6 @@ class AnalyzeWorkflowView:
 
         with ui.element("div").classes("comparison-grid w-full"):
             _plot_card(_diameter_hist_chart(summaries))
-            _plot_card(_diameter_chart(summaries))
-            _plot_card(_cv_chart(summaries))
-            _plot_card(_frequency_chart(summaries))
             _plot_card(_position_scatter(summaries))
             _plot_card(_track_timeline_chart(summaries))
             _plot_card(_perimeter_time_chart(summaries))
@@ -1233,7 +1204,7 @@ class AnalyzeWorkflowView:
             "cellpose_px_to_um": 1.14,
             "cellpose_frame_limit": 0,
             "cellpose_detect_inclusions": True,
-            "cache_root": str(Path.home() / ".admet-cache" / "admet2"),
+            "cache_root": str(Path.home() / ".admet-cache"),
         }
 
     def _reset_settings(self) -> None:
@@ -1257,6 +1228,11 @@ class AnalyzeWorkflowView:
             self._notify(f"project create failed: {exc}", "danger")
             self._refresh()
             return
+        store.session = replace(
+            store.session,
+            metadata={**store.session.metadata, "cache_root": self.settings["cache_root"]},
+        )
+        store.save()
         self.project_path = str(store.path)
         self.stage_progress["import"] = max(self.stage_progress["import"], 30)
         self._mark_stage("import", StageStatus.ACTIVE)
@@ -1280,6 +1256,9 @@ class AnalyzeWorkflowView:
             self._refresh()
             return
         self.project_path = str(store.path)
+        cache_root = store.session.metadata.get("cache_root")
+        if cache_root:
+            self.settings["cache_root"] = str(cache_root)
         self._load_project_files(store)
         self.stage_progress["import"] = 100 if self.matrix else 45
         self._mark_stage("import", StageStatus.COMPLETE if self.matrix else StageStatus.ACTIVE)

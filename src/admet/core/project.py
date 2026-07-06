@@ -178,7 +178,10 @@ class ProjectStore:
             },
         )
         items = _upsert_item(list(self.session.items), item)
-        self.session = replace(self.session, items=tuple(items))
+        session_metadata = dict(self.session.metadata)
+        if metadata.get("cache_root"):
+            session_metadata["cache_root"] = str(metadata["cache_root"])
+        self.session = replace(self.session, items=tuple(items), metadata=session_metadata)
         self.save()
 
     def _normalize_control_recording(self, recording: dict[str, Any]) -> dict[str, Any]:

@@ -70,8 +70,11 @@ CONTROL_PANELS = (
 )
 
 
-def panel_specs(*, channel_manager: bool = False) -> tuple[PanelSpec, ...]:
-    return CONTROL_PANELS if channel_manager else CORE_PANELS
+def panel_specs(*, channel_manager: bool = False, include_results: bool = True) -> tuple[PanelSpec, ...]:
+    panels = CONTROL_PANELS if channel_manager else CORE_PANELS
+    if include_results:
+        return panels
+    return tuple(panel for panel in panels if panel.key != "results")
 
 
 def settings_panel_state(stage: Stage) -> SettingsPanelState:
