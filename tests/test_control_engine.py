@@ -560,7 +560,6 @@ class AcquisitionEngineTests(unittest.TestCase):
                 "camera_gain": 2,
                 "camera_pixel_format": "Mono10p",
                 "camera_readout": "Fast",
-                "camera_waterfall": True,
                 "camera_framerate_enabled": True,
                 "camera_framerate_hz": 500,
                 "camera_throughput_enabled": True,
@@ -572,7 +571,7 @@ class AcquisitionEngineTests(unittest.TestCase):
         self.assertIn(("OffsetX", 0), camera.set_calls)
         self.assertIn(("OffsetY", 0), camera.set_calls)
         self.assertEqual(camera.applied["Width"], 512)
-        self.assertEqual(camera.applied["Height"], 1)
+        self.assertEqual(camera.applied["Height"], 256)
         self.assertEqual(camera.applied["OffsetX"], 16)
         self.assertEqual(camera.applied["OffsetY"], 32)
         self.assertEqual(camera.applied["BinningHorizontal"], 2)

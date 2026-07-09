@@ -26,7 +26,6 @@ CAMERA_SURFACE_OPTIONS = {
                 "camera_offset_y",
                 "camera_binning_h",
                 "camera_binning_v",
-                "camera_waterfall",
             ),
         },
         {
@@ -50,15 +49,9 @@ CAMERA_SURFACE_OPTIONS = {
             ),
         },
         {
-            "title": "Display & Selection",
+            "title": "Selection",
             "icon": "select_all",
             "params": (
-                "camera_flip_x",
-                "camera_flip_y",
-                "camera_rotation",
-                "camera_ruler_v",
-                "camera_ruler_h",
-                "camera_ruler_radial",
                 "camera_selection_x",
                 "camera_selection_y",
                 "camera_selection_w",

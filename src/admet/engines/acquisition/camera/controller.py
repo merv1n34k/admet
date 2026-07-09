@@ -134,10 +134,9 @@ class CameraController:
             self.camera.set_parameter("OffsetX", 0)
             self.camera.set_parameter("OffsetY", 0)
 
-        height = 1 if settings["camera_waterfall"] else settings["camera_height"]
         cam_settings: dict[str, Any] = {
             "Width": settings["camera_width"],
-            "Height": height,
+            "Height": settings["camera_height"],
             "OffsetX": offset_x,
             "OffsetY": offset_y,
             "BinningHorizontal": settings["camera_binning_h"],

@@ -49,7 +49,6 @@ CAMERA_CONFIGURATION_PARAMS = (
     "camera_framerate_hz",
     "camera_throughput_enabled",
     "camera_throughput_mbps",
-    "camera_waterfall",
 )
 
 ACQUISITION_ACTIONS = (
