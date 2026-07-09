@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 import numpy as np
 from PySide6.QtCore import QRect, QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QImage, QPainter
+from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QApplication,
@@ -245,8 +245,10 @@ class ControlWindow(QMainWindow):
         self.video_table: QTableWidget | None = None
         self.csv_status: QLabel | None = None
         self._latest_pipeline_event: Any | None = None
+        self._pipeline_stage_id = ""
         self._pipeline_pending_confirmation = ""
         self._pipeline_confirmation_notice = ""
+        self._tube_switch_notice_step = -1
         self._mounted_signature: tuple[Any, ...] | None = None
         self._transport_button_refs: list[QPushButton] = []
         self._protocol_status_label: QLabel | None = None
@@ -556,7 +558,8 @@ class ControlWindow(QMainWindow):
         self._dismiss_notification(restore_instruction=False)
         statuses = dict(self.workflow_state.statuses)
         current = self.workflow.current_stage(self.workflow_state)
-        if statuses.get(current.id) is StageStatus.ACTIVE:
+        keep_current_active = current.id == self._pipeline_stage_id and self._pipeline_active()
+        if statuses.get(current.id) is StageStatus.ACTIVE and not keep_current_active:
             statuses[current.id] = StageStatus.PENDING
         target = self.workflow.stages[index]
         if statuses.get(target.id) is StageStatus.PENDING:
@@ -717,6 +720,7 @@ class ControlWindow(QMainWindow):
             self.plot_panel.update_from_snapshot(self._latest_snapshot)
         if self._qt_frame is not None:
             self.preview.set_frame(self._qt_frame)
+        self._sync_preview_overlay()
 
         self.main_layout.addWidget(display)
 
@@ -788,7 +792,7 @@ class ControlWindow(QMainWindow):
         if self._protocol_status_label is not None:
             self._protocol_status_label.setText(self._pipeline_status_text(stage))
         if self._protocol_progress_bar is not None:
-            self._protocol_progress_bar.setValue(int(self._pipeline_progress_percent() * 10))
+            self._protocol_progress_bar.setValue(int(self._pipeline_total_progress_percent() * 10))
             self._protocol_progress_bar.setFormat(self._pipeline_progress_text(stage))
             self._protocol_progress_bar.setStyleSheet(
                 "QProgressBar#ProtocolProgress::chunk "
@@ -1389,6 +1393,10 @@ class ControlWindow(QMainWindow):
 
         if stage.completion_gate == "recording_confirmation":
             self._runs_completion_confirmed = False
+        self._pipeline_stage_id = stage.id
+        statuses = dict(self.workflow_state.statuses)
+        statuses[stage.id] = StageStatus.ACTIVE
+        self.workflow_state = replace(self.workflow_state, statuses=statuses)
         self._completion_pending = False
         self._run("run_protocol", self._protocol_run_settings(stage), refresh=False)
         self._render_current_stage()
@@ -1402,6 +1410,10 @@ class ControlWindow(QMainWindow):
         if stage.completion_gate == "recording_confirmation":
             self._control_recording_dir = None
             self._runs_completion_confirmed = False
+        self._pipeline_stage_id = stage.id
+        statuses = dict(self.workflow_state.statuses)
+        statuses[stage.id] = StageStatus.ACTIVE
+        self.workflow_state = replace(self.workflow_state, statuses=statuses)
         if self._run("run_protocol", self._protocol_run_settings(stage), refresh=False) is None:
             self._render_current_stage()
             return
@@ -1410,6 +1422,8 @@ class ControlWindow(QMainWindow):
     def _stop_pipeline_stage(self) -> None:
         self._run("stop_protocol", refresh=False, notify_success=False)
         self._latest_pipeline_event = None
+        self._pipeline_stage_id = ""
+        self._tube_switch_notice_step = -1
         self._clear_pipeline_confirmation()
         self._completion_pending = False
         self._dismiss_notification()
@@ -1482,6 +1496,13 @@ class ControlWindow(QMainWindow):
     def _pipeline_active(self) -> bool:
         return self.last_metadata.get("pipeline_state") in {"running", "paused", "stopping"}
 
+    def _pipeline_stage(self) -> Stage:
+        if self._pipeline_stage_id:
+            for stage in self.workflow.stages:
+                if stage.id == self._pipeline_stage_id:
+                    return stage
+        return self.workflow.current_stage(self.workflow_state)
+
     def _pending_pipeline_confirmation(self) -> str:
         if self._pipeline_pending_confirmation:
             return self._pipeline_pending_confirmation
@@ -1550,7 +1571,10 @@ class ControlWindow(QMainWindow):
             return f"{step}: error"
         if state == "paused":
             return f"{step}: paused"
-        return f"{step}: {self._pipeline_progress_percent():.0f}%"
+        return (
+            f"{step}: step {self._pipeline_step_progress_percent():.0f}% "
+            f"/ total {self._pipeline_total_progress_percent():.0f}%"
+        )
 
     def _pipeline_progress_color(self) -> str:
         state = self._pipeline_event_state(self._latest_pipeline_event)
@@ -1601,6 +1625,7 @@ class ControlWindow(QMainWindow):
             self.last_result = result
             self.last_metadata = dict(result.metadata)
             self._refresh_runtime_state()
+            self._sync_preview_overlay()
             self._stop_recording_on_finished_pipeline()
 
     def _stop_recording_on_finished_pipeline(self) -> None:
@@ -1623,7 +1648,7 @@ class ControlWindow(QMainWindow):
         if latest is None:
             return
         self._latest_pipeline_event = latest
-        stage = self.workflow.current_stage(self.workflow_state)
+        stage = self._pipeline_stage()
         if stage.pipeline:
             confirmation = str(getattr(latest, "confirmation_message", "") or "").strip()
             if confirmation:
@@ -1635,7 +1660,11 @@ class ControlWindow(QMainWindow):
                 self._show_pipeline_confirmation_notice(stage, latest)
             elif self._pipeline_event_state(latest) not in {"paused"}:
                 self._clear_pipeline_confirmation()
-            self._refresh_action_box(stage)
+            self._maybe_notify_tube_switch(stage, latest)
+            if self.workflow.current_stage(self.workflow_state).id == stage.id:
+                self._refresh_action_box(stage)
+            else:
+                self._sync_toc()
         if self._pipeline_event_state(latest) == "completed":
             self._schedule_completed_pipeline_stage_finish(stage)
 
@@ -1645,6 +1674,25 @@ class ControlWindow(QMainWindow):
         if not self.last_metadata.get("recording_active"):
             return
         self._run("stop_recording", raise_errors=False, refresh=False, notify_success=False)
+
+    def _maybe_notify_tube_switch(self, stage: Stage, event: Any | None) -> None:
+        if stage.id != "runs" or event is None:
+            return
+        if self._pipeline_event_state(event) != "running":
+            return
+        step_name = str(getattr(event, "step_name", "") or "")
+        if not step_name.startswith("Run set"):
+            return
+        step_index = int(getattr(event, "current_step", -1) or -1)
+        if step_index == self._tube_switch_notice_step:
+            return
+        progress = max(0.0, min(1.0, float(getattr(event, "progress", 0.0) or 0.0)))
+        run_volume = float(self.values.get("run_volume_ul") or 0.0)
+        oil_flow_ul_min = 250.0
+        remaining_s = ((1.0 - progress) * run_volume / oil_flow_ul_min * 60.0) if run_volume > 0 else 0.0
+        if 0.0 < remaining_s <= 5.0:
+            self._tube_switch_notice_step = step_index
+            self._notify("Switch collection tube to waste tube.", "warning", timeout_ms=0)
 
     def _can_complete_completed_pipeline_stage(self, stage: Stage) -> bool:
         if not stage.pipeline:
@@ -1667,13 +1715,21 @@ class ControlWindow(QMainWindow):
         self._complete_completed_pipeline_stage()
 
     def _complete_completed_pipeline_stage(self) -> None:
-        stage = self.workflow.current_stage(self.workflow_state)
+        stage = self._pipeline_stage()
         if not self._can_complete_completed_pipeline_stage(stage):
             return
         self._latest_pipeline_event = None
+        self._pipeline_stage_id = ""
+        self._tube_switch_notice_step = -1
         self._clear_pipeline_confirmation()
         self._dismiss_notification()
+        current_index = self.workflow_state.index
+        stage_index = self.workflow.stages.index(stage)
+        self.workflow_state = replace(self.workflow_state, index=stage_index)
         self._complete_current_stage()
+        if current_index != stage_index and current_index < len(self.workflow.stages):
+            self.workflow_state = replace(self.workflow_state, index=current_index)
+            self._render_current_stage()
         if stage.completion_gate == "recording_confirmation":
             self._runs_completion_confirmed = False
 
@@ -1728,6 +1784,7 @@ class ControlWindow(QMainWindow):
             self._acknowledge_camera_frame()
             return
         self.preview.set_frame(frame)
+        self._sync_preview_overlay()
 
     def _acknowledge_camera_frame(self) -> None:
         if not self._camera_ack_pending:
@@ -1736,6 +1793,22 @@ class ControlWindow(QMainWindow):
         acknowledge = getattr(self.api.engine, "acknowledge_camera_frame", None)
         if callable(acknowledge):
             acknowledge()
+
+    def _sync_preview_overlay(self) -> None:
+        if self.preview is None:
+            return
+        elapsed = float(self.last_metadata.get("camera_record_elapsed") or 0.0)
+        fps = float(self.last_metadata.get("camera_fps") or 0.0)
+        frames = int(self.last_metadata.get("camera_recorded_frames") or 0)
+        state = "recording" if self.last_metadata.get("camera_recording") else "live"
+        self.preview.set_overlay(
+            (
+                state,
+                f"time {elapsed:.1f}s",
+                f"fps {fps:.1f}",
+                f"frames {frames}",
+            )
+        )
 
     def _emergency_stop(self) -> None:
         for action in ("stop_protocol", "stop_recording", "stop_polling", "stop_camera_live"):
@@ -1756,6 +1829,8 @@ class ControlWindow(QMainWindow):
         status = self.workflow_state.statuses.get(stage.id, StageStatus.PENDING)
         if index == self.workflow_state.index and self.status_kind == "danger":
             return "error"
+        if stage.id == self._pipeline_stage_id and self._pipeline_active():
+            return "processing"
         if has_feature(stage, "camera") and self._camera_scene_ready():
             return "done"
         if "fluidics_preflight" in stage.features and self._fluigent_ready():
@@ -1785,7 +1860,18 @@ class ControlWindow(QMainWindow):
             return 100.0
         return 45.0
 
-    def _pipeline_progress_percent(self) -> float:
+    def _pipeline_step_progress_percent(self) -> float:
+        event = self._latest_pipeline_event
+        if event is None:
+            return 0.0
+        state = self._pipeline_event_state(event)
+        if state == "completed":
+            return 100.0
+        if state == "error":
+            return 0.0
+        return min(99.0, max(0.0, float(getattr(event, "progress", 0.0) or 0.0) * 100.0))
+
+    def _pipeline_total_progress_percent(self) -> float:
         event = self._latest_pipeline_event
         if event is None:
             return 35.0 if self.last_metadata.get("recording_active") else 0.0
@@ -1798,6 +1884,9 @@ class ControlWindow(QMainWindow):
         if state == "error":
             return 0.0
         return min(99.0, max(0.0, (current + step_progress) / total * 100.0))
+
+    def _pipeline_progress_percent(self) -> float:
+        return self._pipeline_total_progress_percent()
 
     def _guard_value(self, name: str) -> bool:
         self._refresh_runtime_state()
@@ -2838,6 +2927,7 @@ class PreviewDisplay(QWidget):
         self.frame_rect = QRect()
         self.message = "No camera frame"
         self._aspect = 480 / 640
+        self._overlay_lines: tuple[str, ...] = ()
 
     def set_frame(self, frame: np.ndarray | None) -> bool:
         if frame is None:
@@ -2854,6 +2944,10 @@ class PreviewDisplay(QWidget):
         self.message = ""
         self.update()
         return True
+
+    def set_overlay(self, lines: tuple[str, ...]) -> None:
+        self._overlay_lines = tuple(line for line in lines if line)
+        self.update()
 
     def hasHeightForWidth(self) -> bool:
         return True
@@ -2913,6 +3007,16 @@ class PreviewDisplay(QWidget):
             Qt.TransformationMode.FastTransformation,
         )
         painter.drawImage(self.frame_rect, scaled)
+        if self._overlay_lines:
+            text = "\n".join(self._overlay_lines)
+            overlay_rect = QRect(self.frame_rect.x() + 10, self.frame_rect.y() + 10, 168, 76)
+            painter.fillRect(overlay_rect, QColor(0, 0, 0, 145))
+            painter.setPen(Qt.GlobalColor.white)
+            painter.drawText(
+                overlay_rect.adjusted(8, 7, -8, -7),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                text,
+            )
         self.frame_painted.emit()
 
 
