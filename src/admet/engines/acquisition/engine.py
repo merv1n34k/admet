@@ -125,6 +125,7 @@ ACQUISITION_ACTIONS = (
     ActionSpec("confirm_protocol", "Confirm Protocol Step", "protocol"),
     ActionSpec("skip_protocol", "Skip Protocol Step", "protocol"),
     ActionSpec("calibrate", "Calibrate", "calibration"),
+    ActionSpec("cleanup_shutdown", "Cleanup Shutdown", "connection"),
     ActionSpec(
         "wash",
         "Wash",
@@ -260,6 +261,7 @@ class AcquisitionEngine:
             ),
             "skip_protocol": lambda _settings: self._status_after("skip_protocol", self.skip_pipeline_step),
             "calibrate": lambda _settings: self._status_after("calibrate", self.hardware.calibrate_all),
+            "cleanup_shutdown": lambda _settings: self._cleanup_shutdown(),
             "wash": lambda settings: self._start_protocol_action("wash", "Wash", settings),
         }
 
@@ -530,6 +532,31 @@ class AcquisitionEngine:
         self.hardware.disconnect()
         self.channel_manager.configure_channels([])
         return self._status_result(action)
+
+    def _cleanup_shutdown(self) -> dict[str, Any]:
+        errors: list[str] = []
+        for operation in (
+            self.stop_recording,
+            self.stop_polling,
+            self.stop_pipeline,
+            self.stop_camera_live,
+            self._camera.disconnect,
+            self.hardware.disconnect,
+        ):
+            try:
+                operation()
+            except Exception as exc:
+                errors.append(f"{getattr(operation, '__name__', 'operation')}: {exc}")
+        self.channel_manager.configure_channels([])
+        return self._status_result(
+            "cleanup_shutdown",
+            extra_metadata={
+                "cleanup_ok": not errors,
+                "cleanup_errors": errors,
+                "camera_connected": self._camera.camera.connected,
+                "camera_live": self.camera_live,
+            },
+        )
 
     def _configure_channels_from_state(self, state: Any) -> None:
         self.channel_manager.configure_channels(_pair_channels(state))

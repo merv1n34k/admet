@@ -359,5 +359,26 @@ def create_control_workflow() -> Workflow:
                     "pipeline_label": "Start Wash",
                 },
             ),
+            Stage(
+                "cleanup",
+                "7. Cleanup",
+                description="Disconnect devices and finish the control session.",
+                instructions=(
+                    "Disconnect devices, clean the chip area, check tubing, and confirm the desk is clear.",
+                ),
+                instruction_cards=(
+                    StageInstruction(
+                        "Disconnect devices, clean the chip area, check tubing, and confirm the desk is clear."
+                    ),
+                ),
+                actions=(
+                    StageAction("Disconnect Devices", "cleanup_shutdown", variant="warning"),
+                    StageAction("Cleanup Done", completes=True, variant="success"),
+                ),
+                editor=CONTROL_LIVE_EDITOR,
+                results=CONTROL_RESULTS,
+                features=("camera", "fluidics"),
+                show_settings=False,
+            ),
         ),
     )

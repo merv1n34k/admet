@@ -91,9 +91,10 @@ class WorkflowTests(unittest.TestCase):
         runs = next(stage for stage in workflow.stages if stage.id == "runs")
         actions = {control.action for control in runs.actions}
         corrections = next(stage for stage in workflow.stages if stage.id == "corrections")
+        cleanup = next(stage for stage in workflow.stages if stage.id == "cleanup")
         correction_names = {param.name for param in corrections.settings.params}
 
-        self.assertEqual(stage_ids, ["scene", "fluigent", "corrections", "priming", "runs", "wash"])
+        self.assertEqual(stage_ids, ["scene", "fluigent", "corrections", "priming", "runs", "wash", "cleanup"])
         self.assertEqual(scene.editor.kind, "control_live")
         self.assertTrue(scene.editor.persistent)
         self.assertIn("camera", scene.features)
@@ -103,6 +104,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("completion_message", priming.settings_options)
         self.assertIn("camera_live and fluidics_connected", {action.guard for action in runs.actions})
         self.assertEqual(runs.settings_options["pipeline_name"], "Drop-Seq")
+        self.assertEqual(cleanup.actions[0].action, "cleanup_shutdown")
         self.assertEqual(runs.completion_gate, "recording_confirmation")
         self.assertNotIn("start_recording", actions)
         self.assertNotIn("stop_recording", actions)
