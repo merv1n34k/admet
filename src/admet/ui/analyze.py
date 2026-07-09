@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from statistics import mean, median, pstdev
-from typing import Any
+from typing import Any, Callable
 
 from admet.core.discovery import ProjectRef, discover_projects, projects_root
 from admet.core.engine import EngineRegistry
@@ -139,6 +139,7 @@ class AnalyzeWorkflowView:
         }
         self.last_report: AnalyzeBatchReport | None = None
         self._run_progress = 0
+        self._run_step_progress = 0
         self.notice = "Create or select a project, then add files to the batch matrix."
         self.notice_kind = "primary"
         self.action_log: list[str] = ["Analyze UI ready."]
@@ -270,6 +271,7 @@ class AnalyzeWorkflowView:
         with body:
             with ui.column().classes("admet-process w-full gap-0 overflow-hidden"):
                 self._refs["action_progress"] = ui.linear_progress(value=0.0).classes("w-full")
+                self._refs["action_progress_text"] = ui.label("").classes("admet-progress-text")
                 with ui.row().classes("admet-transport w-full items-stretch gap-0"):
                     for index, spec in enumerate(self._action_specs(stage_id)):
                         if index:
@@ -289,6 +291,9 @@ class AnalyzeWorkflowView:
         progress = self._refs.get("action_progress")
         if progress is not None:
             progress.set_value(self.stage_progress.get(self._stage_id(), 0) / 100.0)
+        progress_text = self._refs.get("action_progress_text")
+        if progress_text is not None:
+            progress_text.set_text(self._progress_text())
         specs = self._action_specs(self._stage_id())
         if len(specs) != len(self._button_refs):
             return
@@ -1271,13 +1276,14 @@ class AnalyzeWorkflowView:
         # freeze the UI. A timer polls per-file progress reported by the runner and
         # drives the action-box progress bar live.
         self._run_progress = 0
+        self._run_step_progress = 0
         self._notify(f"Running {engine or 'analysis'} on {len(jobs)} file(s)…", "primary")
         self._log(f"analysis: running {engine or 'all'} ({len(jobs)} file(s))")
         self._refresh()
         progress = self._refs.get("action_progress")
         timer = ui.timer(
             0.25,
-            lambda: progress.set_value(self._run_progress / 100.0) if progress is not None else None,
+            lambda: self._sync_run_progress(progress),
         )
         try:
             report = await run.io_bound(self._run_batch, jobs)
@@ -1307,8 +1313,28 @@ class AnalyzeWorkflowView:
         def on_progress(percent: float) -> None:
             self._run_progress = percent
 
+        def begin_file() -> Callable[[float], None]:
+            self._run_step_progress = 0
+
+            def on_file_progress(percent: float) -> None:
+                self._run_step_progress = percent
+
+            return on_file_progress
+
         runner = AnalyzeBatchRunner(self.registry, cache_root=self.settings["cache_root"])
-        return runner.run(jobs, on_progress=on_progress)
+        return runner.run(jobs, on_progress=on_progress, begin_file=begin_file)
+
+    def _sync_run_progress(self, progress: Any | None) -> None:
+        if progress is not None:
+            progress.set_value(self._run_progress / 100.0)
+        progress_text = self._refs.get("action_progress_text")
+        if progress_text is not None:
+            progress_text.set_text(self._progress_text())
+
+    def _progress_text(self) -> str:
+        if self._run_progress:
+            return f"step {self._run_step_progress:.0f}% / total {self._run_progress:.0f}%"
+        return f"stage {self.stage_progress.get(self._stage_id(), 0):.0f}%"
 
     def _target_to_run(self, row: MatrixRow) -> AnalyzeTarget:
         settings = self._engine_settings(row)
