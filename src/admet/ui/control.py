@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import numpy as np
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -1275,7 +1275,7 @@ class ControlWindow(QMainWindow):
 
     def _param_table(self, params: list[Param]) -> QTableWidget:
         rows = self._param_row_count(params)
-        table = QTableWidget(rows, 4)
+        table = GridTable(rows, 4)
         table.setObjectName("RawConfigTable")
         table.setHorizontalHeaderLabels(("Parameter", "Value", "Parameter", "Value"))
         table.verticalHeader().hide()
@@ -1287,7 +1287,6 @@ class ControlWindow(QMainWindow):
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
         table.setAlternatingRowColors(False)
-        table.setShowGrid(True)
 
         self._syncing_table = True
         for index, param in enumerate(params):
@@ -2769,6 +2768,39 @@ class ControlWindow(QMainWindow):
                 self._clear_layout(child_layout, delete=delete)
 
 
+class GridTable(QTableWidget):
+    """A table whose separators stop at the edge of the content.
+
+    Qt's own grid draws a line after every cell, the last row and column
+    included, so the outer lines are drawn twice over -- once by the grid, once
+    by the frame -- and being straight they cannot follow the frame's rounded
+    corners. Painting only the lines between cells leaves the frame as the sole
+    boundary, free to round.
+    """
+
+    def __init__(self, rows: int = 0, columns: int = 0, parent: QWidget | None = None) -> None:
+        super().__init__(rows, columns, parent)
+        self.setShowGrid(False)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if self.rowCount() < 1 or self.columnCount() < 1:
+            return
+        painter = QPainter(self.viewport())
+        painter.setPen(QPen(QColor(Theme.BORDER_COOL), 1))
+        width = self.viewport().width()
+        height = self.viewport().height()
+        for column in range(self.columnCount() - 1):
+            x = self.columnViewportPosition(column) + self.columnWidth(column) - 1
+            if 0 <= x < width:
+                painter.drawLine(x, 0, x, height)
+        for row in range(self.rowCount() - 1):
+            y = self.rowViewportPosition(row) + self.rowHeight(row) - 1
+            if 0 <= y < height:
+                painter.drawLine(0, y, width, y)
+        painter.end()
+
+
 class ChannelControlPanel(QFrame):
     def __init__(
         self,
@@ -2913,7 +2945,7 @@ class FluidicsMonitorTable(QFrame):
         self.status.setObjectName("MutedText")
         root.addWidget(self.status)
 
-        self.table = QTableWidget(0, 9)
+        self.table = GridTable(0, 9)
         self.table.setObjectName("RawConfigTable")
         self.table.setHorizontalHeaderLabels(
             ("Channel", "Pressure", "Flow", "Mean", "Std", "Min", "Max", "Volume", "Stable")
@@ -2922,7 +2954,6 @@ class FluidicsMonitorTable(QFrame):
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
-        self.table.setShowGrid(True)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         for column in range(1, self.table.columnCount()):
             self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
@@ -3357,7 +3388,7 @@ class PreviewDisplay(QWidget):
 
 
 def _video_table(rows: list[dict[str, str]]) -> QTableWidget:
-    table = QTableWidget(len(rows), len(VIDEO_TABLE_COLUMNS))
+    table = GridTable(len(rows), len(VIDEO_TABLE_COLUMNS))
     table.setObjectName("RawConfigTable")
     table.setHorizontalHeaderLabels(tuple(label for _key, label in VIDEO_TABLE_COLUMNS))
     table.verticalHeader().hide()
@@ -3367,7 +3398,6 @@ def _video_table(rows: list[dict[str, str]]) -> QTableWidget:
     table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
-    table.setShowGrid(True)
     for row_index, row in enumerate(rows):
         for column_index, (key, _label) in enumerate(VIDEO_TABLE_COLUMNS):
             item = QTableWidgetItem(row.get(key, ""))

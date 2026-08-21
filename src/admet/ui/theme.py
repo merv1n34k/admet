@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 ButtonVariant = Literal["neutral", "primary", "success", "danger", "warning"]
@@ -231,6 +232,19 @@ def mono_family() -> str:
         if candidate in installed:
             return candidate
     return QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
+
+
+ASSETS = Path(__file__).with_name("assets")
+
+
+def asset(name: str) -> str:
+    """Absolute path to a shipped asset, in the form a stylesheet can use.
+
+    Qt draws a combo box's arrow from an image; without one it draws nothing at
+    all once the drop-down itself is styled. The chevrons are shipped rather than
+    generated so a read-only install still has them.
+    """
+    return ASSETS.joinpath(name).as_posix()
 
 
 def stylesheet() -> str:
@@ -499,6 +513,132 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
 QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {{
     border-color: {Theme.BORDER_HOVER};
 }}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
+    border-color: {Theme.ACCENT};
+}}
+/* Styling a combo box without styling its drop-down leaves Qt drawing the
+   sub-control unstyled -- a boxed button with its own border and background,
+   sitting inside a field that no longer matches it. The button is part of the
+   field: no border, no fill of its own, just the arrow. */
+QComboBox {{
+    padding-left: 7px;
+    padding-right: 0;
+}}
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 20px;
+    border: 0;
+    background: transparent;
+}}
+QComboBox::down-arrow {{
+    image: url("{asset("chevron-down.svg")}");
+    width: 10px;
+    height: 6px;
+    margin-right: 7px;
+}}
+QComboBox::down-arrow:hover, QComboBox::down-arrow:on {{
+    image: url("{asset("chevron-down-strong.svg")}");
+}}
+QComboBox::down-arrow:disabled {{
+    image: url("{asset("chevron-down-muted.svg")}");
+}}
+/* Spin buttons get the same treatment as the drop-down: no frame, no fill, the
+   field's own background, and a chevron of the right weight. Left unstyled they
+   are a pair of boxed buttons wedged into the field's right edge. */
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    subcontrol-origin: border;
+    width: 16px;
+    height: 12px;
+    border: 0;
+    background: transparent;
+    margin-right: 3px;
+}}
+QSpinBox::up-button, QDoubleSpinBox::up-button {{
+    subcontrol-position: top right;
+    margin-top: 1px;
+}}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    subcontrol-position: bottom right;
+    margin-bottom: 1px;
+}}
+/* Smaller than the combo box chevron: two of these stack inside one field, and
+   at full size they meet in the middle and read as a single diamond. */
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+    image: url("{asset("chevron-up.svg")}");
+    width: 8px;
+    height: 4px;
+}}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+    image: url("{asset("chevron-down.svg")}");
+    width: 8px;
+    height: 4px;
+}}
+QSpinBox::up-arrow:hover, QDoubleSpinBox::up-arrow:hover {{
+    image: url("{asset("chevron-up-strong.svg")}");
+}}
+QSpinBox::down-arrow:hover, QDoubleSpinBox::down-arrow:hover {{
+    image: url("{asset("chevron-down-strong.svg")}");
+}}
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled,
+QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:off {{
+    image: url("{asset("chevron-up-muted.svg")}");
+}}
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled,
+QSpinBox::down-arrow:off, QDoubleSpinBox::down-arrow:off {{
+    image: url("{asset("chevron-down-muted.svg")}");
+}}
+QSpinBox, QDoubleSpinBox {{
+    padding-left: 7px;
+    padding-right: 22px;
+}}
+/* The popup is a view, not a field: it takes the raised surface and keeps the
+   selected row readable against the accent. */
+QComboBox QAbstractItemView {{
+    background-color: {Theme.BG_RAISED};
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: {Theme.RADIUS}px;
+    padding: 3px;
+    outline: 0;
+    color: {Theme.TEXT_WHITE};
+    selection-background-color: {Theme.ACCENT};
+    selection-color: #ffffff;
+}}
+QComboBox QAbstractItemView::item {{
+    min-height: 22px;
+    padding: 0 6px;
+    border-radius: 3px;
+}}
+/* An editor dropped into a table cell is the cell. Rounded corners and an inset
+   frame made it read as a small box floating inside a larger one, so in a table
+   the editor loses its own frame and fills the cell the grid already draws. */
+QTableWidget QComboBox,
+QTableWidget QLineEdit,
+QTableWidget QSpinBox,
+QTableWidget QDoubleSpinBox {{
+    border: 0;
+    border-radius: 0;
+    background-color: transparent;
+    /* Flush with the labels beside them: an editor indented by its own padding
+       does not line up with the cell text in the next column. Room is still kept
+       on the right, where the arrows are drawn. */
+    padding-left: 0;
+    min-height: {default.height}px;
+    max-height: {default.height + 4}px;
+}}
+QTableWidget QComboBox:hover,
+QTableWidget QLineEdit:hover,
+QTableWidget QSpinBox:hover,
+QTableWidget QDoubleSpinBox:hover {{
+    background-color: {Theme.BG_CONTROL_HOVER};
+}}
+QTableWidget QComboBox:focus,
+QTableWidget QLineEdit:focus,
+QTableWidget QSpinBox:focus,
+QTableWidget QDoubleSpinBox:focus {{
+    background-color: {Theme.BG_CONTROL};
+}}
 QPushButton {{
     background-color: {Theme.BG_CONTROL};
     border: 1px solid {Theme.BORDER_COOL};
@@ -591,26 +731,70 @@ QScrollArea#PageScroll {{
     border: none;
     background: transparent;
 }}
-QPlainTextEdit, QTableWidget {{
+QPlainTextEdit {{
+    background-color: {Theme.BG_CONTROL};
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: {Theme.RADIUS}px;
+    color: {Theme.TEXT_WHITE};
+}}
+/* The frame is the table's only boundary. Separators between cells are painted
+   by GridTable, which stops before the last row and column, so no edge is drawn
+   twice and no straight line runs out through a rounded corner. */
+QTableWidget {{
     background-color: {Theme.BG_CONTROL};
     border: 1px solid {Theme.BORDER_COOL};
     border-radius: {Theme.RADIUS}px;
     color: {Theme.TEXT_WHITE};
     gridline-color: {Theme.BORDER_COOL};
+    /* Without this the current cell keeps a focus rectangle drawn inside its own
+       borders -- the same box-inside-a-box the cell editors used to show. */
+    outline: 0;
+}}
+/* The viewport is a plain child widget filling the frame's contents, and it
+   paints its own square background straight over the rounded corners. Letting
+   the table's background show through is what makes the radius visible. */
+QAbstractScrollArea > QWidget#qt_scrollarea_viewport {{
+    background: transparent;
+}}
+QTableWidget::item {{
+    padding: 0;
+}}
+/* Selecting a cell should mark it, not invert it: the default highlight fills
+   the cell with the accent and takes the text with it. */
+QTableWidget::item:selected {{
+    background-color: {Theme.BG_CONTROL_PRESSED};
+    color: {Theme.TEXT_WHITE};
+}}
+QTableWidget::item:focus {{
+    background-color: {Theme.BG_CONTROL_PRESSED};
+    color: {Theme.TEXT_WHITE};
+}}
+/* The header fills the top of the table, so its corners are the table's corners.
+   The view itself must not paint -- only its sections -- or its square backdrop
+   covers the rounded frame behind it. */
+QHeaderView {{
+    background: transparent;
+    border: 0;
 }}
 QHeaderView::section {{
     background-color: {Theme.BG_RAISED};
     color: {Theme.TEXT_MUTED};
     border: 0;
     border-bottom: 1px solid {Theme.BORDER_COOL};
-    padding: 3px 6px;
+    padding: 0;
 }}
-QTableWidget#RawConfigTable::item {{
-    border-color: {Theme.BORDER_COOL};
-    border-bottom: 1px solid {Theme.BORDER_COOL};
-    border-right: 1px solid {Theme.BORDER_COOL};
-    padding: 4px 7px;
+QHeaderView::section:first {{
+    border-top-left-radius: {Theme.RADIUS}px;
 }}
+QHeaderView::section:last {{
+    border-top-right-radius: {Theme.RADIUS}px;
+}}
+QHeaderView::section:only-one {{
+    border-top-left-radius: {Theme.RADIUS}px;
+    border-top-right-radius: {Theme.RADIUS}px;
+}}
+/* The grid draws these edges; drawing them again per item thickened every line
+   and the padding pushed the cell wider than the value inside it. */
 QScrollBar:horizontal,
 QScrollBar:vertical {{
     width: 0;

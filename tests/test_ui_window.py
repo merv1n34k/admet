@@ -41,3 +41,39 @@ class WindowContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThemeAssetTests(unittest.TestCase):
+    def test_the_stylesheet_points_at_chevrons_that_exist(self):
+        # Qt draws nothing where a styled combo box's arrow should be unless it is
+        # given an image, so a missing asset is an invisible dropdown.
+        from admet.ui.theme import ASSETS, asset
+
+        for name in (
+            "chevron-down.svg",
+            "chevron-down-strong.svg",
+            "chevron-down-muted.svg",
+            "chevron-up.svg",
+            "chevron-up-strong.svg",
+            "chevron-up-muted.svg",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue((ASSETS / name).is_file())
+                self.assertEqual(asset(name), (ASSETS / name).as_posix())
+
+    def test_the_chevrons_are_drawn_in_the_palette_they_sit_in(self):
+        # The colour is baked into the file, so it has to be checked against the
+        # palette rather than trusted to stay in step with it.
+        from admet.ui.theme import ASSETS, Theme
+
+        expected = {
+            "chevron-down.svg": Theme.TEXT_MUTED,
+            "chevron-down-strong.svg": Theme.TEXT_WHITE,
+            "chevron-down-muted.svg": Theme.TEXT_DISABLED,
+            "chevron-up.svg": Theme.TEXT_MUTED,
+            "chevron-up-strong.svg": Theme.TEXT_WHITE,
+            "chevron-up-muted.svg": Theme.TEXT_DISABLED,
+        }
+        for name, colour in expected.items():
+            with self.subTest(name=name):
+                self.assertIn(f'stroke="{colour}"', (ASSETS / name).read_text(encoding="utf-8"))
