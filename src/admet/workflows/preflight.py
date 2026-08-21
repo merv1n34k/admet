@@ -224,6 +224,43 @@ class Segment:
         ).drop_mbar
 
 
+def emulsion_viscosity(
+    carrier_mpa_s: float,
+    dispersed_mpa_s: float,
+    aqueous_fraction: float,
+) -> float:
+    """Taylor's estimate for an emulsion of one liquid carried in another.
+
+        mu_eff = mu_c * (1 + 2.5 * phi * (mu_d + 0.4 * mu_c) / (mu_d + mu_c))
+
+    What leaves the chip is not the oil that went in: it is oil packed with aqueous
+    droplets, and it flows less easily than either liquid alone. The outlet carries
+    every channel's flow, so under-counting its viscosity under-counts the segment
+    that costs the most.
+
+    Taylor's relation is a dilute-limit result. Droplet packing above roughly 0.3
+    stiffens the emulsion faster than this predicts, so at drop-seq fractions treat
+    the figure as a floor rather than an answer.
+    """
+    carrier = max(0.0, carrier_mpa_s)
+    dispersed = max(0.0, dispersed_mpa_s)
+    phi = min(max(0.0, aqueous_fraction), 0.99)
+    if carrier <= 0 or dispersed + carrier <= 0:
+        return carrier
+    shape = 2.5 * (dispersed + 0.4 * carrier) / (dispersed + carrier)
+    return carrier * (1.0 + shape * phi)
+
+
+def chip_resistance(measured_resistance: float, tubing_resistance: float) -> float:
+    """What a measured resistance leaves for the chip once the plumbing is subtracted.
+
+    The sweep fits one number for the whole path. The tubing part of it is known
+    from the layout, so the remainder is the chip and its fittings -- the only way
+    to put a figure on a chip short of measuring it on its own.
+    """
+    return max(0.0, measured_resistance - max(0.0, tubing_resistance))
+
+
 @dataclass(frozen=True)
 class ChannelPath:
     """A channel's own run: pressure source to sensor to chip."""
@@ -454,3 +491,171 @@ def dispense_time_s(target_ul: float, flow_ul_min: float) -> float:
     if flow_ul_min <= 0:
         return 0.0
     return target_ul / flow_ul_min * 60.0
+
+
+# ---- system check snapshots ------------------------------------------------
+#
+# A check is only meaningful next to the setup it was run on: the same chip reads
+# a different resistance through different tubing, and the same dispense weighs
+# differently for a different liquid. So a snapshot carries the conditions with
+# the measurement, and is written as plain JSON that outlives this application.
+
+SNAPSHOT_VERSION = 1
+CHECK_FLOW = "flow"
+CHECK_DISPENSE = "dispense"
+
+
+@dataclass(frozen=True)
+class CheckConditions:
+    """The setup a check was run against."""
+
+    setup: FlowSetup
+    liquids: dict[str, tuple[float, float]]  # channel -> (density g/mL, viscosity mPa s)
+    paths: tuple[ChannelPath, ...]
+    outlet: Segment
+    pressure_limit_mbar: float
+
+    def to_dict(self) -> dict:
+        return {
+            "flows_ul_min": {
+                "oil": self.setup.oil_ul_min,
+                "beads": self.setup.beads_ul_min,
+                "cells": self.setup.cells_ul_min,
+                "total": self.setup.total_ul_min,
+                "phase_ratio": self.setup.phase_ratio,
+            },
+            "pressure_limit_mbar": self.pressure_limit_mbar,
+            "liquids": {
+                channel: {"density_g_ml": density, "viscosity_mpa_s": viscosity}
+                for channel, (density, viscosity) in sorted(self.liquids.items())
+            },
+            "layout": {
+                "channels": [
+                    {
+                        "channel": path.label,
+                        "flow_ul_min": path.flow_ul_min,
+                        "viscosity_mpa_s": path.viscosity_mpa_s,
+                        "runs": [
+                            {"length_cm": segment.length_cm, "bore_mm": segment.bore_mm}
+                            for segment in path.segments
+                        ],
+                    }
+                    for path in self.paths
+                ],
+                "outlet": {
+                    "length_cm": self.outlet.length_cm,
+                    "bore_mm": self.outlet.bore_mm,
+                },
+            },
+        }
+
+
+@dataclass(frozen=True)
+class FlowCheck:
+    """What one channel's swept points say about the path it drives."""
+
+    channel: str
+    samples: tuple[tuple[float, float], ...]  # (pressure mbar, flow uL/min)
+    resistance: SystemResistance
+    feasibility: Feasibility
+    tubing_resistance: float = 0.0  # mbar per uL/min, from the entered layout
+
+    @property
+    def chip_resistance(self) -> float:
+        """The fitted resistance less the plumbing: the chip and its fittings."""
+        return chip_resistance(self.resistance.resistance, self.tubing_resistance)
+
+    def to_dict(self) -> dict:
+        return {
+            "channel": self.channel,
+            "samples": [
+                {"pressure_mbar": pressure, "flow_ul_min": flow}
+                for pressure, flow in self.samples
+            ],
+            "fit": {
+                "resistance_mbar_per_ul_min": self.resistance.resistance,
+                "threshold_mbar": self.resistance.threshold_mbar,
+                "r_squared": self.resistance.r_squared,
+                "points": self.resistance.samples,
+                "trustworthy": self.resistance.trustworthy,
+                # The fit is the whole path; the layout says how much of it is
+                # plumbing, so the rest is what the chip costs.
+                "tubing_mbar_per_ul_min": self.tubing_resistance,
+                "chip_mbar_per_ul_min": self.chip_resistance,
+            },
+            "verdict": {
+                "feasible": self.feasibility.feasible,
+                "target_flow_ul_min": self.feasibility.target_flow_ul_min,
+                "required_mbar": self.feasibility.required_mbar,
+                "limit_mbar": self.feasibility.limit_mbar,
+                "max_flow_ul_min": self.feasibility.max_flow_ul_min,
+                "shortfall_mbar": self.feasibility.shortfall_mbar,
+                "remedies": list(self.feasibility.remedies),
+            },
+        }
+
+
+@dataclass(frozen=True)
+class DispenseCheck:
+    """What one channel's weighed dispenses say about its correction factor."""
+
+    channel: str
+    target_ul: float
+    flow_ul_min: float
+    runs: tuple[GravimetricRun, ...]
+    result: GravimetricResult
+
+    def to_dict(self) -> dict:
+        return {
+            "channel": self.channel,
+            "target_ul": self.target_ul,
+            "flow_ul_min": self.flow_ul_min,
+            "weights_g": [
+                {"empty": run.empty_g, "full": run.full_g, "net": run.net_g()}
+                for run in self.runs
+            ],
+            "result": {
+                "runs": self.result.runs,
+                "mean_volume_ul": self.result.mean_volume_ul,
+                "mean_factor": self.result.mean_relative,
+                "volumes_ul": list(self.result.volumes_ul),
+            },
+        }
+
+
+@dataclass(frozen=True)
+class CheckSnapshot:
+    """One system check, frozen with the setup it was taken on."""
+
+    kind: str
+    recorded_at: str
+    conditions: CheckConditions
+    flow_checks: tuple[FlowCheck, ...] = ()
+    dispense_checks: tuple[DispenseCheck, ...] = ()
+
+    def to_dict(self) -> dict:
+        return {
+            "version": SNAPSHOT_VERSION,
+            "kind": self.kind,
+            "recorded_at": self.recorded_at,
+            "conditions": self.conditions.to_dict(),
+            "flow_checks": [check.to_dict() for check in self.flow_checks],
+            "dispense_checks": [check.to_dict() for check in self.dispense_checks],
+        }
+
+    def summary(self) -> str:
+        """One line for the log and the manifest."""
+        if self.kind == CHECK_FLOW:
+            failed = [check.channel for check in self.flow_checks if not check.feasibility.feasible]
+            if not self.flow_checks:
+                return "flow check: nothing measured"
+            if failed:
+                return f"flow check: not feasible on {', '.join(failed)}"
+            worst = max(check.resistance.resistance for check in self.flow_checks)
+            return f"flow check: feasible, worst channel {worst:,.1f} mbar per uL/min"
+        if not self.dispense_checks:
+            return "dispense check: nothing weighed"
+        factors = ", ".join(
+            f"{check.channel} {check.result.mean_relative:.3f}" for check in self.dispense_checks
+        )
+        return f"dispense check: {factors}"

@@ -6,6 +6,7 @@ import sys
 import time
 from collections import deque
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty
 from typing import Any, Callable
@@ -56,6 +57,7 @@ from admet.engines.acquisition.fluidics.config import (
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES, LIQUID_PROFILE_PARAM_NAMES
 from admet.engines.acquisition.fluidics.liquids import profile_by_id
 from admet.ui.preflight import PreflightPanel
+from admet.workflows.preflight import CHECK_DISPENSE, CHECK_FLOW
 from admet.ui import theme as ui
 from admet.ui.data import (
     VIDEO_TABLE_COLUMNS,
@@ -134,6 +136,12 @@ PREVIEW_MIN_HEIGHT = 280
 PREVIEW_MAX_HEIGHT = 520
 
 LEFT_RAIL_WIDTH = 246
+
+# Which stages produce a stored check, and what kind of snapshot each one writes.
+CHECK_KINDS = {
+    "characterise": CHECK_FLOW,
+    "gravimetry": CHECK_DISPENSE,
+}
 
 
 class _WheelGuard(QObject):
@@ -293,6 +301,8 @@ class ControlWindow(QMainWindow):
         self._preflight_active = False
         self._last_sweep_step = -1
         self._sweep_reading: tuple[list[float], list[float]] | None = None
+        # A finished check writes its snapshot once; the completion state is polled.
+        self._stored_check_stage = ""
         self.preflight_label: QLabel | None = None
 
         self.setWindowTitle("admet control")
@@ -1518,6 +1528,8 @@ class ControlWindow(QMainWindow):
 
         if stage.completion_gate == "recording_confirmation":
             self._runs_completion_confirmed = False
+        if stage.id in CHECK_KINDS:
+            self._stored_check_stage = ""
         if stage.settings_options.get("pipeline_name") == "Characterise":
             self._last_sweep_step = -1
             self._sweep_reading = None
@@ -1770,7 +1782,36 @@ class ControlWindow(QMainWindow):
         if self._pipeline_event_state(latest) == "completed":
             # The protocol is done, but the stage is not: light up Continue and let
             # the operator decide when to move on.
+            self._store_system_check(stage)
             self._refresh_action_box(stage)
+
+    def _store_system_check(self, stage: Stage) -> None:
+        """Keep a finished check as a project record.
+
+        Only the numbers: what was measured, and the setup it was measured on. No
+        video and no fluidics trace, because a check is about the rig rather than
+        about a sample.
+        """
+        kind = CHECK_KINDS.get(stage.id, "")
+        if not kind or self._stored_check_stage == stage.id:
+            return
+        self._stored_check_stage = stage.id
+        if self.project_path is None or self.api.session is None:
+            self._append_log("system check: no project open, nothing stored")
+            return
+        snapshot = self._ensure_preflight().snapshot(
+            kind, datetime.now(timezone.utc).isoformat(timespec="seconds")
+        )
+        try:
+            store = ProjectStore(self.project_path, self.api.session)
+            path = store.append_system_check(snapshot.to_dict(), summary=snapshot.summary())
+        except Exception as exc:
+            self._append_log(f"system check: not stored ({type(exc).__name__}: {exc})")
+            return
+        self.project_path = store.path
+        self.api.session = store.session
+        self.api.workdir = str(store.path)
+        self._append_log(f"system check stored as {path.name}: {snapshot.summary()}")
 
     def _capture_sweep_point(self, stage: Stage, event: Any) -> None:
         """Record a settled sweep step into the pre-flight table.

@@ -131,6 +131,8 @@ def build_protocol(name: str, settings: dict | None = None) -> list[ProtocolStep
         return build_wash_protocol(settings)
     if name == "Characterise" and settings:
         return build_characterise_protocol(settings)
+    if name == "Gravimetry" and settings:
+        return build_gravimetry_protocol(settings)
     protocol = PIPELINES.get(name)
     if protocol is None:
         raise ValueError(f"Unknown pipeline: {name}")
@@ -517,12 +519,67 @@ CHARACTERISE_FRACTIONS = (0.2, 0.4, 0.6, 0.8, 1.0)
 # Protocols built from settings rather than stored as a fixed step list. They are
 # still valid pipeline names, so they belong in the allowed set even though they
 # have no entry in PIPELINES.
-BUILT_PROTOCOLS = ("Characterise",)
+BUILT_PROTOCOLS = ("Characterise", "Gravimetry")
+
+# Sensor and label per channel, in the order a gravimetric check walks them.
+GRAVIMETRY_CHANNELS = (
+    (OIL_L_SENSOR, "Oil L"),
+    (CELLS_M_SENSOR, "Cells M"),
+    (BEADS_M_SENSOR, "Beads M"),
+)
 
 
 def protocol_names() -> tuple[str, ...]:
     """Every name build_protocol accepts."""
     return tuple(sorted({*PIPELINES, *BUILT_PROTOCOLS}))
+
+
+def build_gravimetry_protocol(settings: dict) -> list[ProtocolStep]:
+    """Dispense a weighed volume from every channel, one replicate at a time.
+
+    Each replicate is two gated steps: one before, so the tube on the outlet is
+    the one that was weighed empty, and one after, so the dispense is not followed
+    by another until its mass has been written down. The scale is not wired to
+    anything -- the operator types the weights into the dispense table, and this
+    protocol only guarantees that what lands in the tube is the commanded volume.
+    """
+    target_ul = float(settings["gravimetric_target_ul"])
+    flow_ul_min = float(settings["gravimetric_flow_ul_min"])
+    replicates = int(settings["gravimetric_replicates"])
+    steps: list[ProtocolStep] = []
+    for sensor, label in GRAVIMETRY_CHANNELS:
+        for replicate in range(1, replicates + 1):
+            position = f"{label} replicate {replicate} of {replicates}"
+            steps.extend(
+                (
+                    ProtocolStep(
+                        name=f"Dispense {label} {replicate}",
+                        sensor_setpoints={sensor: flow_ul_min},
+                        trigger_type="volume",
+                        trigger_params={
+                            "sensor_index": sensor,
+                            "target_volume_ul": target_ul,
+                        },
+                        on_complete="zero",
+                        confirm_message=(
+                            f"{position}: weigh an empty tube, note its mass and put it on "
+                            f"the {label} outlet. Dispensing {target_ul:g} uL at "
+                            f"{flow_ul_min:g} uL/min."
+                        ),
+                    ),
+                    ProtocolStep(
+                        name=f"Weigh {label} {replicate}",
+                        sensor_setpoints={},
+                        trigger_type="time",
+                        trigger_params={"duration_s": 0.0},
+                        confirm_message=(
+                            f"{position} dispensed. Weigh the tube and enter empty and full "
+                            f"into the dispense table, then continue."
+                        ),
+                    ),
+                )
+            )
+    return steps
 
 
 def build_characterise_protocol(settings: dict) -> list[ProtocolStep]:

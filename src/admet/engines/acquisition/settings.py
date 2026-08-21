@@ -4,6 +4,7 @@ from admet.core.engine import Param, ParamKind, ParamOption, ParamSchema
 from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNEL_UNITS,
     FLUIDIC_CHANNELS,
+    GRAVIMETRIC_REPLICATES,
     SENSOR_CALIBRATIONS,
 )
 from admet.engines.acquisition.fluidics.liquids import default_profile_id, profiles_for_unit
@@ -165,6 +166,23 @@ RUN_SETTINGS = ParamSchema(
     )
 )
 
+GRAVIMETRY_SETTINGS = ParamSchema(
+    (
+        Param("pipeline_name", "Pipeline", ParamKind.CHOICE, default="Gravimetry", options=_pipeline_options()),
+        Param("gravimetric_target_ul", "Target Volume", ParamKind.FLOAT, default=100.0, minimum=0.1),
+        Param("gravimetric_flow_ul_min", "Dispense Flow", ParamKind.FLOAT, default=250.0, minimum=0.1),
+        Param(
+            "gravimetric_replicates",
+            "Replicates",
+            ParamKind.INTEGER,
+            default=GRAVIMETRIC_REPLICATES,
+            minimum=1,
+            maximum=GRAVIMETRIC_REPLICATES,
+        ),
+        Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
+    )
+)
+
 WASH_SETTINGS = ParamSchema(
     (
         Param("wash_oil_flow_ul_min", "Oil L Flow", ParamKind.FLOAT, default=250.0, minimum=0.0),
@@ -182,6 +200,7 @@ CONTROL_ENGINE_SETTINGS = merge_schemas(
     CHANNEL_CONTROL_SETTINGS,
     RECORDING_SETTINGS,
     RUN_SETTINGS,
+    GRAVIMETRY_SETTINGS,
     WASH_SETTINGS,
     PROTOCOL_SETTINGS,
     CAMERA_SETTINGS,

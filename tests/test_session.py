@@ -268,5 +268,55 @@ class SessionProjectTests(unittest.TestCase):
         self.assertEqual(loaded.items[0].metadata["run_path"], "analysis")
         self.assertEqual(loaded.items[0].metadata["raw_path"], "analysis/raw.jsonl")
 
+
+class SystemCheckRecordTests(unittest.TestCase):
+    def _store(self, tmpdir):
+        return ProjectStore.create(Path(tmpdir) / "project", "project-1")
+
+    def test_a_check_is_written_as_its_own_json_record(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = self._store(tmpdir)
+
+            path = store.append_system_check(
+                {"kind": "flow", "recorded_at": "2026-08-20T10:00:00+00:00", "flow_checks": []},
+                summary="flow check: feasible",
+            )
+
+            written = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(path.parent, store.path / "records" / "checks")
+            self.assertEqual(written["kind"], "flow")
+            self.assertEqual(written["check_id"], path.stem)
+
+    def test_checks_accumulate_instead_of_overwriting(self):
+        # Comparing this chip against the last one is the point, so an earlier
+        # check must survive a later one.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = self._store(tmpdir)
+
+            first = store.append_system_check({"kind": "flow"}, summary="first")
+            second = store.append_system_check({"kind": "dispense"}, summary="second")
+
+            self.assertNotEqual(first, second)
+            self.assertTrue(first.is_file())
+            self.assertTrue(second.is_file())
+            item = next(item for item in store.session.items if item.id == "system-checks")
+            self.assertEqual(item.metadata["check_count"], 2)
+            self.assertEqual(item.metadata["latest_summary"], "second")
+
+    def test_a_stored_check_survives_a_reload(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = self._store(tmpdir)
+            store.append_system_check({"kind": "flow"}, summary="flow check: feasible")
+
+            loaded = load_session(store.path)
+
+            file = next(file for file in loaded.files if file.role == "system_check")
+            self.assertFalse(Path(file.path).is_absolute())
+            self.assertEqual(file.media_type, "application/json")
+            self.assertEqual(file.metadata["summary"], "flow check: feasible")
+            item = next(item for item in loaded.items if item.id == "system-checks")
+            self.assertEqual(item.files, (file.id,))
+
+
 if __name__ == "__main__":
     unittest.main()

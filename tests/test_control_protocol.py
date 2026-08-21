@@ -1,14 +1,26 @@
 import time
 import unittest
 
+from admet.engines.acquisition.fluidics.config import (
+    BEADS_M_SENSOR,
+    CELLS_M_SENSOR,
+    OIL_L_SENSOR,
+)
 from admet.engines.acquisition.protocol import (
     PIPELINES,
     protocol_names,
     StabilityTrigger,
     build_characterise_protocol,
+    build_gravimetry_protocol,
     build_protocol,
     create_trigger,
 )
+
+GRAVIMETRY_SETTINGS = {
+    "gravimetric_target_ul": 100.0,
+    "gravimetric_flow_ul_min": 250.0,
+    "gravimetric_replicates": 2,
+}
 
 SETTINGS = {"run_oil_flow_ul_min": 300.0, "run_aqueous_total_flow_ul_min": 80.0}
 
@@ -110,10 +122,58 @@ class CharacteriseProtocolTests(unittest.TestCase):
             "wash_oil_volume_ul": 500.0,
             "wash_pressure_mbar": 2000.0,
             "wash_pressure_duration_s": 120.0,
+            "gravimetric_target_ul": 100.0,
+            "gravimetric_flow_ul_min": 250.0,
+            "gravimetric_replicates": 3,
         }
 
         for name in protocol_names():
             self.assertTrue(build_protocol(name, every_setting), name)
+
+
+class GravimetryProtocolTests(unittest.TestCase):
+    def test_every_channel_is_dispensed_for_every_replicate(self):
+        steps = build_gravimetry_protocol(GRAVIMETRY_SETTINGS)
+
+        dispenses = [step for step in steps if step.name.startswith("Dispense")]
+        self.assertEqual(len(dispenses), 6)
+        self.assertEqual(
+            [next(iter(step.sensor_setpoints)) for step in dispenses],
+            [OIL_L_SENSOR, OIL_L_SENSOR, CELLS_M_SENSOR, CELLS_M_SENSOR, BEADS_M_SENSOR, BEADS_M_SENSOR],
+        )
+
+    def test_a_dispense_pushes_the_target_volume_at_the_dispense_flow(self):
+        step = build_gravimetry_protocol(GRAVIMETRY_SETTINGS)[0]
+
+        self.assertEqual(step.sensor_setpoints, {OIL_L_SENSOR: 250.0})
+        self.assertEqual(step.trigger_type, "volume")
+        self.assertEqual(step.trigger_params["target_volume_ul"], 100.0)
+        self.assertEqual(step.on_complete, "zero")
+
+    def test_every_dispense_is_gated_before_and_after(self):
+        # Before, so the tube on the outlet is the one that was weighed empty;
+        # after, so a dispense is never followed by another before it is weighed.
+        steps = build_gravimetry_protocol(GRAVIMETRY_SETTINGS)
+
+        self.assertTrue(all(step.confirm_message for step in steps))
+        self.assertEqual([step.name for step in steps[:2]], ["Dispense Oil L 1", "Weigh Oil L 1"])
+        self.assertIn("weigh an empty tube", steps[0].confirm_message)
+        self.assertIn("enter empty and full", steps[1].confirm_message)
+
+    def test_the_replicate_count_drives_the_step_count(self):
+        one = build_gravimetry_protocol({**GRAVIMETRY_SETTINGS, "gravimetric_replicates": 1})
+        three = build_gravimetry_protocol({**GRAVIMETRY_SETTINGS, "gravimetric_replicates": 3})
+
+        self.assertEqual(len(one), 6)
+        self.assertEqual(len(three), 18)
+
+    def test_gravimetry_is_reachable_through_build_protocol(self):
+        self.assertEqual(
+            build_protocol("Gravimetry", GRAVIMETRY_SETTINGS),
+            build_gravimetry_protocol(GRAVIMETRY_SETTINGS),
+        )
+        self.assertIn("Gravimetry", protocol_names())
+        self.assertNotIn("Gravimetry", PIPELINES)
 
 
 if __name__ == "__main__":

@@ -96,7 +96,17 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             stage_ids,
-            ["scene", "fluigent", "corrections", "characterise", "priming", "runs", "wash", "cleanup"],
+            [
+                "scene",
+                "fluigent",
+                "corrections",
+                "characterise",
+                "gravimetry",
+                "priming",
+                "runs",
+                "wash",
+                "cleanup",
+            ],
         )
         # The system check is optional and sits after corrections, because it needs the
         # correction factors applied for its flow readings to be true flows.
@@ -108,6 +118,14 @@ class WorkflowTests(unittest.TestCase):
             "fluidics_connected and corrections_applied",
             {action.guard for action in characterise.actions},
         )
+        # The two checks are separate stages: one sweeps flows, one weighs dispenses,
+        # and either can be skipped without the other.
+        gravimetry = next(stage for stage in workflow.stages if stage.id == "gravimetry")
+        self.assertTrue(gravimetry.skippable)
+        self.assertTrue(gravimetry.pipeline)
+        self.assertEqual(gravimetry.settings_options["pipeline_name"], "Gravimetry")
+        # It gates on the operator between dispenses, so it needs a confirm action.
+        self.assertIn("confirm_protocol", {action.action for action in gravimetry.actions})
         self.assertEqual(scene.editor.kind, "control_live")
         self.assertTrue(scene.editor.persistent)
         self.assertIn("camera", scene.features)

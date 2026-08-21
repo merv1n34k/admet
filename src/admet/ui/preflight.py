@@ -23,10 +23,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from admet.engines.acquisition.fluidics.config import GRAVIMETRIC_REPLICATES
 from admet.ui import theme as ui
 from admet.ui.theme import Theme
 from admet.workflows.preflight import (
+    CHECK_DISPENSE,
+    CHECK_FLOW,
     REFERENCE_FLOWS,
+    CheckConditions,
+    CheckSnapshot,
+    DispenseCheck,
+    FlowCheck,
     FlowSetup,
     GravimetricRun,
     LiquidVolumes,
@@ -35,13 +42,16 @@ from admet.workflows.preflight import (
     gravimetric_factors,
     ChannelPath,
     Segment,
+    SystemResistance,
     assess_feasibility,
+    chip_resistance,
+    emulsion_viscosity,
     fit_system_resistance,
     layout_back_pressure,
     solve_flows,
 )
 
-GRAVIMETRIC_ROWS = 3
+GRAVIMETRIC_ROWS = GRAVIMETRIC_REPLICATES
 SYSTEM_SWEEP_ROWS = 5
 
 # Inner diameters, which is what sets the resistance. Tubing is usually quoted by
@@ -461,6 +471,15 @@ class PreflightPanel(QWidget):
         limits.setHorizontalSpacing(10)
         _field(limits, 0, 0, "Pressure limit", self.pressure_limit)
         body.addLayout(limits)
+        note = QLabel(
+            "The limit is one pressure unit's ceiling, applied to each channel on its "
+            "own -- the channels do not share a budget. Where the units differ, enter "
+            "the lowest. These figures are tubing only; what the chip costs is measured "
+            "below, not calculated here."
+        )
+        note.setObjectName("StageSummary")
+        note.setWordWrap(True)
+        body.addWidget(note)
 
         self.layout_result = _value_label()
         self.layout_result.setWordWrap(True)
@@ -497,11 +516,28 @@ class PreflightPanel(QWidget):
         limit = self.pressure_limit.value()
         return (bore_mm, drop / limit if limit else 0.0)
 
+    def _outlet_viscosity(self) -> float:
+        """The emulsion's viscosity, not the oil's.
+
+        Downstream of the chip the carrier is packed with aqueous droplets and
+        flows less easily than either liquid alone. The outlet carries every
+        channel's flow, so this is the segment least worth under-counting.
+        """
+        setup = self.setup()
+        total = setup.total_ul_min
+        if not self._channel_labels or total <= 0:
+            return 1.24
+        carrier = self._channel_viscosity(self._channel_labels[0])
+        aqueous = [
+            self._channel_viscosity(channel) for channel in self._channel_labels[1:]
+        ]
+        dispersed = sum(aqueous) / len(aqueous) if aqueous else carrier
+        return emulsion_viscosity(carrier, dispersed, setup.aqueous_ul_min / total)
+
     def _outlet_style(self) -> tuple[float, float]:
         bore_mm = float(self.outlet_bore.currentData())
         total = self.oil_flow.value() + self.beads_flow.value() + self.cells_flow.value()
-        viscosity = self._channel_viscosity(self._channel_labels[0]) if self._channel_labels else 1.24
-        drop = Segment(self.outlet_length.value(), bore_mm).resistance(viscosity) * total
+        drop = Segment(self.outlet_length.value(), bore_mm).resistance(self._outlet_viscosity()) * total
         limit = self.pressure_limit.value()
         return (bore_mm, drop / limit if limit else 0.0)
 
@@ -567,9 +603,7 @@ class PreflightPanel(QWidget):
         loads = layout_back_pressure(
             paths,
             outlet=outlet,
-            outlet_viscosity_mpa_s=self._channel_viscosity(self._channel_labels[0])
-            if self._channel_labels
-            else 1.24,
+            outlet_viscosity_mpa_s=self._outlet_viscosity(),
         )
         limit = self.pressure_limit.value()
         lines = []
@@ -669,20 +703,49 @@ class PreflightPanel(QWidget):
         )
         return panel
 
-    def _recalculate_system(self) -> None:
-        limit = self.pressure_limit.value()
-        targets = (self.oil_flow.value(), self.beads_flow.value(), self.cells_flow.value())
+    def _outlet_segment(self) -> Segment:
+        return Segment(self.outlet_length.value(), float(self.outlet_bore.currentData()))
 
-        measured: list[tuple[str, object, float]] = []
+    def _tubing_resistance(self, channel: str, target_ul_min: float) -> float:
+        """The share of a channel's resistance that re-plumbing could actually change."""
+        if target_ul_min <= 0:
+            return 0.0
+        drop = next(
+            (
+                load.total_mbar
+                for load in layout_back_pressure(
+                    self._channel_paths(),
+                    outlet=self._outlet_segment(),
+                    outlet_viscosity_mpa_s=self._outlet_viscosity(),
+                )
+                if load.label == channel
+            ),
+            0.0,
+        )
+        return drop / target_ul_min
+
+    def _measured_channels(
+        self,
+    ) -> list[tuple[str, tuple[tuple[float, float], ...], SystemResistance, float]]:
+        """Channels with enough swept points to fit, as (channel, samples, fit, target)."""
+        targets = (self.oil_flow.value(), self.beads_flow.value(), self.cells_flow.value())
+        measured = []
         for index, channel in enumerate(self._channel_labels):
-            samples = [
+            samples = tuple(
                 (row[index][0].value(), row[index][1].value())
                 for row in self._system_rows
                 if row[index][0].value() > 0 and row[index][1].value() > 0
-            ]
+            )
             if len(samples) >= 2:
                 target = targets[index] if index < len(targets) else 0.0
-                measured.append((channel, fit_system_resistance(samples), target))
+                measured.append((channel, samples, fit_system_resistance(samples), target))
+        return measured
+
+    def _recalculate_system(self) -> None:
+        limit = self.pressure_limit.value()
+        measured = [
+            (channel, fit, target) for channel, _samples, fit, target in self._measured_channels()
+        ]
 
         if not measured:
             self.system_fit.setText(
@@ -698,23 +761,15 @@ class PreflightPanel(QWidget):
         for channel, system, target in measured:
             tubing_r = 0.0
             if target > 0:
-                tubing_r = (
-                    next(
-                        (load.total_mbar for load in layout_back_pressure(
-                            self._channel_paths(),
-                            outlet=Segment(
-                                self.outlet_length.value(), float(self.outlet_bore.currentData())
-                            ),
-                        ) if load.label == channel),
-                        0.0,
-                    )
-                    / target
-                )
+                tubing_r = self._tubing_resistance(channel, target)
+            chip_r = chip_resistance(system.resistance, tubing_r)
             share = tubing_r / system.resistance * 100 if system.resistance > 0 else 0.0
             line = (
-                f"{channel}: R {system.resistance:.2f} mbar per uL/min, "
-                f"P0 {system.threshold_mbar:,.0f} mbar (r2 {system.r_squared:.3f}, n={system.samples}); "
-                f"tubing {share:.1f}% of it, chip and fittings the rest"
+                f"{channel}: R {system.resistance:.2f} mbar per uL/min "
+                f"= tubing {tubing_r:.2f} ({share:.0f}%) + chip and fittings {chip_r:.2f}; "
+                f"P0 {system.threshold_mbar:,.0f} mbar (r2 {system.r_squared:.3f}, "
+                f"n={system.samples}). The chip costs {chip_r * target:,.0f} mbar at "
+                f"{target:g} uL/min"
             )
             if not system.trustworthy:
                 line += " -- poor fit, suspect a leak, partial clog or bubbles"
@@ -747,6 +802,71 @@ class PreflightPanel(QWidget):
         self._set_verdict(result.feasible, verdict)
         self.system_remedies.setText(
             "\n".join(f"- {item}" for item in result.remedies) if result.remedies else ""
+        )
+
+    # ---- snapshots -------------------------------------------------------
+    def conditions(self) -> CheckConditions:
+        """The setup as it stands, to be frozen alongside a measurement."""
+        return CheckConditions(
+            setup=self.setup(),
+            liquids=dict(self._liquids()),
+            paths=tuple(self._channel_paths()),
+            outlet=self._outlet_segment(),
+            pressure_limit_mbar=self.pressure_limit.value(),
+        )
+
+    def flow_checks(self) -> tuple[FlowCheck, ...]:
+        limit = self.pressure_limit.value()
+        return tuple(
+            FlowCheck(
+                channel=channel,
+                samples=samples,
+                resistance=fit,
+                feasibility=assess_feasibility(
+                    fit,
+                    target_flow_ul_min=target,
+                    limit_mbar=limit,
+                    tubing_resistance=self._tubing_resistance(channel, target),
+                ),
+                tubing_resistance=self._tubing_resistance(channel, target),
+            )
+            for channel, samples, fit, target in self._measured_channels()
+        )
+
+    def dispense_checks(self) -> tuple[DispenseCheck, ...]:
+        densities = {name: values[0] for name, values in self._liquids().items()}
+        target = self.target_volume.value()
+        runs_by_channel: dict[str, list[GravimetricRun]] = {}
+        for row in self._gravimetric_rows:
+            empty = row["empty"].value()
+            full = row["full"].value()
+            if full <= empty:
+                continue
+            channel = str(row["channel"])
+            runs_by_channel.setdefault(channel, []).append(GravimetricRun(channel, empty, full))
+
+        checks = []
+        for channel, runs in runs_by_channel.items():
+            result = gravimetric_factors(runs, densities=densities, target_ul=target)[0]
+            checks.append(
+                DispenseCheck(
+                    channel=channel,
+                    target_ul=target,
+                    flow_ul_min=self.dispense_flow.value(),
+                    runs=tuple(runs),
+                    result=result,
+                )
+            )
+        return tuple(checks)
+
+    def snapshot(self, kind: str, recorded_at: str) -> CheckSnapshot:
+        """One check, with everything its verdict rests on."""
+        return CheckSnapshot(
+            kind=kind,
+            recorded_at=recorded_at,
+            conditions=self.conditions(),
+            flow_checks=self.flow_checks() if kind == CHECK_FLOW else (),
+            dispense_checks=self.dispense_checks() if kind == CHECK_DISPENSE else (),
         )
 
     def record_sweep_point(self, step: int, pressures: list[float], flows: list[float]) -> None:

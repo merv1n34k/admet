@@ -20,6 +20,10 @@ FLUIDIC_CHANNEL_UNITS = {
     "cells_m": "M",
     "beads_m": "M",
 }
+# Weighed dispenses per channel. The dispense table holds this many rows, so a
+# check asking for more would have nowhere to write its weights.
+GRAVIMETRIC_REPLICATES = 3
+
 OIL_L_SENSOR = 0
 CELLS_M_SENSOR = 1
 BEADS_M_SENSOR = 2

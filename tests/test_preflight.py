@@ -1,6 +1,13 @@
+import json
 import unittest
 
 from admet.workflows.preflight import (
+    CHECK_DISPENSE,
+    CHECK_FLOW,
+    CheckConditions,
+    CheckSnapshot,
+    DispenseCheck,
+    FlowCheck,
     FlowSetup,
     GravimetricRun,
     LiquidVolumes,
@@ -10,6 +17,8 @@ from admet.workflows.preflight import (
     ChannelPath,
     Segment,
     assess_feasibility,
+    chip_resistance,
+    emulsion_viscosity,
     fit_system_resistance,
     layout_back_pressure,
     solve_flows,
@@ -350,6 +359,143 @@ class LayoutTests(unittest.TestCase):
         for load in loads:
             self.assertEqual(load.outlet_mbar, 0.0)
             self.assertEqual(load.total_mbar, load.path_mbar)
+
+
+class EmulsionViscosityTests(unittest.TestCase):
+    def test_no_droplets_leaves_the_carrier_alone(self):
+        self.assertEqual(emulsion_viscosity(1.24, 1.0, 0.0), 1.24)
+
+    def test_the_emulsion_is_thicker_than_either_liquid(self):
+        # This is the point: what leaves the chip flows less easily than the oil
+        # that went in, and the outlet carries every channel's flow.
+        thickened = emulsion_viscosity(1.24, 1.0, 0.35)
+
+        self.assertGreater(thickened, 1.24)
+        self.assertGreater(thickened, 1.0)
+
+    def test_it_rises_with_the_aqueous_fraction(self):
+        low = emulsion_viscosity(1.24, 1.0, 0.1)
+        high = emulsion_viscosity(1.24, 1.0, 0.4)
+
+        self.assertGreater(high, low)
+
+    def test_rigid_droplets_reduce_to_the_einstein_limit(self):
+        # As the dispersed phase stiffens, Taylor's shape factor tends to 2.5.
+        self.assertAlmostEqual(emulsion_viscosity(1.0, 1e9, 0.2), 1.0 + 2.5 * 0.2, places=6)
+
+    def test_a_nonsense_fraction_cannot_produce_a_nonsense_viscosity(self):
+        self.assertEqual(emulsion_viscosity(1.24, 1.0, -5.0), 1.24)
+        self.assertGreater(emulsion_viscosity(1.24, 1.0, 50.0), 1.24)
+        self.assertEqual(emulsion_viscosity(0.0, 1.0, 0.3), 0.0)
+
+
+class ChipResistanceTests(unittest.TestCase):
+    def test_the_chip_is_what_the_fit_leaves_after_the_plumbing(self):
+        self.assertAlmostEqual(chip_resistance(13.33, 4.52), 8.81, places=6)
+
+    def test_plumbing_larger_than_the_fit_reads_as_no_chip_rather_than_negative(self):
+        # Happens when the entered layout overstates the tubing; a negative chip
+        # would be worse than useless.
+        self.assertEqual(chip_resistance(2.0, 5.0), 0.0)
+
+    def test_an_unmeasured_channel_leaves_the_chip_unknown_not_negative(self):
+        self.assertEqual(chip_resistance(0.0, 0.0), 0.0)
+
+
+class CheckSnapshotTests(unittest.TestCase):
+    def _conditions(self):
+        return CheckConditions(
+            setup=FlowSetup(250.0, 67.0, 67.0),
+            liquids={"Oil L": (0.99, 1.24)},
+            paths=(ChannelPath("Oil L", (Segment(20.0, 0.75), Segment(5.0, 0.25)), 250.0, 1.24),),
+            outlet=Segment(20.0, 0.25),
+            pressure_limit_mbar=2000.0,
+        )
+
+    def _flow_snapshot(self, samples):
+        fit = fit_system_resistance(samples)
+        return CheckSnapshot(
+            kind=CHECK_FLOW,
+            recorded_at="2026-08-20T10:00:00+00:00",
+            conditions=self._conditions(),
+            flow_checks=(
+                FlowCheck(
+                    "Oil L",
+                    tuple(samples),
+                    fit,
+                    assess_feasibility(fit, target_flow_ul_min=250.0, limit_mbar=2000.0),
+                ),
+            ),
+        )
+
+    def test_a_snapshot_survives_a_json_round_trip(self):
+        snapshot = self._flow_snapshot([(500.0, 50.0), (1000.0, 100.0), (1500.0, 150.0)])
+
+        restored = json.loads(json.dumps(snapshot.to_dict()))
+
+        self.assertEqual(restored["kind"], CHECK_FLOW)
+        self.assertEqual(restored["recorded_at"], "2026-08-20T10:00:00+00:00")
+        self.assertEqual(len(restored["flow_checks"][0]["samples"]), 3)
+
+    def test_the_snapshot_carries_the_setup_the_check_was_run_on(self):
+        # Without the plumbing and the liquid, a resistance figure cannot be
+        # compared against a later check.
+        conditions = self._flow_snapshot([(500.0, 50.0), (1000.0, 100.0)]).to_dict()["conditions"]
+
+        self.assertEqual(conditions["liquids"]["Oil L"]["viscosity_mpa_s"], 1.24)
+        self.assertEqual(conditions["layout"]["outlet"], {"length_cm": 20.0, "bore_mm": 0.25})
+        self.assertEqual(
+            conditions["layout"]["channels"][0]["runs"],
+            [{"length_cm": 20.0, "bore_mm": 0.75}, {"length_cm": 5.0, "bore_mm": 0.25}],
+        )
+        self.assertAlmostEqual(conditions["flows_ul_min"]["phase_ratio"], 1.866, places=3)
+
+    def test_the_stored_fit_splits_the_path_into_plumbing_and_chip(self):
+        fit = fit_system_resistance([(500.0, 50.0), (1000.0, 100.0), (1500.0, 150.0)])
+        check = FlowCheck(
+            "Oil L",
+            ((500.0, 50.0), (1000.0, 100.0), (1500.0, 150.0)),
+            fit,
+            assess_feasibility(fit, target_flow_ul_min=250.0, limit_mbar=2000.0),
+            tubing_resistance=2.0,
+        )
+
+        written = check.to_dict()["fit"]
+
+        self.assertAlmostEqual(written["resistance_mbar_per_ul_min"], 10.0, places=6)
+        self.assertEqual(written["tubing_mbar_per_ul_min"], 2.0)
+        self.assertAlmostEqual(written["chip_mbar_per_ul_min"], 8.0, places=6)
+
+    def test_the_summary_names_a_channel_that_cannot_reach_its_flow(self):
+        # 10 mbar per uL/min needs 2,500 mbar at 250 uL/min, over the 2,000 limit.
+        snapshot = self._flow_snapshot([(500.0, 50.0), (1000.0, 100.0), (1500.0, 150.0)])
+
+        self.assertIn("not feasible", snapshot.summary())
+        self.assertIn("Oil L", snapshot.summary())
+
+    def test_a_feasible_sweep_reads_as_feasible(self):
+        snapshot = self._flow_snapshot([(100.0, 50.0), (200.0, 100.0), (300.0, 150.0)])
+
+        self.assertTrue(snapshot.flow_checks[0].feasibility.feasible)
+        self.assertIn("feasible", snapshot.summary())
+        self.assertNotIn("not feasible", snapshot.summary())
+
+    def test_a_dispense_snapshot_keeps_the_weights_behind_the_factor(self):
+        runs = (GravimetricRun("Oil L", 1.0, 1.099), GravimetricRun("Oil L", 1.0, 1.1))
+        result = gravimetric_factors(runs, densities={"Oil L": 0.99}, target_ul=100.0)[0]
+        snapshot = CheckSnapshot(
+            kind=CHECK_DISPENSE,
+            recorded_at="2026-08-20T10:00:00+00:00",
+            conditions=self._conditions(),
+            dispense_checks=(DispenseCheck("Oil L", 100.0, 250.0, runs, result),),
+        )
+
+        written = snapshot.to_dict()["dispense_checks"][0]
+
+        self.assertEqual(len(written["weights_g"]), 2)
+        self.assertAlmostEqual(written["weights_g"][0]["net"], 0.099, places=6)
+        self.assertAlmostEqual(written["result"]["mean_factor"], 1.005, places=3)
+        self.assertIn("Oil L 1.005", snapshot.summary())
 
 
 if __name__ == "__main__":

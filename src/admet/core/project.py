@@ -129,6 +129,52 @@ class ProjectStore:
         self._register_control_recording(normalized)
         self.save()
 
+    def append_system_check(self, snapshot: dict[str, Any], *, summary: str = "") -> Path:
+        """Store one system check as its own JSON record under records/checks.
+
+        Checks accumulate rather than overwrite: what matters is comparing today's
+        chip against the last one, so each run keeps its own stamped file and the
+        manifest lists them all under a single item.
+        """
+        kind = str(snapshot.get("kind") or "check").strip() or "check"
+        check_id = _stamped_id(f"check-{kind}")
+        path = self.records_dir / "checks" / f"{check_id}.json"
+        _write_metadata(path, {**snapshot, "check_id": check_id})
+
+        file = self.upsert_file_path(
+            path,
+            role="system_check",
+            media_type="application/json",
+            metadata={
+                "check_id": check_id,
+                "kind": kind,
+                "recorded_at": str(snapshot.get("recorded_at") or ""),
+                "summary": summary,
+            },
+            id_hint=check_id,
+        )
+        existing = _find_item(self.session.items, "system-checks")
+        item_files = list(existing.files if existing else ())
+        if file.id not in item_files:
+            item_files.append(file.id)
+        item = SessionItem(
+            id="system-checks",
+            project_type="system_check",
+            engine="acquisition",
+            files=tuple(item_files),
+            metadata={
+                "check_count": len(item_files),
+                "report_dir": "records/checks",
+                "latest": check_id,
+                "latest_summary": summary,
+            },
+        )
+        self.session = replace(
+            self.session, items=tuple(_upsert_item(list(self.session.items), item))
+        )
+        self.save()
+        return path
+
     def analysis_run_target(self, label: str = "analysis") -> AnalysisRunTarget:
         # A project keeps a single, stable analysis output: one raw.jsonl and one
         # run.json in the analysis dir. Runs are idempotent -- re-running rewrites

@@ -4,6 +4,7 @@ from admet.engines.acquisition.settings import (
     CAMERA_SETTINGS,
     CORRECTION_SETTINGS,
     FLUIGENT_SETTINGS,
+    GRAVIMETRY_SETTINGS,
     PROTOCOL_SETTINGS,
     RUN_SETTINGS,
     WASH_SETTINGS,
@@ -115,6 +116,11 @@ RUN_MAIN_SETTINGS = (
 CHARACTERISE_MAIN_SETTINGS = (
     "run_oil_flow_ul_min",
     "run_aqueous_total_flow_ul_min",
+)
+GRAVIMETRY_MAIN_SETTINGS = (
+    "gravimetric_target_ul",
+    "gravimetric_flow_ul_min",
+    "gravimetric_replicates",
 )
 WASH_MAIN_SETTINGS = (
     "wash_oil_flow_ul_min",
@@ -264,7 +270,7 @@ def create_control_workflow() -> Workflow:
             ),
             Stage(
                 "characterise",
-                "4. System check",
+                "4. System check: flow",
                 action="run_protocol",
                 description="Sweep the working flows to measure what the plumbing and chip cost.",
                 instructions=(
@@ -303,12 +309,63 @@ def create_control_workflow() -> Workflow:
                     "main": CHARACTERISE_MAIN_SETTINGS,
                     "pipeline_name": "Characterise",
                     "pipeline_label": "Start Sweep",
-                    "completion_message": "Sweep complete. The readings are in the pre-flight section.",
+                    "completion_message": (
+                        "Sweep complete. The readings are in the pre-flight section, and the "
+                        "check is stored with the project."
+                    ),
+                },
+            ),
+            Stage(
+                "gravimetry",
+                "5. System check: dispense",
+                action="run_protocol",
+                description="Dispense a weighed volume per channel to check what the sensors report.",
+                instructions=(
+                    "Optional. Run it when a channel's readings are suspect, or after changing a "
+                    "liquid, to derive the scale its profile should carry.",
+                ),
+                instruction_cards=(
+                    StageInstruction(
+                        "Have the balance ready. Each replicate stops twice: once to place a tube "
+                        "weighed empty, once to weigh it full.",
+                    ),
+                    StageInstruction(
+                        "Enter both masses in the pre-flight dispense table as you go. The factor "
+                        "it derives is what belongs in the liquid profile.",
+                    ),
+                ),
+                settings=GRAVIMETRY_SETTINGS,
+                actions=(
+                    StageAction(
+                        "Start Dispense",
+                        "run_protocol",
+                        guard="fluidics_connected and corrections_applied",
+                        active_when="pipeline_running",
+                        kind="pipeline",
+                    ),
+                    StageAction("Pause", "pause_protocol", guard="pipeline_running", variant="secondary"),
+                    StageAction("Proceed", "confirm_protocol", guard="pipeline_waiting", variant="warning"),
+                    StageAction("Skip Step", "skip_protocol", guard="pipeline_waiting", variant="secondary"),
+                    StageAction("Continue", completes=True, guard="pipeline_complete", variant="warning"),
+                ),
+                editor=CONTROL_LIVE_EDITOR,
+                results=CONTROL_RESULTS,
+                features=("fluidics",),
+                pipeline=True,
+                skippable=True,
+                settings_options={
+                    "main": GRAVIMETRY_MAIN_SETTINGS,
+                    "pipeline_name": "Gravimetry",
+                    "pipeline_label": "Start Dispense",
+                    "completion_message": (
+                        "Dispenses complete. The factors are in the pre-flight section, and the "
+                        "check is stored with the project."
+                    ),
                 },
             ),
             Stage(
                 "priming",
-                "5. Priming protocol",
+                "6. Priming protocol",
                 action="run_protocol",
                 description="Run the priming pipeline and confirm gated steps as prompted.",
                 instructions=("Run priming and press Proceed when the protocol asks for confirmation.",),
@@ -339,7 +396,7 @@ def create_control_workflow() -> Workflow:
             ),
             Stage(
                 "runs",
-                "6. Test runs",
+                "7. Test runs",
                 action="run_protocol",
                 description="Recorded Drop-Seq or custom run protocol with CSV/video session output.",
                 instructions=("Run the test protocol. Recording is managed by the protocol.",),
@@ -378,7 +435,7 @@ def create_control_workflow() -> Workflow:
             ),
             Stage(
                 "wash",
-                "7. Post-process wash",
+                "8. Post-process wash",
                 action="run_protocol",
                 description="Post-run wash and shutdown path.",
                 instructions=("Run the wash protocol and confirm gated steps as prompted.",),
@@ -414,7 +471,7 @@ def create_control_workflow() -> Workflow:
             ),
             Stage(
                 "cleanup",
-                "8. Cleanup",
+                "9. Cleanup",
                 description="Disconnect devices and finish the control session.",
                 instructions=(
                     "Disconnect devices, clean the chip area, check tubing, and confirm the desk is clear.",
