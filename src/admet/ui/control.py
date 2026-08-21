@@ -50,9 +50,11 @@ from admet.core.session import load_session, new_session, save_session, session_
 from admet.workflows import Stage, StageControl, StageStatus
 from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNEL_LABELS,
+    FLUIDIC_CHANNELS,
 )
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES, LIQUID_PROFILE_PARAM_NAMES
 from admet.engines.acquisition.fluidics.liquids import profile_by_id
+from admet.ui.preflight import PreflightPanel
 from admet.ui import theme as ui
 from admet.ui.data import (
     VIDEO_TABLE_COLUMNS,
@@ -271,6 +273,9 @@ class ControlWindow(QMainWindow):
         # Corrections have to reach the hardware before the stage can be left, and
         # editing any correction value makes the applied set stale again.
         self._corrections_applied = False
+        self._preflight: PreflightPanel | None = None
+        self._preflight_active = False
+        self.preflight_label: QLabel | None = None
 
         self.setWindowTitle("admet control")
         self.resize(1440, 920)
@@ -458,6 +463,22 @@ class ControlWindow(QMainWindow):
 
             layout.addWidget(section)
             self.toc_rows.append({"dot": dot, "label": label, "section": section})
+
+        # Planning, listed under the workflow but outside it: it carries no status
+        # dot because it is never pending or complete.
+        preflight_row = QWidget()
+        preflight_row.setObjectName("TocRow")
+        preflight_row.setCursor(Qt.CursorShape.PointingHandCursor)
+        preflight_row.mousePressEvent = lambda _event: self._show_preflight()  # type: ignore[method-assign]
+        preflight_layout = QHBoxLayout(preflight_row)
+        preflight_layout.setContentsMargins(0, 8, 0, 3)
+        preflight_layout.setSpacing(7)
+        self.preflight_label = QLabel("Pre-flight")
+        self.preflight_label.setObjectName("TocStage")
+        preflight_layout.addWidget(_status_dot("inactive", 8))
+        preflight_layout.addWidget(self.preflight_label, 1)
+        layout.addWidget(preflight_row)
+
         layout.addStretch()
         return panel
 
@@ -468,7 +489,11 @@ class ControlWindow(QMainWindow):
             self.stage_pages[stage.id] = page
             if self.stage_stack is not None:
                 self.stage_stack.addWidget(page)
-        if self.stage_stack is not None and self.stage_stack.currentWidget() is not page:
+        if (
+            self.stage_stack is not None
+            and not self._preflight_active
+            and self.stage_stack.currentWidget() is not page
+        ):
             self.stage_stack.setCurrentWidget(page)
         self.current_stage_page = page
         self.action_box_panel = page.action_box_panel
@@ -557,6 +582,28 @@ class ControlWindow(QMainWindow):
         self._notify("Project created", "success")
         self._append_log(f"project: created {self.project_path}")
         self._render_current_stage()
+
+    def _show_preflight(self) -> None:
+        """Show the planning section. It changes no workflow state."""
+        if self._preflight is None:
+            self._preflight = PreflightPanel(
+                channel_labels=FLUIDIC_CHANNEL_LABELS,
+                densities=self._channel_densities,
+            )
+            self.stage_stack.addWidget(self._preflight)
+        self._preflight_active = True
+        self._preflight.recalculate()
+        self.stage_stack.setCurrentWidget(self._preflight)
+        self._sync_toc()
+
+    def _channel_densities(self) -> dict[str, float]:
+        """Density per channel label, taken from each channel's selected liquid."""
+        densities: dict[str, float] = {}
+        for (prefix, label, *_rest) in FLUIDIC_CHANNELS:
+            profile = profile_by_id(str(self.values.get(f"{prefix}_profile", "")))
+            if profile is not None and profile.density:
+                densities[label] = profile.density
+        return densities
 
     def _build_project_menu(self) -> QMenu:
         """Discovered projects, listed the way the analyze picker lists them."""
@@ -647,6 +694,7 @@ class ControlWindow(QMainWindow):
 
     def _select_stage(self, index: int) -> None:
         index = max(0, min(index, len(self.workflow.stages) - 1))
+        self._preflight_active = False
         self._dismiss_notification(restore_instruction=False)
         statuses = dict(self.workflow_state.statuses)
         current = self.workflow.current_stage(self.workflow_state)
@@ -1334,6 +1382,11 @@ class ControlWindow(QMainWindow):
         except Exception as exc:
             self._handle_action_error(action, exc, refresh=refresh, raise_errors=raise_errors)
             return None
+        if action == "apply_corrections":
+            # Recorded here rather than at the call sites so every route -- the
+            # action box, the debounced auto-apply, a liquid profile switch --
+            # counts as the corrections having reached the hardware.
+            self._corrections_applied = True
         return self._handle_action_result(
             action,
             result,
@@ -1812,8 +1865,14 @@ class ControlWindow(QMainWindow):
     def _sync_toc(self) -> None:
         rows = toc_row_states(self.workflow, self.workflow_state, status_for=lambda index, _stage: self._status_key(index))
         for state, row in zip(rows, self.toc_rows, strict=True):
-            _apply_dot_status(row["dot"], state.status)
-            row["label"].setStyleSheet(_toc_label_qss(state.status))
+            # While the planning section is open no workflow stage is the current one.
+            status = "inactive" if self._preflight_active and state.status == "current" else state.status
+            _apply_dot_status(row["dot"], status)
+            row["label"].setStyleSheet(_toc_label_qss(status))
+        if self.preflight_label is not None:
+            self.preflight_label.setStyleSheet(
+                _toc_label_qss("current" if self._preflight_active else "inactive")
+            )
 
     def _status_key(self, index: int) -> str:
         stage = self.workflow.stages[index]
@@ -2022,14 +2081,8 @@ class ControlWindow(QMainWindow):
         QTimer.singleShot(0, self._render_current_stage)
 
     def _apply_correction_values(self) -> None:
-        if self._run("apply_corrections", raise_errors=False, refresh=False) is not None:
-            self._corrections_applied = True
-            self._refresh_action_box(self.workflow.current_stage(self.workflow_state))
-
-    def _apply_all_corrections(self) -> None:
-        if self._run("apply_corrections", refresh=False) is not None:
-            self._corrections_applied = True
-        self._render_current_stage()
+        self._run("apply_corrections", raise_errors=False, refresh=False)
+        self._refresh_action_box(self.workflow.current_stage(self.workflow_state))
 
     def _action_enabled(self, action: str | None) -> bool:
         if action is None:

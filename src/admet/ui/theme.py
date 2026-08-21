@@ -217,8 +217,25 @@ def button(
     return apply_button_style(widget, variant=variant, size=size)
 
 
+def mono_family() -> str:
+    """A fixed-pitch family that is actually installed.
+
+    Qt style sheets accept a single family rather than a CSS fallback list, and
+    naming one that is missing makes Qt build its font-alias table -- around 200ms
+    at startup, reported as "Populating font family aliases".
+    """
+    from PySide6.QtGui import QFontDatabase
+
+    installed = set(QFontDatabase.families())
+    for candidate in ("Menlo", "Consolas", "DejaVu Sans Mono", "Courier New"):
+        if candidate in installed:
+            return candidate
+    return QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
+
+
 def stylesheet() -> str:
     default = control_size()
+    mono = mono_family()
     return f"""
 QWidget {{
     background-color: {Theme.BG_DARK};
@@ -250,6 +267,16 @@ QLabel#AppTitle {{
 QLabel#MutedText,
 QLabel#StageSummary {{
     color: {Theme.TEXT_MUTED};
+}}
+/* Formulas are shown next to the numbers they produce, so a researcher can check
+   the arithmetic. Monospaced so the terms line up between rows. */
+QLabel#FormulaText {{
+    color: {Theme.TEXT_MUTED};
+    font-family: "{mono}";
+    background: {Theme.BG_RAISED};
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: {Theme.RADIUS}px;
+    padding: 7px 9px;
 }}
 QLabel#FieldLabel {{
     color: {Theme.TEXT_MUTED};
@@ -430,7 +457,7 @@ QLabel#LogText {{
     border-radius: {Theme.RADIUS}px;
     padding: 8px 10px;
     color: {Theme.TEXT_MUTED};
-    font-family: Menlo, Consolas, monospace;
+    font-family: "{mono}";
     font-size: 12px;
 }}
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
