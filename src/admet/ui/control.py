@@ -11,11 +11,14 @@ from queue import Empty
 from typing import Any, Callable
 
 import numpy as np
-from PySide6.QtCore import QRect, QSize, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QRect, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QAbstractScrollArea,
+    QAbstractSpinBox,
     QApplication,
+    QGraphicsView,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -127,6 +130,43 @@ PREVIEW_MIN_HEIGHT = 280
 PREVIEW_MAX_HEIGHT = 520
 
 LEFT_RAIL_WIDTH = 246
+
+
+class _WheelGuard(QObject):
+    """Makes the wheel scroll the page and nothing else.
+
+    Spin boxes and combo boxes treat the wheel as a value change and pyqtgraph
+    treats it as a zoom, so scrolling over one silently edits a setting or
+    rescales a plot instead of moving the page. Installed on the application,
+    this redirects those wheel events to the page scroll viewport.
+    """
+
+    HIJACKERS = (QAbstractSpinBox, QComboBox, QAbstractItemView, QGraphicsView)
+
+    def __init__(self, scroll: QScrollArea) -> None:
+        super().__init__(scroll)
+        self._scroll = scroll
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() is not QEvent.Type.Wheel:
+            return False
+        viewport = self._scroll.viewport()
+        if obj is viewport or not self._hijacks_wheel(obj):
+            return False
+        QApplication.sendEvent(viewport, event)
+        return True
+
+    def _hijacks_wheel(self, obj: QObject) -> bool:
+        widget = obj if isinstance(obj, QWidget) else None
+        # Stop at the scroll area itself: everything above it is page chrome, and
+        # the area's own scrollbars must keep their wheel handling.
+        while widget is not None and widget is not self._scroll:
+            if isinstance(widget, self.HIJACKERS):
+                return True
+            widget = widget.parentWidget()
+        return False
+
+
 def _panel_box(title: str, object_name: str = "Panel") -> tuple[QFrame, QVBoxLayout]:
     panel = QFrame()
     panel.setObjectName(object_name)
@@ -185,6 +225,9 @@ class ControlWindow(QMainWindow):
         self.values = api.settings.defaults()
         self.last_result: RunResult | None = None
         self.last_metadata: dict[str, Any] = {}
+        # Result of the one-off Fluigent hardware probe. Kept out of last_metadata,
+        # which every action and every status poll replaces wholesale.
+        self._fluigent_probe: dict[str, Any] = {}
         self.runtime_state: dict[str, bool] = {
             "project": False,
             "camera": False,
@@ -312,6 +355,9 @@ class ControlWindow(QMainWindow):
         page_scroll.setWidgetResizable(True)
         page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         page_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Application-wide so it also covers editors mounted later, per stage.
+        self._wheel_guard = _WheelGuard(page_scroll)
+        QApplication.instance().installEventFilter(self._wheel_guard)
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
@@ -1939,7 +1985,7 @@ class ControlWindow(QMainWindow):
                 return False
             if self.values.get("simulated"):
                 return True
-            return int(self.last_metadata.get("fluigent_instrument_count") or 0) > 0
+            return int(self._fluigent_probe.get("fluigent_instrument_count") or 0) > 0
         if action == "disconnect_fluidics":
             return self._fluigent_ready()
         if self._action_requires_fluigent(action) and not self._fluigent_ready():
@@ -1949,7 +1995,7 @@ class ControlWindow(QMainWindow):
     def _ensure_fluigent_availability(self) -> None:
         if self.values.get("simulated"):
             return
-        if "fluigent_instrument_count" in self.last_metadata:
+        if self._fluigent_probe:
             return
         try:
             result = self.api.run(
@@ -1968,6 +2014,7 @@ class ControlWindow(QMainWindow):
             }
         else:
             metadata = dict(result.metadata)
+        self._fluigent_probe = metadata
         self.last_metadata.update(metadata)
 
     def _stage_params(self, stage: Stage) -> list[Param]:
@@ -2094,6 +2141,9 @@ class ControlWindow(QMainWindow):
             self._schedule_correction_apply()
         if name == "simulated":
             if not value:
+                # Leaving simulation: drop the cached probe so real hardware is
+                # re-checked on the next render.
+                self._fluigent_probe.clear()
                 self.last_metadata.pop("fluigent_instrument_count", None)
                 self.last_metadata.pop("fluigent_instruments", None)
                 self.last_metadata.pop("fluigent_device_message", None)
@@ -2586,7 +2636,8 @@ class LivePlot(QWidget):
         self._plot.setAutoVisible(y=True)
         self._plot.setXRange(0, _VISIBLE_PLOT_WINDOW_S, padding=0)
         self._plot.scene().sigMouseClicked.connect(self._on_click)
-        self._plot.wheelEvent = self._wheel_event  # type: ignore[method-assign]
+        # No wheel override: _WheelGuard routes the wheel to the page scroll, so the
+        # plot never zooms. Dragging still pans and pauses auto-scroll.
         self._plot.mouseDragEvent = self._mouse_drag_event  # type: ignore[method-assign]
 
         for index, label in enumerate(_PLOT_LABELS):
@@ -2655,10 +2706,6 @@ class LivePlot(QWidget):
         if stop <= start:
             return t_arr[-_MAX_RENDERED_PLOT_POINTS:], slice(-_MAX_RENDERED_PLOT_POINTS, None)
         return t_arr[start:stop], slice(start, stop)
-
-    def _wheel_event(self, event) -> None:
-        self._auto_scroll = False
-        self._pg.PlotWidget.wheelEvent(self._plot, event)
 
     def _mouse_drag_event(self, event) -> None:
         self._auto_scroll = False

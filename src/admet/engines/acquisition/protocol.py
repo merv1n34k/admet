@@ -169,6 +169,7 @@ def build_dropseq_protocol(settings: dict) -> list[ProtocolStep]:
     set_count = int(settings["set_count"])
     replicate_count = int(settings["replicate_count"])
     run_volume_ul = float(settings["run_volume_ul"])
+    oil_flow = float(settings.get("run_oil_flow_ul_min", DROPSEQ_OIL_FLOW_UL_MIN))
     aqueous_total = float(settings["run_aqueous_total_flow_ul_min"])
     aqueous_channel = aqueous_total / 2.0
     for set_index in range(1, set_count + 1):
@@ -179,7 +180,7 @@ def build_dropseq_protocol(settings: dict) -> list[ProtocolStep]:
                     ProtocolStep(
                         name=f"Run {label}",
                         sensor_setpoints={
-                            OIL_L_SENSOR: DROPSEQ_OIL_FLOW_UL_MIN,
+                            OIL_L_SENSOR: oil_flow,
                             CELLS_M_SENSOR: aqueous_channel,
                             BEADS_M_SENSOR: aqueous_channel,
                         },
@@ -190,7 +191,7 @@ def build_dropseq_protocol(settings: dict) -> list[ProtocolStep]:
                         },
                         on_complete="zero",
                         confirm_message=(
-                            f"Start {label}: Oil L {DROPSEQ_OIL_FLOW_UL_MIN:g} uL/min, "
+                            f"Start {label}: Oil L {oil_flow:g} uL/min, "
                             f"Cells M/Beads M {aqueous_channel:g} uL/min?"
                         ),
                     ),

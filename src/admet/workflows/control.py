@@ -109,6 +109,7 @@ RUN_MAIN_SETTINGS = (
     "set_count",
     "replicate_count",
     "run_volume_ul",
+    "run_oil_flow_ul_min",
     "run_aqueous_total_flow_ul_min",
 )
 WASH_MAIN_SETTINGS = (
