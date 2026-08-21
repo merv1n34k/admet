@@ -268,6 +268,31 @@ QLabel#MutedText,
 QLabel#StageSummary {{
     color: {Theme.TEXT_MUTED};
 }}
+/* Boxes in the fluidic scheme: sources, sensors, the chip and the collection
+   tube, with the tubing fields sitting on the runs between them. */
+QLabel#SchemeNode {{
+    background: {Theme.BG_CONTROL};
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: {Theme.RADIUS}px;
+    padding: 6px 10px;
+    color: {Theme.TEXT_WHITE};
+    font-weight: 650;
+}}
+QLabel#SchemeLink {{
+    color: {Theme.TEXT_MUTED};
+}}
+QLabel#VerdictPass, QLabel#VerdictFail {{
+    border-radius: {Theme.RADIUS}px;
+    padding: 7px 10px;
+    font-weight: 700;
+    color: #ffffff;
+}}
+QLabel#VerdictPass {{
+    background: {Theme.SUCCESS};
+}}
+QLabel#VerdictFail {{
+    background: {Theme.DANGER};
+}}
 /* Formulas are shown next to the numbers they produce, so a researcher can check
    the arithmetic. Monospaced so the terms line up between rows. */
 QLabel#FormulaText {{

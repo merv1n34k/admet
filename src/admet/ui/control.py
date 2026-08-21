@@ -225,9 +225,11 @@ class ControlStagePage(QWidget):
         self.results_panel, self.results_layout = panels["results"]
         self.log_panel, self.log_layout = panels["log"]
 
-        for panel, _body in panels.values():
-            layout.addWidget(panel)
-        layout.addStretch()
+        # Spare height goes to the log rather than piling up as blank space under the
+        # last panel: collapsing the parameters otherwise left a gap that read as the
+        # content having disappeared.
+        for key, (panel, _body) in panels.items():
+            layout.addWidget(panel, 1 if key == "log" else 0)
 
 
 class ControlWindow(QMainWindow):
@@ -588,7 +590,7 @@ class ControlWindow(QMainWindow):
         if self._preflight is None:
             self._preflight = PreflightPanel(
                 channel_labels=FLUIDIC_CHANNEL_LABELS,
-                densities=self._channel_densities,
+                liquids=self._channel_liquids,
             )
             self.stage_stack.addWidget(self._preflight)
         self._preflight_active = True
@@ -596,14 +598,14 @@ class ControlWindow(QMainWindow):
         self.stage_stack.setCurrentWidget(self._preflight)
         self._sync_toc()
 
-    def _channel_densities(self) -> dict[str, float]:
-        """Density per channel label, taken from each channel's selected liquid."""
-        densities: dict[str, float] = {}
+    def _channel_liquids(self) -> dict[str, tuple[float, float]]:
+        """(density, viscosity) per channel label, from each channel's selected liquid."""
+        liquids: dict[str, tuple[float, float]] = {}
         for (prefix, label, *_rest) in FLUIDIC_CHANNELS:
             profile = profile_by_id(str(self.values.get(f"{prefix}_profile", "")))
-            if profile is not None and profile.density:
-                densities[label] = profile.density
-        return densities
+            if profile is not None:
+                liquids[label] = (profile.density, profile.viscosity)
+        return liquids
 
     def _build_project_menu(self) -> QMenu:
         """Discovered projects, listed the way the analyze picker lists them."""

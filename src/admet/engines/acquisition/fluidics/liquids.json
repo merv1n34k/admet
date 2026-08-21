@@ -22,7 +22,8 @@
       "scale": 2.25,
       "offset": 0.0,
       "quadratic": 0.0,
-      "density": 1.614
+      "density": 1.614,
+      "viscosity": 1.24
     },
     {
       "id": "ipa_l",
@@ -32,7 +33,8 @@
       "scale": 1.0,
       "offset": 0.0,
       "quadratic": 0.0,
-      "density": 0.786
+      "density": 0.786,
+      "viscosity": 2.04
     },
     {
       "id": "water_l",
@@ -42,7 +44,8 @@
       "scale": 1.0,
       "offset": 0.0,
       "quadratic": 0.0,
-      "density": 0.997
+      "density": 0.997,
+      "viscosity": 0.89
     },
     {
       "id": "oil_m",
@@ -52,7 +55,8 @@
       "scale": 2.25,
       "offset": 0.0,
       "quadratic": 0.0,
-      "density": 1.614
+      "density": 1.614,
+      "viscosity": 1.24
     },
     {
       "id": "ipa_m",
@@ -62,7 +66,8 @@
       "scale": 1.0,
       "offset": 0.0,
       "quadratic": 0.0,
-      "density": 0.786
+      "density": 0.786,
+      "viscosity": 2.04
     },
     {
       "id": "water_m",
@@ -72,7 +77,8 @@
       "scale": 1.0,
       "offset": 0.0,
       "quadratic": 0.0,
-      "density": 0.997
+      "density": 0.997,
+      "viscosity": 0.89
     }
   ]
 }

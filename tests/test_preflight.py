@@ -7,7 +7,13 @@ from admet.workflows.preflight import (
     dispense_time_s,
     estimate_consumption,
     gravimetric_factors,
+    ChannelPath,
+    Segment,
+    assess_feasibility,
+    fit_system_resistance,
+    layout_back_pressure,
     solve_flows,
+    tubing_back_pressure,
 )
 
 
@@ -130,6 +136,220 @@ class GravimetricTests(unittest.TestCase):
     def test_dispense_time(self):
         self.assertEqual(dispense_time_s(100.0, 250.0), 24.0)
         self.assertEqual(dispense_time_s(100.0, 0.0), 0.0)
+
+
+
+class BackPressureTests(unittest.TestCase):
+    def test_drop_scales_with_length_and_inverse_fourth_power_of_bore(self):
+        base = tubing_back_pressure(
+            length_cm=100, inner_diameter_mm=0.25, flow_ul_min=250, viscosity_mpa_s=1.24
+        )
+        longer = tubing_back_pressure(
+            length_cm=200, inner_diameter_mm=0.25, flow_ul_min=250, viscosity_mpa_s=1.24
+        )
+        wider = tubing_back_pressure(
+            length_cm=100, inner_diameter_mm=0.50, flow_ul_min=250, viscosity_mpa_s=1.24
+        )
+
+        self.assertAlmostEqual(longer.drop_mbar / base.drop_mbar, 2.0, places=6)
+        self.assertAlmostEqual(base.drop_mbar / wider.drop_mbar, 16.0, places=6)
+
+    def test_matches_hagen_poiseuille_by_hand(self):
+        # dP = 128 * mu * L * Q / (pi * d^4)
+        from math import pi
+
+        mu, length_m, flow_m3s, diameter_m = 1.24e-3, 1.0, 250e-9 / 60, 0.25e-3
+        expected_mbar = 128 * mu * length_m * flow_m3s / (pi * diameter_m**4) / 100
+
+        result = tubing_back_pressure(
+            length_cm=100, inner_diameter_mm=0.25, flow_ul_min=250, viscosity_mpa_s=1.24
+        )
+
+        self.assertAlmostEqual(result.drop_mbar, expected_mbar, places=6)
+
+    def test_flags_a_line_the_controller_cannot_drive(self):
+        result = tubing_back_pressure(
+            length_cm=500,
+            inner_diameter_mm=0.25,
+            flow_ul_min=250,
+            viscosity_mpa_s=1.24,
+            limit_mbar=2000,
+        )
+
+        self.assertFalse(result.within_limit)
+        self.assertLess(result.headroom_mbar, 0)
+        # the longest line that would have worked
+        self.assertAlmostEqual(result.max_length_cm, 371.0, delta=1.0)
+
+    def test_max_length_is_the_break_even_point(self):
+        limit = 2000.0
+        result = tubing_back_pressure(
+            length_cm=100, inner_diameter_mm=0.25, flow_ul_min=250,
+            viscosity_mpa_s=1.24, limit_mbar=limit,
+        )
+        at_max = tubing_back_pressure(
+            length_cm=result.max_length_cm, inner_diameter_mm=0.25, flow_ul_min=250,
+            viscosity_mpa_s=1.24, limit_mbar=limit,
+        )
+
+        self.assertAlmostEqual(at_max.drop_mbar, limit, places=6)
+
+    def test_reynolds_stays_laminar_at_working_flows(self):
+        result = tubing_back_pressure(
+            length_cm=100, inner_diameter_mm=0.25, flow_ul_min=250,
+            viscosity_mpa_s=1.24, density_g_ml=1.614,
+        )
+
+        self.assertTrue(result.laminar)
+        self.assertGreater(result.reynolds, 0)
+
+    def test_degenerate_inputs_do_not_raise(self):
+        base = {"length_cm": 100, "inner_diameter_mm": 0.25, "flow_ul_min": 250, "viscosity_mpa_s": 1.24}
+        for field, value in (("inner_diameter_mm", 0.0), ("viscosity_mpa_s", 0.0)):
+            result = tubing_back_pressure(**{**base, field: value})
+
+            self.assertEqual(result.drop_mbar, 0.0, field)
+
+
+class SystemResistanceTests(unittest.TestCase):
+    def test_fit_recovers_a_known_resistance_and_threshold(self):
+        # P = 33 * Q + 25, sampled exactly
+        samples = [(33.0 * q + 25.0, q) for q in (5, 20, 40, 60)]
+
+        system = fit_system_resistance(samples)
+
+        self.assertAlmostEqual(system.resistance, 33.0, places=6)
+        self.assertAlmostEqual(system.threshold_mbar, 25.0, places=6)
+        self.assertAlmostEqual(system.r_squared, 1.0, places=9)
+        self.assertTrue(system.trustworthy)
+
+    def test_a_scattered_sweep_is_not_trustworthy(self):
+        samples = [(200, 5), (600, 40), (1000, 12), (1400, 80)]
+
+        self.assertFalse(fit_system_resistance(samples).trustworthy)
+
+    def test_too_few_points_is_inert(self):
+        system = fit_system_resistance([(200, 5)])
+
+        self.assertEqual(system.resistance, 0.0)
+        self.assertFalse(system.trustworthy)
+
+    def test_predictions_invert_each_other(self):
+        system = fit_system_resistance([(33.0 * q + 25.0, q) for q in (5, 20, 40, 60)])
+
+        self.assertAlmostEqual(system.flow_at(system.pressure_for(42.0)), 42.0, places=6)
+
+
+class FeasibilityTests(unittest.TestCase):
+    def _chip_dominated(self):
+        return fit_system_resistance([(33.0 * q + 25.0, q) for q in (5, 20, 40, 60)])
+
+    def test_reachable_target_is_feasible(self):
+        result = assess_feasibility(self._chip_dominated(), target_flow_ul_min=50, limit_mbar=2000)
+
+        self.assertTrue(result.feasible)
+        self.assertEqual(result.shortfall_mbar, 0.0)
+        self.assertEqual(result.remedies, ())
+
+    def test_unreachable_target_reports_the_ceiling(self):
+        result = assess_feasibility(self._chip_dominated(), target_flow_ul_min=250, limit_mbar=2000)
+
+        self.assertFalse(result.feasible)
+        self.assertGreater(result.shortfall_mbar, 0)
+        self.assertAlmostEqual(result.max_flow_ul_min, (2000 - 25) / 33.0, places=6)
+
+    def test_says_plainly_when_no_tubing_change_can_help(self):
+        result = assess_feasibility(
+            self._chip_dominated(), target_flow_ul_min=250, limit_mbar=2000,
+            tubing_resistance=2.16, tubing_length_cm=100, tubing_id_mm=0.25,
+        )
+
+        joined = " ".join(result.remedies)
+        self.assertIn("no tubing change helps", joined)
+        self.assertNotIn("Shorten the tubing", joined)
+
+    def test_suggests_re_plumbing_when_the_tubing_is_the_problem(self):
+        # tubing 10.78, chip 1.0
+        system = fit_system_resistance([(11.78 * q + 20.0, q) for q in (20, 60, 100, 150)])
+
+        result = assess_feasibility(
+            system, target_flow_ul_min=250, limit_mbar=2000,
+            tubing_resistance=10.78, tubing_length_cm=500, tubing_id_mm=0.25,
+        )
+
+        joined = " ".join(result.remedies)
+        self.assertIn("Shorten the tubing", joined)
+        self.assertIn("Widen the tubing bore", joined)
+
+    def test_the_suggested_bore_actually_clears_the_limit(self):
+        import re
+
+        length, bore, viscosity, target, limit = 500.0, 0.25, 1.24, 250.0, 2000.0
+        tubing_r = tubing_back_pressure(
+            length_cm=length, inner_diameter_mm=bore, flow_ul_min=target, viscosity_mpa_s=viscosity
+        ).drop_mbar / target
+        chip_r = 1.0
+        system = fit_system_resistance([((tubing_r + chip_r) * q + 20.0, q) for q in (20, 60, 100)])
+
+        result = assess_feasibility(
+            system, target_flow_ul_min=target, limit_mbar=limit,
+            tubing_resistance=tubing_r, tubing_length_cm=length, tubing_id_mm=bore,
+        )
+        suggested = float(re.search(r"bore to ([0-9.]+) mm", " ".join(result.remedies)).group(1))
+
+        new_tubing_r = tubing_back_pressure(
+            length_cm=length, inner_diameter_mm=suggested, flow_ul_min=target,
+            viscosity_mpa_s=viscosity,
+        ).drop_mbar / target
+        required = (new_tubing_r + chip_r) * target + system.threshold_mbar
+
+        self.assertLessEqual(required, limit)
+
+
+class LayoutTests(unittest.TestCase):
+    def _channels(self, oil_leg_cm=15.0):
+        return [
+            ChannelPath("Oil", (Segment(20, 0.75), Segment(oil_leg_cm, 0.25)), 250, 1.24),
+            ChannelPath("Cells", (Segment(20, 0.75), Segment(15, 0.25)), 67, 0.89),
+            ChannelPath("Beads", (Segment(20, 0.75), Segment(15, 0.25)), 67, 0.89),
+        ]
+
+    def test_segments_in_a_channel_add_up(self):
+        one = ChannelPath("x", (Segment(30, 0.25),), 250, 1.24)
+        split = ChannelPath("x", (Segment(10, 0.25), Segment(20, 0.25)), 250, 1.24)
+
+        self.assertAlmostEqual(one.drop_mbar(), split.drop_mbar(), places=9)
+
+    def test_inlets_are_parallel_so_one_line_only_affects_its_own_channel(self):
+        base = {load.label: load for load in layout_back_pressure(self._channels())}
+        longer = {load.label: load for load in layout_back_pressure(self._channels(oil_leg_cm=200))}
+
+        self.assertGreater(longer["Oil"].path_mbar, base["Oil"].path_mbar)
+        self.assertEqual(longer["Cells"].path_mbar, base["Cells"].path_mbar)
+        self.assertEqual(longer["Beads"].path_mbar, base["Beads"].path_mbar)
+
+    def test_the_outlet_is_shared_by_every_channel(self):
+        loads = layout_back_pressure(self._channels(), outlet=Segment(20, 0.25))
+
+        outlet_drops = {round(load.outlet_mbar, 9) for load in loads}
+        self.assertEqual(len(outlet_drops), 1)
+        self.assertGreater(outlet_drops.pop(), 0)
+
+    def test_the_outlet_is_charged_at_the_total_flow(self):
+        channels = self._channels()
+        total = sum(channel.flow_ul_min for channel in channels)
+        outlet = Segment(20, 0.25)
+
+        load = layout_back_pressure(channels, outlet=outlet, outlet_viscosity_mpa_s=1.24)[0]
+
+        self.assertAlmostEqual(load.outlet_mbar, outlet.resistance(1.24) * total, places=9)
+
+    def test_without_an_outlet_only_the_channel_paths_count(self):
+        loads = layout_back_pressure(self._channels())
+
+        for load in loads:
+            self.assertEqual(load.outlet_mbar, 0.0)
+            self.assertEqual(load.total_mbar, load.path_mbar)
 
 
 if __name__ == "__main__":

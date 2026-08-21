@@ -31,6 +31,7 @@ class LiquidProfile:
     offset: float = 0.0
     quadratic: float = 0.0
     density: float = 0.0
+    viscosity: float = 0.0
 
     def corrections(self, prefix: str) -> dict[str, object]:
         """Correction settings this profile applies to the given channel."""
@@ -49,6 +50,8 @@ class LiquidProfile:
             text += f", quadratic {self.quadratic:g}"
         if self.density:
             text += f", {self.density:g} g/mL"
+        if self.viscosity:
+            text += f", {self.viscosity:g} mPa.s"
         return text
 
 
@@ -75,6 +78,7 @@ def load_profiles() -> tuple[LiquidProfile, ...]:
                     offset=float(entry.get("offset", 0.0)),
                     quadratic=float(entry.get("quadratic", 0.0)),
                     density=float(entry.get("density", 0.0)),
+                    viscosity=float(entry.get("viscosity", 0.0)),
                 )
             )
         except (KeyError, TypeError, ValueError) as exc:
