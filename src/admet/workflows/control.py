@@ -51,20 +51,9 @@ CAMERA_SURFACE_OPTIONS = {
             ),
         },
         {
-            "title": "Selection",
-            "icon": "select_all",
-            "params": (
-                "camera_selection_x",
-                "camera_selection_y",
-                "camera_selection_w",
-                "camera_selection_h",
-            ),
-        },
-        {
             "title": "Capture",
             "icon": "fiber_manual_record",
             "params": (
-                "camera_image_prefix",
                 "camera_video_fps",
                 "camera_preview_off_recording",
             ),

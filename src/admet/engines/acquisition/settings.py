@@ -78,12 +78,6 @@ CAMERA_SETTINGS = ParamSchema(
         Param("camera_framerate_hz", "Frame Rate", ParamKind.FLOAT, default=30.0, minimum=1.0),
         Param("camera_throughput_enabled", "Limit Throughput", ParamKind.BOOLEAN, default=False),
         Param("camera_throughput_mbps", "Throughput", ParamKind.FLOAT, default=125.0, minimum=1.0),
-        Param("preview_enabled", "Preview", ParamKind.BOOLEAN, default=True),
-        Param("camera_selection_x", "Selection X", ParamKind.INTEGER, default=0, minimum=0),
-        Param("camera_selection_y", "Selection Y", ParamKind.INTEGER, default=0, minimum=0),
-        Param("camera_selection_w", "Selection W", ParamKind.INTEGER, default=0, minimum=0),
-        Param("camera_selection_h", "Selection H", ParamKind.INTEGER, default=0, minimum=0),
-        Param("camera_image_prefix", "Image Prefix", ParamKind.TEXT, default="img"),
         Param("camera_video_fps", "Video FPS", ParamKind.FLOAT, default=24.0, minimum=1.0),
         Param("camera_preview_off_recording", "Disable Preview During Recording", ParamKind.BOOLEAN, default=False),
     )
