@@ -94,7 +94,20 @@ class WorkflowTests(unittest.TestCase):
         cleanup = next(stage for stage in workflow.stages if stage.id == "cleanup")
         correction_names = {param.name for param in corrections.settings.params}
 
-        self.assertEqual(stage_ids, ["scene", "fluigent", "corrections", "priming", "runs", "wash", "cleanup"])
+        self.assertEqual(
+            stage_ids,
+            ["scene", "fluigent", "corrections", "characterise", "priming", "runs", "wash", "cleanup"],
+        )
+        # The system check is optional and sits after corrections, because it needs the
+        # correction factors applied for its flow readings to be true flows.
+        characterise = next(stage for stage in workflow.stages if stage.id == "characterise")
+        self.assertTrue(characterise.skippable)
+        self.assertTrue(characterise.pipeline)
+        self.assertEqual(characterise.settings_options["pipeline_name"], "Characterise")
+        self.assertIn(
+            "fluidics_connected and corrections_applied",
+            {action.guard for action in characterise.actions},
+        )
         self.assertEqual(scene.editor.kind, "control_live")
         self.assertTrue(scene.editor.persistent)
         self.assertIn("camera", scene.features)

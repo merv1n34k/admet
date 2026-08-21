@@ -170,6 +170,19 @@ class _WheelGuard(QObject):
         return False
 
 
+def _event_step_index(event: Any) -> int:
+    """Step number off a pipeline event, where step 0 is a real step.
+
+    `getattr(...) or -1` reads a legitimate first step as "no step", because 0 is
+    falsy -- which silently dropped the opening step of a protocol.
+    """
+    raw = getattr(event, "current_step", None)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return -1
+
+
 def _transport_object_name(label: str, *, enabled: bool, suggested: bool) -> str:
     """Style for a transport button.
 
@@ -277,6 +290,8 @@ class ControlWindow(QMainWindow):
         self._corrections_applied = False
         self._preflight: PreflightPanel | None = None
         self._preflight_active = False
+        self._last_sweep_step = -1
+        self._sweep_reading: tuple[list[float], list[float]] | None = None
         self.preflight_label: QLabel | None = None
 
         self.setWindowTitle("admet control")
@@ -585,14 +600,18 @@ class ControlWindow(QMainWindow):
         self._append_log(f"project: created {self.project_path}")
         self._render_current_stage()
 
-    def _show_preflight(self) -> None:
-        """Show the planning section. It changes no workflow state."""
+    def _ensure_preflight(self) -> PreflightPanel:
         if self._preflight is None:
             self._preflight = PreflightPanel(
                 channel_labels=FLUIDIC_CHANNEL_LABELS,
                 liquids=self._channel_liquids,
             )
             self.stage_stack.addWidget(self._preflight)
+        return self._preflight
+
+    def _show_preflight(self) -> None:
+        """Show the planning section. It changes no workflow state."""
+        self._ensure_preflight()
         self._preflight_active = True
         self._preflight.recalculate()
         self.stage_stack.setCurrentWidget(self._preflight)
@@ -1494,6 +1513,10 @@ class ControlWindow(QMainWindow):
 
         if stage.completion_gate == "recording_confirmation":
             self._runs_completion_confirmed = False
+        if stage.settings_options.get("pipeline_name") == "Characterise":
+            self._last_sweep_step = -1
+            self._sweep_reading = None
+            self._ensure_preflight().clear_sweep()
         self._pipeline_stage_id = stage.id
         statuses = dict(self.workflow_state.statuses)
         statuses[stage.id] = StageStatus.ACTIVE
@@ -1734,6 +1757,7 @@ class ControlWindow(QMainWindow):
             elif self._pipeline_event_state(latest) not in {"paused"}:
                 self._clear_pipeline_confirmation()
             self._maybe_notify_tube_switch(stage, latest)
+            self._capture_sweep_point(stage, latest)
             if self.workflow.current_stage(self.workflow_state).id == stage.id:
                 self._refresh_action_box(stage)
             else:
@@ -1742,6 +1766,36 @@ class ControlWindow(QMainWindow):
             # The protocol is done, but the stage is not: light up Continue and let
             # the operator decide when to move on.
             self._refresh_action_box(stage)
+
+    def _capture_sweep_point(self, stage: Stage, event: Any) -> None:
+        """Record a settled sweep step into the pre-flight table.
+
+        Taken as the step advances, so the readings are the ones the step ended on --
+        settled if the flow steadied, saturated if it never did, which is itself the
+        measurement. Nothing is written to the project: the sweep only fills the table.
+        """
+        if stage.settings_options.get("pipeline_name") != "Characterise":
+            return
+        step_index = _event_step_index(event)
+        if step_index < 0:
+            return
+        if step_index != self._last_sweep_step:
+            # The step changed, so whatever was last seen belongs to the one that
+            # ended -- reading at the moment of the change would catch flows already
+            # moving towards the next setpoint.
+            if self._last_sweep_step >= 0 and self._sweep_reading is not None:
+                pressures, flows = self._sweep_reading
+                self._ensure_preflight().record_sweep_point(
+                    self._last_sweep_step, pressures, flows
+                )
+                self._append_log(f"sweep: recorded step {self._last_sweep_step + 1}")
+            self._last_sweep_step = step_index
+            self._sweep_reading = None
+        if self._latest_snapshot is not None:
+            self._sweep_reading = (
+                list(self._latest_snapshot.pressures),
+                list(self._latest_snapshot.flows),
+            )
 
     def _sync_run_recording_for_confirmation(self, confirmation: str) -> None:
         if not _run_complete_label(confirmation):
@@ -1758,7 +1812,7 @@ class ControlWindow(QMainWindow):
         step_name = str(getattr(event, "step_name", "") or "")
         if not step_name.startswith("Run set"):
             return
-        step_index = int(getattr(event, "current_step", -1) or -1)
+        step_index = _event_step_index(event)
         if step_index == self._tube_switch_notice_step:
             return
         progress = max(0.0, min(1.0, float(getattr(event, "progress", 0.0) or 0.0)))

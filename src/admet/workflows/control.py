@@ -112,6 +112,10 @@ RUN_MAIN_SETTINGS = (
     "run_oil_flow_ul_min",
     "run_aqueous_total_flow_ul_min",
 )
+CHARACTERISE_MAIN_SETTINGS = (
+    "run_oil_flow_ul_min",
+    "run_aqueous_total_flow_ul_min",
+)
 WASH_MAIN_SETTINGS = (
     "wash_oil_flow_ul_min",
     "wash_aqueous_total_flow_ul_min",
@@ -259,8 +263,52 @@ def create_control_workflow() -> Workflow:
                 },
             ),
             Stage(
+                "characterise",
+                "4. System check",
+                action="run_protocol",
+                description="Sweep the working flows to measure what the plumbing and chip cost.",
+                instructions=(
+                    "Optional. Run it after a chip, tubing or liquid change to learn whether the "
+                    "target flows are reachable before spending reagent.",
+                ),
+                instruction_cards=(
+                    StageInstruction(
+                        "Apply the correction factors first, or the measured flows are not true flows.",
+                        "not corrections_applied",
+                    ),
+                    StageInstruction(
+                        "Start the sweep. Every channel is scaled together so the phase ratio holds; "
+                        "each step settles before the next. Readings land in the pre-flight section.",
+                    ),
+                ),
+                settings=RUN_SETTINGS,
+                actions=(
+                    StageAction(
+                        "Start Sweep",
+                        "run_protocol",
+                        guard="fluidics_connected and corrections_applied",
+                        active_when="pipeline_running",
+                        kind="pipeline",
+                    ),
+                    StageAction("Pause", "pause_protocol", guard="pipeline_running", variant="secondary"),
+                    StageAction("Skip Step", "skip_protocol", guard="pipeline_waiting", variant="secondary"),
+                    StageAction("Continue", completes=True, guard="pipeline_complete", variant="warning"),
+                ),
+                editor=CONTROL_LIVE_EDITOR,
+                results=CONTROL_RESULTS,
+                features=("fluidics",),
+                pipeline=True,
+                skippable=True,
+                settings_options={
+                    "main": CHARACTERISE_MAIN_SETTINGS,
+                    "pipeline_name": "Characterise",
+                    "pipeline_label": "Start Sweep",
+                    "completion_message": "Sweep complete. The readings are in the pre-flight section.",
+                },
+            ),
+            Stage(
                 "priming",
-                "4. Priming protocol",
+                "5. Priming protocol",
                 action="run_protocol",
                 description="Run the priming pipeline and confirm gated steps as prompted.",
                 instructions=("Run priming and press Proceed when the protocol asks for confirmation.",),
@@ -291,7 +339,7 @@ def create_control_workflow() -> Workflow:
             ),
             Stage(
                 "runs",
-                "5. Test runs",
+                "6. Test runs",
                 action="run_protocol",
                 description="Recorded Drop-Seq or custom run protocol with CSV/video session output.",
                 instructions=("Run the test protocol. Recording is managed by the protocol.",),
@@ -330,7 +378,7 @@ def create_control_workflow() -> Workflow:
             ),
             Stage(
                 "wash",
-                "6. Post-process wash",
+                "7. Post-process wash",
                 action="run_protocol",
                 description="Post-run wash and shutdown path.",
                 instructions=("Run the wash protocol and confirm gated steps as prompted.",),
@@ -366,7 +414,7 @@ def create_control_workflow() -> Workflow:
             ),
             Stage(
                 "cleanup",
-                "7. Cleanup",
+                "8. Cleanup",
                 description="Disconnect devices and finish the control session.",
                 instructions=(
                     "Disconnect devices, clean the chip area, check tubing, and confirm the desk is clear.",

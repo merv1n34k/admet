@@ -17,6 +17,8 @@ from admet.engines.acquisition.fluidics.config import (
     OIL_L_SENSOR,
     PRIMING_AQUEOUS_FLOW_UL_MIN,
     PRIMING_OIL_FLOW_UL_MIN,
+    STABILITY_DURATION_S,
+    STABILITY_TOLERANCE_UL_MIN,
 )
 
 log = logging.getLogger(__name__)
@@ -127,6 +129,8 @@ def build_protocol(name: str, settings: dict | None = None) -> list[ProtocolStep
         return build_dropseq_protocol(settings)
     if name == "Wash" and settings:
         return build_wash_protocol(settings)
+    if name == "Characterise" and settings:
+        return build_characterise_protocol(settings)
     protocol = PIPELINES.get(name)
     if protocol is None:
         raise ValueError(f"Unknown pipeline: {name}")
@@ -424,6 +428,65 @@ class ConditionTrigger(Trigger):
         return f"Condition: sensor {self._sensor_index} {' & '.join(parts)}"
 
 
+class StabilityTrigger(Trigger):
+    """Fires once a channel's flow has held steady, or once it gives up waiting.
+
+    Applies the same rule the monitor uses -- spread within twice the tolerance
+    across the window -- to the readings the trigger already receives.
+
+    Timing out is a legitimate outcome, not a failure: when the controller cannot
+    reach the setpoint the flow never settles, and the point recorded at that
+    moment is the ceiling the system actually delivers. Waiting forever would just
+    stall the sweep on the very case it exists to find.
+    """
+
+    def __init__(
+        self,
+        sensor_index: int,
+        tolerance_ul_min: float = STABILITY_TOLERANCE_UL_MIN,
+        window_s: float = STABILITY_DURATION_S,
+        timeout_s: float = 60.0,
+    ):
+        self._sensor_index = sensor_index
+        self._tolerance = tolerance_ul_min
+        self._window_s = window_s
+        self._timeout_s = timeout_s
+        self._samples: list[tuple[float, float]] = []
+        self._started = 0.0
+        self.timed_out = False
+
+    def reset(self) -> None:
+        self._samples = []
+        self._started = 0.0
+        self.timed_out = False
+
+    def check(self, get_flow: SensorReader, get_volume: SensorReader) -> bool:
+        now = time.monotonic()
+        if not self._started:
+            self._started = now
+        self._samples.append((now, float(get_flow(self._sensor_index))))
+        cutoff = now - self._window_s
+        while len(self._samples) > 2 and self._samples[1][0] < cutoff:
+            self._samples.pop(0)
+
+        if now - self._started >= self._timeout_s:
+            self.timed_out = True
+            return True
+        if now - self._started < self._window_s:
+            return False  # not enough history to call it steady yet
+        flows = [flow for moment, flow in self._samples if moment >= cutoff]
+        return len(flows) >= 2 and (max(flows) - min(flows)) <= 2 * self._tolerance
+
+    def progress(self) -> float:
+        if not self._started:
+            return 0.0
+        elapsed = time.monotonic() - self._started
+        return min(1.0, elapsed / self._window_s) if self._window_s else 1.0
+
+    def description(self) -> str:
+        return f"Stable: sensor {self._sensor_index} within {self._tolerance:g} uL/min"
+
+
 class ConfirmationTrigger(Trigger):
     def __init__(self, message: str):
         self._message = message
@@ -449,9 +512,66 @@ class ConfirmationTrigger(Trigger):
         return f"Confirm: {self._message}"
 
 
+CHARACTERISE_FRACTIONS = (0.2, 0.4, 0.6, 0.8, 1.0)
+
+# Protocols built from settings rather than stored as a fixed step list. They are
+# still valid pipeline names, so they belong in the allowed set even though they
+# have no entry in PIPELINES.
+BUILT_PROTOCOLS = ("Characterise",)
+
+
+def protocol_names() -> tuple[str, ...]:
+    """Every name build_protocol accepts."""
+    return tuple(sorted({*PIPELINES, *BUILT_PROTOCOLS}))
+
+
+def build_characterise_protocol(settings: dict) -> list[ProtocolStep]:
+    """Sweep the setup to measure what the plumbing and chip cost.
+
+    Every channel is scaled by the same fraction of its working flow, so the phase
+    ratio holds throughout. That is what keeps each channel linear in its own flow
+    and lets the three be fitted separately afterwards.
+
+    Flow regulation is used rather than open-loop pressure: driving pressure would
+    let each channel land wherever its own resistance put it and the ratio would
+    not hold. The pressure the controller settles at is the measurement.
+    """
+    oil = float(settings["run_oil_flow_ul_min"])
+    aqueous = float(settings["run_aqueous_total_flow_ul_min"]) / 2.0
+    steps: list[ProtocolStep] = []
+    for fraction in CHARACTERISE_FRACTIONS:
+        steps.append(
+            ProtocolStep(
+                name=f"Sweep {fraction * 100:.0f}%",
+                sensor_setpoints={
+                    OIL_L_SENSOR: oil * fraction,
+                    CELLS_M_SENSOR: aqueous * fraction,
+                    BEADS_M_SENSOR: aqueous * fraction,
+                },
+                trigger_type="stability",
+                trigger_params={"sensor_index": OIL_L_SENSOR},
+                on_complete="hold",
+                group="characterise",
+            )
+        )
+    steps.append(
+        ProtocolStep(
+            name="Stop",
+            sensor_setpoints={OIL_L_SENSOR: 0.0, CELLS_M_SENSOR: 0.0, BEADS_M_SENSOR: 0.0},
+            trigger_type="time",
+            trigger_params={"duration_s": 1.0},
+            on_complete="zero",
+            group="characterise",
+        )
+    )
+    return steps
+
+
 def create_trigger(trigger_type: str, params: dict) -> Trigger:
     if trigger_type == "time":
         return TimeTrigger(**params)
+    if trigger_type == "stability":
+        return StabilityTrigger(**params)
     if trigger_type == "volume":
         return VolumeTrigger(**params)
     if trigger_type == "threshold":

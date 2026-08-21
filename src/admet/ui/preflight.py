@@ -94,6 +94,13 @@ def _value_label(text: str = "-") -> QLabel:
     return label
 
 
+def _safe_at(values: list[float], index: int) -> float:
+    try:
+        return float(values[index])
+    except (IndexError, TypeError, ValueError):
+        return 0.0
+
+
 def _node(text: str) -> QLabel:
     """A box in the scheme: a source, a sensor, the chip or the collection tube."""
     label = QLabel(text)
@@ -391,10 +398,13 @@ class PreflightPanel(QWidget):
             "you actually run:\n"
             "1. Prime every line until no bubbles remain, chip connected as it will be run.\n"
             "2. Set all three channels to their working flows, then scale all of them "
-            "together -- 25%, 50%, 75%, 100% of target -- so the phase ratio never changes.\n"
+            "together -- 20% to 100% of target -- so the phase ratio never changes. Flows are "
+            "regulated and the pressure the controller settles at is the reading; driving "
+            "pressure instead would let each channel land wherever its own resistance put it.\n"
             "3. At each step wait until all channels read stable (within 2 uL/min for 5 s), "
             "then record every channel's pressure and its steady flow from the monitor.\n"
-            "4. Enter one row per step. Repeat whenever the chip, tubing or liquids change.\n"
+            "4. Enter one row per step, or let the System check stage run the sweep and fill "
+            "them in. Repeat whenever the chip, tubing or liquids change.\n"
             "Holding the ratio fixed is what makes this valid: total flow then rises in "
             "step with each channel, so each one stays linear in its own flow."
         )
@@ -539,6 +549,27 @@ class PreflightPanel(QWidget):
         self.system_remedies.setText(
             "\n".join(f"- {item}" for item in result.remedies) if result.remedies else ""
         )
+
+    def record_sweep_point(self, step: int, pressures: list[float], flows: list[float]) -> None:
+        """Write one settled step of a measured sweep into the table.
+
+        Typed and measured points land in the same place, so the fit and the verdict
+        below do not care which they came from.
+        """
+        if not 0 <= step < len(self._system_rows):
+            return
+        row = self._system_rows[step]
+        for index, (pressure_box, flow_box) in enumerate(row):
+            pressure_box.setValue(_safe_at(pressures, index))
+            flow_box.setValue(_safe_at(flows, index))
+        self.recalculate()
+
+    def clear_sweep(self) -> None:
+        for row in self._system_rows:
+            for pressure_box, flow_box in row:
+                pressure_box.setValue(0.0)
+                flow_box.setValue(0.0)
+        self.recalculate()
 
     def _set_verdict(self, feasible: bool | None, text: str) -> None:
         self.system_verdict.setText(text)

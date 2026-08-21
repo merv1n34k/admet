@@ -7,7 +7,7 @@ from admet.engines.acquisition.fluidics.config import (
     SENSOR_CALIBRATIONS,
 )
 from admet.engines.acquisition.fluidics.liquids import default_profile_id, profiles_for_unit
-from admet.engines.acquisition.protocol import PIPELINES
+from admet.engines.acquisition.protocol import protocol_names
 
 CORRECTION_PARAM_NAMES = tuple(
     name
@@ -34,7 +34,7 @@ def merge_schemas(*schemas: ParamSchema) -> ParamSchema:
 
 
 def _pipeline_options() -> tuple[ParamOption, ...]:
-    return tuple(ParamOption(name, name) for name in sorted(PIPELINES))
+    return tuple(ParamOption(name, name) for name in protocol_names())
 
 
 def _calibration_options() -> tuple[ParamOption, ...]:
