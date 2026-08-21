@@ -5,8 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "admet"
 version = "0.1.0"
-description = "Unified ddPCR acquisition and analysis workflow system"
-readme = "master_plan.md"
+description = "Unified microfluidics acquisition and analysis workflow system"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "nicegui>=2.0",
@@ -39,9 +38,6 @@ admet = "admet.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/admet"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/admet/vendor/fgt_sdk/Python" = "admet/vendor/fgt_sdk/Python"
 
 [tool.ruff]
 line-length = 100

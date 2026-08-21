@@ -334,11 +334,6 @@ class VolumeTrigger(Trigger):
             return 1.0
         return min(1.0, self._last_dispensed / self._target_ul)
 
-    def get_dispensed(self, get_volume: SensorReader) -> float:
-        if self._start_volume is None:
-            return 0.0
-        return get_volume(self._sensor_index) - self._start_volume
-
     def description(self) -> str:
         return f"Volume: {self._target_ul:.0f} ul (sensor {self._sensor_index})"
 
@@ -565,10 +560,6 @@ class PipelineEngine(threading.Thread):
     @property
     def state(self) -> PipelineState:
         return self._state
-
-    @property
-    def current_step_index(self) -> int:
-        return self._current_step_idx
 
     @property
     def steps(self) -> list[PipelineStep]:

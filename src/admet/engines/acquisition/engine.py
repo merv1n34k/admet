@@ -491,9 +491,6 @@ class AcquisitionEngine:
         if self._pipeline:
             self._pipeline.confirm_pending()
 
-    def build_pipeline(self, name: str) -> list[Any]:
-        return self.build_pipeline_from_steps(self._build_protocol(name, None))
-
     def build_pipeline_from_steps(self, steps: list[Any]) -> list[Any]:
         return self._build_pipeline_steps(steps)
 
@@ -659,9 +656,6 @@ class AcquisitionEngine:
 
     def _camera_status_metadata(self) -> dict[str, Any]:
         return self._camera.status_metadata()
-
-    def latest_camera_frame(self) -> Any | None:
-        return self._camera.latest_frame()
 
     def subscribe_camera_frames(
         self,

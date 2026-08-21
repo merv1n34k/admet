@@ -93,10 +93,6 @@ class AcquisitionThread(threading.Thread):
     def get_flow(self, sensor_index: int) -> float:
         return float(self._sdk.get_sensor_value(sensor_index))
 
-    def reset_volumes(self) -> None:
-        with self._lock:
-            self._volumes_ul = [0.0] * self._sensor_count
-
     def stop(self) -> None:
         self._stop_event.set()
 
