@@ -383,6 +383,18 @@ QPushButton#TransportButtonWarning:hover {{
 QPushButton#TransportButtonWarning:pressed {{
     background: {Theme.WARNING_DARK};
 }}
+QFrame#TransportButtons QPushButton[roundLeft="true"] {{
+    border-bottom-left-radius: {Theme.RADIUS - 1}px;
+}}
+QFrame#TransportButtons QPushButton[roundRight="true"] {{
+    border-bottom-right-radius: {Theme.RADIUS - 1}px;
+}}
+QFrame#TransportButtons QPushButton[roundLeft="true"][roundTop="true"] {{
+    border-top-left-radius: {Theme.RADIUS - 1}px;
+}}
+QFrame#TransportButtons QPushButton[roundRight="true"][roundTop="true"] {{
+    border-top-right-radius: {Theme.RADIUS - 1}px;
+}}
 QLabel#ProcessAction {{
     background: transparent;
     font-weight: 600;

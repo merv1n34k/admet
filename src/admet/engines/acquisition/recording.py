@@ -11,6 +11,20 @@ from .camera import VideoWorker
 from .fluidics import CsvLogger
 
 
+def _positive_or_none(value: Any) -> float | None:
+    """Recording limits use 0 (or a missing setting) to mean "no limit"."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _frame_limit(value: Any) -> int | None:
+    number = _positive_or_none(value)
+    return int(number) if number is not None else None
+
+
 class RecordingCamera(Protocol):
     @property
     def recording(self) -> bool:
@@ -337,6 +351,8 @@ class RecordingCoordinator:
             width=width,
             height=height,
             fps=float(settings["camera_video_fps"]),
+            max_frames=_frame_limit(settings.get("recording_max_frames")),
+            max_time=_positive_or_none(settings.get("recording_max_seconds")),
             video_path=settings.get("video_path"),
             fluidics_csv_path=settings.get("fluidics_csv_path"),
         )

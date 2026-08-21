@@ -92,6 +92,8 @@ ACQUISITION_ACTIONS = (
         params=(
             "recording_root",
             "recording_label",
+            "recording_max_frames",
+            "recording_max_seconds",
             "camera_width",
             "camera_height",
             "camera_video_fps",
@@ -479,10 +481,23 @@ class AcquisitionEngine:
     def pause_pipeline(self) -> None:
         if self._pipeline:
             self._pipeline.pause()
+        # A paused protocol is not producing sample, so recording it only burns disk
+        # -- and a pause waiting on an operator confirmation is open ended.
+        self._set_recording_paused(True)
 
     def resume_pipeline(self) -> None:
         if self._pipeline:
             self._pipeline.resume()
+        self._set_recording_paused(False)
+
+    def _set_recording_paused(self, paused: bool) -> None:
+        acquisition = self._camera.acquisition
+        if acquisition is None or not acquisition.recording:
+            return
+        if paused:
+            acquisition.pause_recording()
+        else:
+            acquisition.resume_recording()
 
     def skip_pipeline_step(self) -> None:
         if self._pipeline:

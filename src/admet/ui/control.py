@@ -63,7 +63,6 @@ from admet.ui.window import log_state, panel_specs, structure_changed, structure
 from admet.ui.workflow_view import (
     action_button_state,
     active_when,
-    guard_enabled,
     has_feature,
     instruction_text,
     stage_controls,
@@ -167,6 +166,19 @@ class _WheelGuard(QObject):
         return False
 
 
+def _transport_object_name(label: str, *, enabled: bool, suggested: bool) -> str:
+    """Style for a transport button.
+
+    A stage never advances on its own. The one button that carries the workflow
+    forward -- Proceed within a protocol, Continue between stages -- is highlighted
+    once it is available, and always in the same colour so the cue reads the same
+    everywhere.
+    """
+    if enabled and (suggested or label == "Proceed"):
+        return "TransportButtonWarning"
+    return "TransportButton"
+
+
 def _panel_box(title: str, object_name: str = "Panel") -> tuple[QFrame, QVBoxLayout]:
     panel = QFrame()
     panel.setObjectName(object_name)
@@ -254,7 +266,9 @@ class ControlWindow(QMainWindow):
         self._notification_text = ""
         self._notification_kind = "primary"
         self._runs_completion_confirmed = False
-        self._completion_pending = False
+        # Corrections have to reach the hardware before the stage can be left, and
+        # editing any correction value makes the applied set stale again.
+        self._corrections_applied = False
 
         self.setWindowTitle("admet control")
         self.resize(1440, 920)
@@ -704,7 +718,9 @@ class ControlWindow(QMainWindow):
         action_box = QFrame()
         action_box.setObjectName("ProcessBar")
         action_layout = QVBoxLayout(action_box)
-        action_layout.setContentsMargins(0, 0, 0, 0)
+        # Inset by the frame's border width, otherwise the children paint over the
+        # 1px border and it disappears behind them.
+        action_layout.setContentsMargins(1, 1, 1, 1)
         action_layout.setSpacing(0)
 
         if stage.pipeline:
@@ -715,20 +731,20 @@ class ControlWindow(QMainWindow):
         command_layout = QHBoxLayout(command_row)
         command_layout.setContentsMargins(0, 0, 0, 0)
         command_layout.setSpacing(0)
-        command_layout.addWidget(self._transport_buttons(stage), 1)
+        # Without a status widget above, the button row is the whole box and its
+        # outer buttons have to round their top corners too.
+        command_layout.addWidget(self._transport_buttons(stage, cap_top=not stage.pipeline), 1)
         action_layout.addWidget(command_row)
         self.action_box_layout.addWidget(action_box)
 
-    def _action_button_specs(self, stage: Stage) -> list[tuple[str, Any, bool, bool, bool]]:
-        controls: list[tuple[str, Any, bool, bool, bool]] = []
+    def _action_button_specs(self, stage: Stage) -> list[tuple[str, Any, bool, bool, bool, bool]]:
+        controls: list[tuple[str, Any, bool, bool, bool, bool]] = []
         for control in stage_controls(stage):
-            if control.completes and control.action is None:
-                continue
             spec = self._command_spec(stage, control)
             if spec is None:
                 continue
-            controls.append((spec[0], spec[1], spec[2], spec[3], spec[4]))
-        controls.append(("E-STOP", lambda _checked=False: self._emergency_stop(), True, False, False))
+            controls.append((spec[0], spec[1], spec[2], spec[3], spec[4], bool(control.completes)))
+        controls.append(("E-STOP", lambda _checked=False: self._emergency_stop(), True, False, False, False))
         return controls
 
     def _render_main(self, stage: Stage) -> None:
@@ -770,7 +786,7 @@ class ControlWindow(QMainWindow):
 
         self.main_layout.addWidget(display)
 
-    def _transport_buttons(self, stage: Stage) -> QWidget:
+    def _transport_buttons(self, stage: Stage, *, cap_top: bool = False) -> QWidget:
         group = QFrame()
         group.setObjectName("TransportButtons")
         layout = QHBoxLayout(group)
@@ -780,17 +796,19 @@ class ControlWindow(QMainWindow):
         controls = self._action_button_specs(stage)
         self._transport_button_refs = []
 
-        for index, (label, callback, enabled, checked, toggle) in enumerate(controls):
+        for index, (label, callback, enabled, checked, toggle, suggested) in enumerate(controls):
             if index:
                 separator = QFrame()
                 separator.setObjectName("TransportSeparator")
                 separator.setFixedWidth(1)
                 layout.addWidget(separator)
             button = QPushButton(label)
-            if label == "Proceed" and enabled:
-                button.setObjectName("TransportButtonWarning")
-            else:
-                button.setObjectName("TransportButton")
+            button.setObjectName(_transport_object_name(label, enabled=enabled, suggested=suggested))
+            # Follow the surrounding frame's radius so a highlighted end button does
+            # not square off the rounded corner.
+            button.setProperty("roundLeft", index == 0)
+            button.setProperty("roundRight", index == len(controls) - 1)
+            button.setProperty("roundTop", cap_top)
             button.setCheckable(toggle)
             button.setChecked(checked)
             button.clicked.connect(callback)
@@ -850,7 +868,7 @@ class ControlWindow(QMainWindow):
         specs = self._action_button_specs(stage)
         if len(specs) != len(self._transport_button_refs):
             return
-        for button, (label, _callback, enabled, checked, toggle) in zip(
+        for button, (label, _callback, enabled, checked, toggle, suggested) in zip(
             self._transport_button_refs,
             specs,
             strict=True,
@@ -864,7 +882,7 @@ class ControlWindow(QMainWindow):
             elif not toggle and button.isChecked():
                 button.setChecked(False)
             button.setEnabled(enabled)
-            object_name = "TransportButtonWarning" if label == "Proceed" and enabled else "TransportButton"
+            object_name = _transport_object_name(label, enabled=enabled, suggested=suggested)
             if button.objectName() != object_name:
                 button.setObjectName(object_name)
                 button.style().unpolish(button)
@@ -1236,6 +1254,8 @@ class ControlWindow(QMainWindow):
 
     def _complete_current_stage(self, *, confirmed: bool = False) -> None:
         stage = self.workflow.current_stage(self.workflow_state)
+        if stage.pipeline:
+            self._clear_finished_pipeline_state(stage)
         try:
             self.workflow_state = self.workflow.complete_current(
                 self.workflow_state,
@@ -1251,15 +1271,6 @@ class ControlWindow(QMainWindow):
             self._set_status("Stage failed", "danger")
             self._notify(str(exc), "danger")
         self._render_current_stage()
-
-    def _auto_complete_ready_stage(self, action: str) -> bool:
-        stage = self.workflow.current_stage(self.workflow_state)
-        actions = set(stage.settings_options.get("auto_complete_actions", ()))
-        guard = str(stage.settings_options.get("auto_complete_guard") or "")
-        if action in actions and guard_enabled(guard, self._guard_value):
-            self._complete_current_stage()
-            return True
-        return False
 
     def _skip_current_stage(self) -> None:
         try:
@@ -1380,8 +1391,6 @@ class ControlWindow(QMainWindow):
             if notify_success:
                 self._notify(f"{action} ok", "success")
             self._append_log(f"{action}: ok")
-        if self._auto_complete_ready_stage(action):
-            return result
         if refresh:
             self._render_current_stage()
         return result
@@ -1391,7 +1400,6 @@ class ControlWindow(QMainWindow):
             self._run("stop_protocol", refresh=False)
             if stage.completion_gate == "recording_confirmation" and self.last_metadata.get("recording_active"):
                 self._run("stop_recording", refresh=False)
-            self._completion_pending = False
             self._render_current_stage()
             return
 
@@ -1401,7 +1409,6 @@ class ControlWindow(QMainWindow):
         statuses = dict(self.workflow_state.statuses)
         statuses[stage.id] = StageStatus.ACTIVE
         self.workflow_state = replace(self.workflow_state, statuses=statuses)
-        self._completion_pending = False
         self._run("run_protocol", self._protocol_run_settings(stage), refresh=False)
         self._render_current_stage()
 
@@ -1640,7 +1647,9 @@ class ControlWindow(QMainWindow):
             else:
                 self._sync_toc()
         if self._pipeline_event_state(latest) == "completed":
-            self._schedule_completed_pipeline_stage_finish(stage)
+            # The protocol is done, but the stage is not: light up Continue and let
+            # the operator decide when to move on.
+            self._refresh_action_box(stage)
 
     def _sync_run_recording_for_confirmation(self, confirmation: str) -> None:
         if not _run_complete_label(confirmation):
@@ -1668,42 +1677,13 @@ class ControlWindow(QMainWindow):
             self._tube_switch_notice_step = step_index
             self._notify("Switch collection tube to waste tube.", "warning", timeout_ms=0)
 
-    def _can_complete_completed_pipeline_stage(self, stage: Stage) -> bool:
-        if not stage.pipeline:
-            return False
-        if self.workflow_state.statuses.get(stage.id) is not StageStatus.ACTIVE:
-            return False
-        if stage.completion_gate == "recording_confirmation" and not self._runs_completion_confirmed:
-            return False
-        return True
-
-    def _schedule_completed_pipeline_stage_finish(self, stage: Stage) -> None:
-        if self._completion_pending or not self._can_complete_completed_pipeline_stage(stage):
-            return
-        self._completion_pending = True
-        self._refresh_action_box(stage)
-        QTimer.singleShot(500, self._finish_completed_pipeline_stage)
-
-    def _finish_completed_pipeline_stage(self) -> None:
-        self._completion_pending = False
-        self._complete_completed_pipeline_stage()
-
-    def _complete_completed_pipeline_stage(self) -> None:
-        stage = self._pipeline_stage()
-        if not self._can_complete_completed_pipeline_stage(stage):
-            return
+    def _clear_finished_pipeline_state(self, stage: Stage) -> None:
+        """Drop the finished protocol's leftovers as the operator leaves the stage."""
         self._latest_pipeline_event = None
         self._pipeline_stage_id = ""
         self._tube_switch_notice_step = -1
         self._clear_pipeline_confirmation()
         self._dismiss_notification()
-        current_index = self.workflow_state.index
-        stage_index = self.workflow.stages.index(stage)
-        self.workflow_state = replace(self.workflow_state, index=stage_index)
-        self._complete_current_stage()
-        if current_index != stage_index and current_index < len(self.workflow.stages):
-            self.workflow_state = replace(self.workflow_state, index=current_index)
-            self._render_current_stage()
         if stage.completion_gate == "recording_confirmation":
             self._runs_completion_confirmed = False
 
@@ -1857,6 +1837,18 @@ class ControlWindow(QMainWindow):
             return self.last_metadata.get("pipeline_state") in {"running", "paused", "stopping"}
         if name == "pipeline_waiting":
             return bool(self._pending_pipeline_confirmation()) and self.last_metadata.get("pipeline_state") == "running"
+        if name == "pipeline_complete":
+            stage = self.workflow.current_stage(self.workflow_state)
+            if not stage.pipeline:
+                return False
+            if self.workflow_state.statuses.get(stage.id) is not StageStatus.ACTIVE:
+                return False
+            # The protocol finishing is enough. The recording-confirmation gate only
+            # existed to hold back the automatic advance; the operator's click is the
+            # confirmation now.
+            return self._pipeline_event_state(self._latest_pipeline_event) == "completed"
+        if name == "corrections_applied":
+            return self._corrections_applied
         return True
 
     def _refresh_runtime_state(self) -> None:
@@ -1962,17 +1954,13 @@ class ControlWindow(QMainWindow):
         self._correction_apply_timer.start(180)
 
     def _apply_correction_values(self) -> None:
-        self._run("apply_corrections", raise_errors=False, refresh=False)
+        if self._run("apply_corrections", raise_errors=False, refresh=False) is not None:
+            self._corrections_applied = True
+            self._refresh_action_box(self.workflow.current_stage(self.workflow_state))
 
     def _apply_all_corrections(self) -> None:
-        result = self._run("apply_corrections", refresh=False)
-        if result is None:
-            self._render_current_stage()
-            return
-        stage = self.workflow.current_stage(self.workflow_state)
-        if any(action.action == "apply_corrections" and action.completes for action in stage.actions):
-            self._complete_current_stage()
-            return
+        if self._run("apply_corrections", refresh=False) is not None:
+            self._corrections_applied = True
         self._render_current_stage()
 
     def _action_enabled(self, action: str | None) -> bool:
@@ -2992,7 +2980,6 @@ def _fit_table_height(table: QTableWidget, *, max_rows: int | None = None) -> No
 def _short_control_label(label: str) -> str:
     replacements = {
         "Disconnect": "Disconnect",
-        "Continue": "Next",
         "Run Priming": "Prime",
         "Confirm Step": "Confirm",
         "Priming Done": "Done",

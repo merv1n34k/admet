@@ -83,6 +83,10 @@ RECORDING_SETTINGS = ParamSchema(
     (
         Param("recording_root", "Recording Root", ParamKind.PATH, default=""),
         Param("recording_label", "Recording Label", ParamKind.TEXT, default="recording"),
+        # Each frame is written as its own file, so an unattended recording can fill
+        # the disk. Recording stops once either limit is reached; 0 disables it.
+        Param("recording_max_frames", "Max Frames", ParamKind.INTEGER, default=100_000, minimum=0),
+        Param("recording_max_seconds", "Max Duration", ParamKind.FLOAT, default=0.0, minimum=0.0),
     )
 )
 

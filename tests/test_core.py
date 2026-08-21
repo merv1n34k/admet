@@ -99,7 +99,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(scene.editor.persistent)
         self.assertIn("camera", scene.features)
         self.assertIn("fluidics_preflight", fluigent.features)
-        self.assertEqual(scene.settings_options["auto_complete_guard"], "camera_live")
+        # Stages never advance on their own: completion is an explicit, guarded action.
+        scene_completion = [action for action in scene.actions if action.completes]
+        self.assertEqual([action.guard for action in scene_completion], ["camera_live"])
+        self.assertNotIn("auto_complete_guard", scene.settings_options)
+        self.assertNotIn("auto_complete_actions", scene.settings_options)
         self.assertEqual(priming.settings_options["pipeline_name"], "Priming")
         self.assertIn("completion_message", priming.settings_options)
         self.assertIn("camera_live and fluidics_connected", {action.guard for action in runs.actions})

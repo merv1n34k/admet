@@ -71,11 +71,27 @@ class CameraAcquisitionThread(Thread):
 
         self._stop_event = Event()
         self._recording_event = Event()
+        self._recording_paused = Event()
         self._frame_pending = Event()
 
     @property
     def recording(self) -> bool:
         return self._recording_event.is_set()
+
+    @property
+    def recording_paused(self) -> bool:
+        return self._recording_paused.is_set()
+
+    def pause_recording(self) -> None:
+        """Stop writing frames while keeping the recording open.
+
+        The writer, frame count and limits are preserved, so resuming continues the
+        same recording instead of starting a new one.
+        """
+        self._recording_paused.set()
+
+    def resume_recording(self) -> None:
+        self._recording_paused.clear()
 
     def run(self) -> None:
         self._stop_event.clear()
@@ -90,7 +106,7 @@ class CameraAcquisitionThread(Thread):
         self.camera.stop_grabbing()
 
     def process_frame(self, frame: np.ndarray) -> None:
-        if self._recording_event.is_set() and self.writer:
+        if self._recording_event.is_set() and not self._recording_paused.is_set() and self.writer:
             if self.writer.write(frame):
                 self.frame_count += 1
                 if self._check_limits():
@@ -124,6 +140,7 @@ class CameraAcquisitionThread(Thread):
         self.max_time = max_time
         self.frame_count = 0
         self.start_time = time.time()
+        self._recording_paused.clear()
         if not self.writer.start():
             self.writer = None
             return False
@@ -135,6 +152,7 @@ class CameraAcquisitionThread(Thread):
     def stop_recording(self, *, notify_complete: bool = False) -> int:
         frames = self.frame_count
         self._recording_event.clear()
+        self._recording_paused.clear()
         if self.writer:
             self.last_writer_frame_count = getattr(self.writer, "frame_count", None)
             self.writer.stop()
