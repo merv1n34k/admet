@@ -57,6 +57,13 @@ from admet.engines.acquisition.fluidics.config import (
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES, LIQUID_PROFILE_PARAM_NAMES
 from admet.engines.acquisition.fluidics.liquids import profile_by_id
 from admet.ui.preflight import PreflightPanel
+from admet.workflows.check_history import (
+    CHECK_INTERVAL_DAYS,
+    CheckRecord,
+    discover_checks,
+    latest_check,
+    load_check,
+)
 from admet.workflows.preflight import CHECK_DISPENSE, CHECK_FLOW
 from admet.ui import theme as ui
 from admet.ui.data import (
@@ -222,6 +229,16 @@ def _panel_box(title: str, object_name: str = "Panel") -> tuple[QFrame, QVBoxLay
 
 
 class ControlStagePage(QWidget):
+    # Pinning the page's height is only safe if the pin follows the content: a
+    # section that grows later -- a verdict appearing, a log gaining lines --
+    # would otherwise be squeezed into the height measured before it existed.
+    layout_changed = Signal()
+
+    def event(self, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.LayoutRequest:
+            self.layout_changed.emit()
+        return super().event(event)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.mounted_signature: tuple[Any, ...] | None = None
@@ -247,11 +264,19 @@ class ControlStagePage(QWidget):
         self.results_panel, self.results_layout = panels["results"]
         self.log_panel, self.log_layout = panels["log"]
 
-        # Spare height goes to the log rather than piling up as blank space under the
-        # last panel: collapsing the parameters otherwise left a gap that read as the
-        # content having disappeared.
+        # Planning sections carry their own panel frames, so they are hosted bare.
+        self.sections_host = QWidget()
+        self.sections_layout = QVBoxLayout(self.sections_host)
+        self.sections_layout.setContentsMargins(0, 0, 0, 0)
+        self.sections_layout.setSpacing(12)
+        self.sections_host.hide()
+
+        # Every panel keeps its natural height. Spare space is not handed to any of
+        # them -- the stack is sized to the page on show, so there is none to hand out.
         for key, (panel, _body) in panels.items():
-            layout.addWidget(panel, 1 if key == "log" else 0)
+            layout.addWidget(panel)
+            if key == "channel_manager":
+                layout.addWidget(self.sections_host)
 
 
 class ControlWindow(QMainWindow):
@@ -298,12 +323,13 @@ class ControlWindow(QMainWindow):
         # editing any correction value makes the applied set stale again.
         self._corrections_applied = False
         self._preflight: PreflightPanel | None = None
-        self._preflight_active = False
         self._last_sweep_step = -1
         self._sweep_reading: tuple[list[float], list[float]] | None = None
         # A finished check writes its snapshot once; the completion state is polled.
         self._stored_check_stage = ""
-        self.preflight_label: QLabel | None = None
+        # Scanning every project is cheap but not free, so the history is read once
+        # and dropped whenever something could have changed it.
+        self._check_records: tuple[CheckRecord, ...] | None = None
 
         self.setWindowTitle("admet control")
         self.resize(1440, 920)
@@ -492,37 +518,50 @@ class ControlWindow(QMainWindow):
             layout.addWidget(section)
             self.toc_rows.append({"dot": dot, "label": label, "section": section})
 
-        # Planning, listed under the workflow but outside it: it carries no status
-        # dot because it is never pending or complete.
-        preflight_row = QWidget()
-        preflight_row.setObjectName("TocRow")
-        preflight_row.setCursor(Qt.CursorShape.PointingHandCursor)
-        preflight_row.mousePressEvent = lambda _event: self._show_preflight()  # type: ignore[method-assign]
-        preflight_layout = QHBoxLayout(preflight_row)
-        preflight_layout.setContentsMargins(0, 8, 0, 3)
-        preflight_layout.setSpacing(7)
-        self.preflight_label = QLabel("Pre-flight")
-        self.preflight_label.setObjectName("TocStage")
-        preflight_layout.addWidget(_status_dot("inactive", 8))
-        preflight_layout.addWidget(self.preflight_label, 1)
-        layout.addWidget(preflight_row)
 
         layout.addStretch()
         return panel
+
+    def _size_stack_to_current(self) -> None:
+        """Hold the stack at exactly the height of the page on show.
+
+        A stacked layout reports the tallest page it holds, so a short stage would
+        otherwise be handed a tall one's height and have to place the surplus --
+        as a gap under the last panel, or as a panel stretched to swallow it.
+        Pinning the stack to the current page leaves no surplus to place, and the
+        scroll area takes over when a page is taller than the viewport.
+        """
+        if self.stage_stack is None:
+            return
+        current = self.stage_stack.currentWidget()
+        if current is None:
+            return
+        for index in range(self.stage_stack.count()):
+            page = self.stage_stack.widget(index)
+            page.setSizePolicy(
+                QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Preferred if page is current else QSizePolicy.Policy.Ignored,
+            )
+        # Sections and editors mounted a moment ago have no useful hint until the
+        # layout has been activated, so measure only after it has.
+        page_layout = current.layout()
+        if page_layout is not None:
+            page_layout.activate()
+        height = max(current.sizeHint().height(), current.minimumSizeHint().height())
+        if self.stage_stack.height() != height:
+            self.stage_stack.setFixedHeight(height)
 
     def _activate_stage_page(self, stage: Stage) -> ControlStagePage:
         page = self.stage_pages.get(stage.id)
         if page is None:
             page = ControlStagePage()
+            page.layout_changed.connect(self._size_stack_to_current)
             self.stage_pages[stage.id] = page
             if self.stage_stack is not None:
                 self.stage_stack.addWidget(page)
-        if (
-            self.stage_stack is not None
-            and not self._preflight_active
-            and self.stage_stack.currentWidget() is not page
-        ):
+        if self.stage_stack is not None and self.stage_stack.currentWidget() is not page:
             self.stage_stack.setCurrentWidget(page)
+        self._size_stack_to_current()
         self.current_stage_page = page
         self.action_box_panel = page.action_box_panel
         self.action_box_layout = page.action_box_layout
@@ -620,17 +659,9 @@ class ControlWindow(QMainWindow):
                     for prefix, label, *_rest in FLUIDIC_CHANNELS
                 },
                 liquids=self._channel_liquids,
+                parent=self,
             )
-            self.stage_stack.addWidget(self._preflight)
         return self._preflight
-
-    def _show_preflight(self) -> None:
-        """Show the planning section. It changes no workflow state."""
-        self._ensure_preflight()
-        self._preflight_active = True
-        self._preflight.recalculate()
-        self.stage_stack.setCurrentWidget(self._preflight)
-        self._sync_toc()
 
     def _channel_liquids(self) -> dict[str, tuple[float, float]]:
         """(density, viscosity) per channel label, from each channel's selected liquid."""
@@ -644,6 +675,7 @@ class ControlWindow(QMainWindow):
     def _build_project_menu(self) -> QMenu:
         """Discovered projects, listed the way the analyze picker lists them."""
         self.project_refs = discover_projects(self.discovery_root)
+        self._check_records = None
         menu = QMenu(self)
         current = str(self.project_path) if self.project_path else ""
         for ref in self.project_refs:
@@ -730,7 +762,6 @@ class ControlWindow(QMainWindow):
 
     def _select_stage(self, index: int) -> None:
         index = max(0, min(index, len(self.workflow.stages) - 1))
-        self._preflight_active = False
         self._dismiss_notification(restore_instruction=False)
         statuses = dict(self.workflow_state.statuses)
         current = self.workflow.current_stage(self.workflow_state)
@@ -806,6 +837,7 @@ class ControlWindow(QMainWindow):
         self._render_action_box(stage)
         self._render_main(stage)
         self._render_channel_manager(stage)
+        self._render_sections(stage)
         self._render_results(stage)
         self._render_action(stage)
         self._render_log()
@@ -821,7 +853,28 @@ class ControlWindow(QMainWindow):
         self.video_table = None
         self._render_main(stage)
         self._render_channel_manager(stage)
+        self._render_sections(stage)
         self._render_results(stage)
+
+    def _render_sections(self, stage: Stage) -> None:
+        """Mount this stage's planning sections, moving them off whatever held them.
+
+        The sections are one calculation shared between stages, so they are moved
+        rather than copied: only one stage shows a given section at a time, and it
+        is always the same widget carrying the same numbers.
+        """
+        page = self.current_stage_page
+        if page is None:
+            return
+        self._clear_layout(page.sections_layout, delete=False)
+        keys = tuple(stage.settings_options.get("sections") or ())
+        if not keys:
+            page.sections_host.hide()
+            return
+        for section in self._ensure_preflight().sections_for(keys):
+            page.sections_layout.addWidget(section)
+            section.show()
+        page.sections_host.show()
 
     def _sync_stage(self, stage: Stage) -> None:
         self._sync_action_box(stage)
@@ -830,6 +883,10 @@ class ControlWindow(QMainWindow):
         self._sync_log()
         self._sync_toc()
         self._show_stage_instruction(stage)
+        self._size_stack_to_current()
+        # Widgets mounted in this pass report their real height only once Qt has
+        # laid them out, so measure again on the next turn of the event loop.
+        QTimer.singleShot(0, self._size_stack_to_current)
 
     def _render_action_box(self, stage: Stage) -> None:
         action_box = QFrame()
@@ -1076,6 +1133,20 @@ class ControlWindow(QMainWindow):
             return (
                 state.label,
                 lambda _checked=False, s=stage: self._confirm_pipeline_step(s),
+                state.enabled,
+                state.active,
+                state.toggle,
+            )
+        if action == "load_last_check":
+            state = action_button_state(
+                control,
+                self._guard_value,
+                active=False,
+                label=_short_control_label(control.label),
+            )
+            return (
+                state.label,
+                lambda _checked=False, s=stage: self._load_last_check(s),
                 state.enabled,
                 state.active,
                 state.toggle,
@@ -1353,6 +1424,12 @@ class ControlWindow(QMainWindow):
             self._request_stage_completion(stage)
 
     def _request_stage_completion(self, stage: Stage) -> None:
+        if stage.pipeline and stage.skippable and not self._guard_value("pipeline_complete"):
+            # Continue is the only way out of a pipeline stage, so it has to stand
+            # for both "ran it" and "moved past it". Which one happened is recorded
+            # rather than inferred: a stage passed without its protocol is skipped.
+            self._request_stage_skip(stage)
+            return
         if stage.confirmation_required:
             self._confirm(
                 f"Confirm completion of {stage.label}?",
@@ -1811,6 +1888,7 @@ class ControlWindow(QMainWindow):
         self.project_path = store.path
         self.api.session = store.session
         self.api.workdir = str(store.path)
+        self._check_records = None
         self._append_log(f"system check stored as {path.name}: {snapshot.summary()}")
 
     def _capture_sweep_point(self, stage: Stage, event: Any) -> None:
@@ -1967,14 +2045,8 @@ class ControlWindow(QMainWindow):
     def _sync_toc(self) -> None:
         rows = toc_row_states(self.workflow, self.workflow_state, status_for=lambda index, _stage: self._status_key(index))
         for state, row in zip(rows, self.toc_rows, strict=True):
-            # While the planning section is open no workflow stage is the current one.
-            status = "inactive" if self._preflight_active and state.status == "current" else state.status
-            _apply_dot_status(row["dot"], status)
-            row["label"].setStyleSheet(_toc_label_qss(status))
-        if self.preflight_label is not None:
-            self.preflight_label.setStyleSheet(
-                _toc_label_qss("current" if self._preflight_active else "inactive")
-            )
+            _apply_dot_status(row["dot"], state.status)
+            row["label"].setStyleSheet(_toc_label_qss(state.status))
 
     def _status_key(self, index: int) -> str:
         stage = self.workflow.stages[index]
@@ -1983,6 +2055,10 @@ class ControlWindow(QMainWindow):
             return "error"
         if stage.id == self._pipeline_stage_id and self._pipeline_active():
             return "processing"
+        if self._check_infeasible(stage.id):
+            # A setup that cannot reach its flows is worth seeing from the contents,
+            # not only from inside the stage that measured it.
+            return "error"
         if has_feature(stage, "camera") and self._camera_scene_ready():
             return "done"
         if "fluidics_preflight" in stage.features and self._fluigent_ready():
@@ -2047,7 +2123,78 @@ class ControlWindow(QMainWindow):
             return self._pipeline_event_state(self._latest_pipeline_event) == "completed"
         if name == "corrections_applied":
             return self._corrections_applied
+        if name == "check_infeasible":
+            return self._check_infeasible(
+                self.workflow.current_stage(self.workflow_state).id
+            )
+        if name == "check_recorded":
+            return self._last_check() is not None
+        if name == "check_satisfied":
+            # Leaving a check stage means either running it now or having an
+            # earlier one to stand on. A rig with no check of this kind at all
+            # has to run one.
+            return self._guard_value("pipeline_complete") or self._last_check() is not None
+        if name == "check_due":
+            record = self._last_check()
+            return record is None or record.is_due(datetime.now(timezone.utc))
         return True
+
+    def _check_infeasible(self, stage_id: str = "") -> bool:
+        """True when the measured sweep says the target flows cannot be reached."""
+        if self._preflight is None:
+            return False
+        if stage_id and stage_id != "characterise":
+            return False
+        return self._preflight.verdict_feasible is False
+
+    def _check_kind(self, stage: Stage | None = None) -> str:
+        stage = stage if stage is not None else self.workflow.current_stage(self.workflow_state)
+        return CHECK_KINDS.get(stage.id, "")
+
+    def _check_history(self) -> tuple[CheckRecord, ...]:
+        if self._check_records is None:
+            self._check_records = discover_checks(self.discovery_root)
+        return self._check_records
+
+    def _last_check(self, stage: Stage | None = None) -> CheckRecord | None:
+        kind = self._check_kind(stage)
+        if not kind:
+            return None
+        return latest_check(self._check_history(), kind)
+
+    def _load_last_check(self, stage: Stage) -> None:
+        """Bring the last stored check back instead of running another.
+
+        Only worth doing when nothing about the setup has moved since -- the
+        readings are re-shown exactly as they were taken, and the stage is left
+        for the operator to accept or re-run.
+        """
+        record = self._last_check(stage)
+        if record is None:
+            self._notify("No stored check to load", "warning")
+            return
+        data = load_check(record.path)
+        if not data:
+            self._notify(f"Could not read {record.path.name}", "danger")
+            return
+        restored = self._ensure_preflight().load_snapshot(data)
+        if not restored:
+            self._notify("Stored check held nothing to restore", "warning")
+            return
+        now = datetime.now(timezone.utc)
+        age = record.age_days(now)
+        age_text = f"{age:.0f} days old" if age is not None else "undated"
+        if record.is_due(now):
+            # Loading an old check shows its numbers but does not make them current.
+            self._notify(
+                f"Loaded check from {record.project_id}, {age_text} -- past the "
+                f"{CHECK_INTERVAL_DAYS} day interval, so it is still owed a fresh run",
+                "danger",
+            )
+        else:
+            self._notify(f"Loaded check from {record.project_id}, {age_text}", "warning")
+        self._append_log(f"check loaded: {record.path.name} ({record.summary})")
+        self._render_current_stage()
 
     def _refresh_runtime_state(self) -> None:
         camera = getattr(self.api.engine, "camera", None)
@@ -2418,7 +2565,23 @@ class ControlWindow(QMainWindow):
     def _show_stage_instruction(self, stage: Stage | None = None) -> None:
         if stage is None:
             stage = self.workflow.current_stage(self.workflow_state)
-        self._show_instruction_card(instruction_text(stage, self._guard_value))
+        text = instruction_text(stage, self._guard_value)
+        self._show_instruction_card(self._with_last_check(stage, text))
+
+    def _with_last_check(self, stage: Stage, text: str) -> str:
+        """Append what this rig's last check of this kind was, if any.
+
+        The date is given as the date, not as an age: a standing note that says
+        "12 days ago" is wrong tomorrow, while the day it was run stays true.
+        """
+        kind = self._check_kind(stage)
+        if not kind:
+            return text
+        record = self._last_check(stage)
+        if record is None:
+            return f"{text} No {kind} check on record for this rig."
+        day = record.recorded_at[:10] or "an unrecorded date"
+        return f"{text} Last {kind} check: {day}, project {record.project_id}."
 
     def _set_status(self, text: str, kind: str = "primary") -> None:
         self.status_kind = kind
@@ -2591,15 +2754,19 @@ class ControlWindow(QMainWindow):
             if widget is not None and widget.parent() is not None:
                 widget.setParent(None)
 
-    def _clear_layout(self, layout) -> None:
+    def _clear_layout(self, layout, *, delete: bool = True) -> None:
+        """Empty a layout. Widgets that outlive the mount are only unparented."""
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget()
             child_layout = item.layout()
             if widget is not None:
-                widget.deleteLater()
+                if delete:
+                    widget.deleteLater()
+                else:
+                    widget.setParent(None)
             elif child_layout is not None:
-                self._clear_layout(child_layout)
+                self._clear_layout(child_layout, delete=delete)
 
 
 class ChannelControlPanel(QFrame):

@@ -5,6 +5,9 @@ from admet.engines.acquisition.fluidics.config import (
     BEADS_M_SENSOR,
     CELLS_M_SENSOR,
     OIL_L_SENSOR,
+    STABILITY_DURATION_S,
+    STABILITY_TIMEOUT_S,
+    STABILITY_TOLERANCE_UL_MIN,
 )
 from admet.engines.acquisition.protocol import (
     PIPELINES,
@@ -122,6 +125,9 @@ class CharacteriseProtocolTests(unittest.TestCase):
             "wash_oil_volume_ul": 500.0,
             "wash_pressure_mbar": 2000.0,
             "wash_pressure_duration_s": 120.0,
+            "sweep_tolerance_ul_min": 2.0,
+            "sweep_window_s": 5.0,
+            "sweep_timeout_s": 60.0,
             "gravimetric_target_ul": 100.0,
             "gravimetric_flow_ul_min": 250.0,
             "gravimetric_replicates": 3,
@@ -129,6 +135,52 @@ class CharacteriseProtocolTests(unittest.TestCase):
 
         for name in protocol_names():
             self.assertTrue(build_protocol(name, every_setting), name)
+
+
+class SweepSettlingTests(unittest.TestCase):
+    def test_the_sweep_takes_its_settling_rule_from_the_settings(self):
+        # A rig that hunts around its setpoint needs a looser rule; one that
+        # saturates needs to stop waiting sooner.
+        steps = build_characterise_protocol(
+            {
+                **SETTINGS,
+                "sweep_tolerance_ul_min": 8.0,
+                "sweep_window_s": 12.0,
+                "sweep_timeout_s": 25.0,
+            }
+        )
+
+        self.assertEqual(
+            steps[0].trigger_params,
+            {"sensor_index": 0, "tolerance_ul_min": 8.0, "window_s": 12.0, "timeout_s": 25.0},
+        )
+
+    def test_an_unset_rule_falls_back_to_the_shipped_one(self):
+        params = build_characterise_protocol(SETTINGS)[0].trigger_params
+
+        self.assertEqual(params["tolerance_ul_min"], STABILITY_TOLERANCE_UL_MIN)
+        self.assertEqual(params["window_s"], STABILITY_DURATION_S)
+        self.assertEqual(params["timeout_s"], STABILITY_TIMEOUT_S)
+
+    def test_each_step_settles_on_its_own_copy_of_the_rule(self):
+        steps = build_characterise_protocol(SETTINGS)
+
+        sweeps = [step for step in steps if step.trigger_type == "stability"]
+        self.assertEqual(len(sweeps), 5)
+        for step in sweeps[1:]:
+            self.assertIsNot(step.trigger_params, sweeps[0].trigger_params)
+
+    def test_progress_fills_towards_giving_up_rather_than_towards_the_window(self):
+        # The old reading sat at 100% for the rest of the wait, which is what made
+        # an unsettled sweep look stalled.
+        trigger = StabilityTrigger(0, window_s=0.05, timeout_s=4.0)
+        trigger.check(lambda _index: 250.0, lambda _index: 0.0)
+
+        time.sleep(0.2)
+        trigger.check(lambda _index: 250.0, lambda _index: 0.0)
+
+        self.assertLess(trigger.progress(), 0.5)
+        self.assertGreater(trigger.progress(), 0.0)
 
 
 class GravimetryProtocolTests(unittest.TestCase):

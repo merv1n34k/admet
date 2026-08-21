@@ -38,7 +38,45 @@ def has_feature(stage: Stage, feature: str) -> bool:
     return feature in stage.features
 
 
+# Every guard name the control window answers to. An unrecognised guard reads as
+# true, so a name that never reaches the window would silently enable its button.
+KNOWN_GUARDS = frozenset(
+    {
+        "project_ready",
+        "camera_connected",
+        "camera_live",
+        "fluidics_connected",
+        "pipeline_running",
+        "pipeline_waiting",
+        "pipeline_complete",
+        "corrections_applied",
+        "check_infeasible",
+        "check_recorded",
+        "check_due",
+        "check_satisfied",
+    }
+)
+
+
+def guard_terms(guard: str) -> tuple[str, ...]:
+    """The names a guard expression refers to, without their negation."""
+    terms = []
+    for part in guard.split(" and "):
+        part = part.strip()
+        if part.startswith("not "):
+            part = part[4:].strip()
+        if part:
+            terms.append(part)
+    return tuple(terms)
+
+
 def guard_enabled(guard: str, value: Callable[[str], bool]) -> bool:
+    """Evaluate a guard: names joined by " and ", each optionally negated by "not ".
+
+    Deliberately not an expression language -- there is no "or" and no bracketing,
+    so anything more involved has to be named and computed where the state lives
+    rather than smuggled into a string that would quietly evaluate to true.
+    """
     if not guard:
         return True
     for part in guard.split(" and "):

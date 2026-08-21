@@ -1,9 +1,13 @@
-"""Pre-flight planning section.
+"""The planning maths, as sections mounted on the stages that need them.
 
-Replaces the planning spreadsheet: work out the flow split, how much oil, water
-and IPA an experiment will consume, and the correction factor a weighed dispense
-implies. It sits in the control window beside the workflow stages but is not one
-of them -- it holds no workflow state and never touches hardware.
+Replaces the planning spreadsheet: the flow split and what an experiment will
+consume, what the plumbing costs, and the factor a weighed dispense implies.
+
+These used to be one page of their own, which meant reading numbers in one place
+and acting on them in another. Each section now belongs to the stage it informs
+-- flows and consumption to the runs, the layout and the swept resistance to the
+flow check, the weights to the dispense check -- while a single owner keeps them
+consistent, since every section is a function of the same flows and liquids.
 """
 
 from __future__ import annotations
@@ -24,7 +28,6 @@ from PySide6.QtWidgets import (
 )
 
 from admet.engines.acquisition.fluidics.config import GRAVIMETRIC_REPLICATES
-from admet.ui import theme as ui
 from admet.ui.theme import Theme
 from admet.workflows.preflight import (
     CHECK_DISPENSE,
@@ -325,20 +328,28 @@ class PreflightPanel(QWidget):
         self.setObjectName("PreflightPanel")
         self._channel_labels = channel_labels
         self._channel_units = channel_units or {}
+        # None until a sweep has been measured: unknown is not the same as passing.
+        self.verdict_feasible: bool | None = None
         self._liquids = liquids
         self._syncing = False
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(ui.spacing("group"))
-        root.addWidget(self._build_flow_panel())
-        root.addWidget(self._build_tubing_panel())
-        root.addWidget(self._build_system_panel())
-        root.addWidget(self._build_consumption_panel())
-        root.addWidget(self._build_gravimetric_panel())
-        root.addStretch()
+        # This widget is never shown. It owns the sections so they stay one
+        # calculation -- a flow typed on the runs stage moves the layout on the
+        # check stage -- and hands them out to whichever stage page mounts them.
+        self.sections: dict[str, QWidget] = {
+            "flow": self._build_flow_panel(),
+            "layout": self._build_tubing_panel(),
+            "system": self._build_system_panel(),
+            "consumption": self._build_consumption_panel(),
+            "gravimetric": self._build_gravimetric_panel(),
+        }
+        self.hide()
 
         self._channel_flows_edited()
+
+    def sections_for(self, keys: tuple[str, ...]) -> list[QWidget]:
+        """The named sections, in the order asked for."""
+        return [self.sections[key] for key in keys if key in self.sections]
 
     # ---- flows -----------------------------------------------------------
     def _build_flow_panel(self) -> QWidget:
@@ -424,12 +435,10 @@ class PreflightPanel(QWidget):
     def _build_tubing_panel(self) -> QWidget:
         panel, body = _panel("Fluidic layout back pressure")
         hint = QLabel(
-            "The layout as plumbed. Fill in each run's length and bore on the pipe it "
-            "belongs to; pipe thickness follows the bore and turns amber, then red, as a "
-            "run eats into the pressure budget. Inlets are parallel, so a channel pays "
-            "only for its own runs, while the outlet carries all three flows and is "
-            "charged to every channel. The L unit runs 1/16\" out to a union and 1/32\" "
-            "into the chip, so it has the extra run the M units do not."
+            "Lengths and bores as plumbed. Thickness follows the bore; a run turns "
+            "amber, then red, as it eats into the budget. Inlets are parallel, so each "
+            "pays only for its own runs -- the outlet carries all three flows and is "
+            "charged to every channel."
         )
         hint.setObjectName("StageSummary")
         hint.setWordWrap(True)
@@ -472,10 +481,8 @@ class PreflightPanel(QWidget):
         _field(limits, 0, 0, "Pressure limit", self.pressure_limit)
         body.addLayout(limits)
         note = QLabel(
-            "The limit is one pressure unit's ceiling, applied to each channel on its "
-            "own -- the channels do not share a budget. Where the units differ, enter "
-            "the lowest. These figures are tubing only; what the chip costs is measured "
-            "below, not calculated here."
+            "One unit's ceiling, applied per channel rather than shared; where the "
+            "units differ, enter the lowest. Tubing only -- the chip is measured below."
         )
         note.setObjectName("StageSummary")
         note.setWordWrap(True)
@@ -565,10 +572,7 @@ class PreflightPanel(QWidget):
         combo = QComboBox()
         for label, value in TUBING_BORES:
             combo.addItem(label, value)
-        for index in range(combo.count()):
-            if abs(float(combo.itemData(index)) - default_mm) < 1e-9:
-                combo.setCurrentIndex(index)
-                break
+        self._select_bore(combo, default_mm)
         return combo
 
     def _channel_viscosity(self, channel: str) -> float:
@@ -625,21 +629,10 @@ class PreflightPanel(QWidget):
     def _build_system_panel(self) -> QWidget:
         panel, body = _panel("Measured system resistance")
         protocol = QLabel(
-            "The three inlets meet at the junction and share one outlet, so a channel "
-            "cannot be measured on its own -- what each one sees depends on what the "
-            "others are doing. Sweep the setup as a whole instead, keeping the ratio "
-            "you actually run:\n"
-            "1. Prime every line until no bubbles remain, chip connected as it will be run.\n"
-            "2. Set all three channels to their working flows, then scale all of them "
-            "together -- 20% to 100% of target -- so the phase ratio never changes. Flows are "
-            "regulated and the pressure the controller settles at is the reading; driving "
-            "pressure instead would let each channel land wherever its own resistance put it.\n"
-            "3. At each step wait until all channels read stable (within 2 uL/min for 5 s), "
-            "then record every channel's pressure and its steady flow from the monitor.\n"
-            "4. Enter one row per step, or let the System check stage run the sweep and fill "
-            "them in. Repeat whenever the chip, tubing or liquids change.\n"
-            "Holding the ratio fixed is what makes this valid: total flow then rises in "
-            "step with each channel, so each one stays linear in its own flow."
+            "Start Sweep fills this in: every channel is scaled together, 20% to 100% "
+            "of target, so the phase ratio holds and each channel stays linear in its "
+            "own flow. Rows can also be typed by hand. Re-run it after any change to "
+            "the chip, the tubing or the liquids."
         )
         protocol.setObjectName("StageSummary")
         protocol.setWordWrap(True)
@@ -682,10 +675,11 @@ class PreflightPanel(QWidget):
         self.system_fit.setWordWrap(True)
         body.addWidget(self.system_fit)
 
-        self.system_verdict = QLabel("")
-        self.system_verdict.setObjectName("VerdictPass")
-        self.system_verdict.setWordWrap(True)
-        body.addWidget(self.system_verdict)
+        # The verdict itself is raised where the operator is looking -- the stage
+        # marker and the stage note -- so the section carries only its reasoning.
+        self.system_verdict_detail = _value_label("")
+        self.system_verdict_detail.setWordWrap(True)
+        body.addWidget(self.system_verdict_detail)
 
         self.system_remedies = _value_label("")
         self.system_remedies.setWordWrap(True)
@@ -752,7 +746,7 @@ class PreflightPanel(QWidget):
                 "Enter at least two steps for a channel. Every channel is judged separately, "
                 "and the one needing the most pressure is what limits the setup."
             )
-            self._set_verdict(None, "")
+            self._set_verdict(None)
             self.system_remedies.setText("")
             return
 
@@ -787,19 +781,18 @@ class PreflightPanel(QWidget):
         self.system_fit.setText("\n".join(tubing_lines))
         channel, _system, target, result = worst
         if result.feasible:
-            verdict = (
-                f"FEASIBLE - every measured channel fits. {channel} needs the most at "
+            detail = (
+                f"Every measured channel fits. {channel} needs the most at "
                 f"{result.required_mbar:,.0f} mbar of the {limit:,.0f} mbar available."
             )
         else:
-            verdict = (
-                f"NOT FEASIBLE - {channel} needs {result.required_mbar:,.0f} mbar for "
-                f"{target:g} uL/min, {result.shortfall_mbar:,.0f} mbar beyond the "
-                f"{limit:,.0f} mbar limit. That channel caps out at "
-                f"{result.max_flow_ul_min:.0f} uL/min, and the ratio has to hold, so the "
-                f"whole setup is limited by it."
+            detail = (
+                f"{channel} needs {result.required_mbar:,.0f} mbar for {target:g} uL/min, "
+                f"{result.shortfall_mbar:,.0f} mbar beyond the {limit:,.0f} mbar limit. "
+                f"That channel caps out at {result.max_flow_ul_min:.0f} uL/min, and the "
+                f"ratio has to hold, so the whole setup is limited by it."
             )
-        self._set_verdict(result.feasible, verdict)
+        self._set_verdict(result.feasible, detail)
         self.system_remedies.setText(
             "\n".join(f"- {item}" for item in result.remedies) if result.remedies else ""
         )
@@ -869,6 +862,92 @@ class PreflightPanel(QWidget):
             dispense_checks=self.dispense_checks() if kind == CHECK_DISPENSE else (),
         )
 
+    def load_snapshot(self, data: dict) -> bool:
+        """Put a stored check back into the panel, conditions and all.
+
+        The setup is restored first, then the readings, because the readings are
+        only meaningful against the plumbing and liquids they were taken on. What
+        is written here is exactly what was written out -- nothing is re-measured.
+        """
+        conditions = data.get("conditions") if isinstance(data.get("conditions"), dict) else {}
+        restored = False
+
+        flows = conditions.get("flows_ul_min") if isinstance(conditions, dict) else None
+        if isinstance(flows, dict):
+            self._set_quietly(
+                (self.oil_flow, float(flows.get("oil") or 0.0)),
+                (self.beads_flow, float(flows.get("beads") or 0.0)),
+                (self.cells_flow, float(flows.get("cells") or 0.0)),
+            )
+            restored = True
+
+        limit = conditions.get("pressure_limit_mbar")
+        if isinstance(limit, int | float):
+            self.pressure_limit.setValue(float(limit))
+
+        layout = conditions.get("layout") if isinstance(conditions.get("layout"), dict) else {}
+        for channel in layout.get("channels", ()) if isinstance(layout, dict) else ():
+            if not isinstance(channel, dict):
+                continue
+            rows = self._segment_inputs.get(str(channel.get("channel") or ""), [])
+            for (length, bore), run in zip(rows, channel.get("runs", ()), strict=False):
+                if not isinstance(run, dict):
+                    continue
+                length.setValue(float(run.get("length_cm") or 0.0))
+                self._select_bore(bore, float(run.get("bore_mm") or 0.0))
+            restored = restored or bool(rows)
+        outlet = layout.get("outlet") if isinstance(layout, dict) else None
+        if isinstance(outlet, dict):
+            self.outlet_length.setValue(float(outlet.get("length_cm") or 0.0))
+            self._select_bore(self.outlet_bore, float(outlet.get("bore_mm") or 0.0))
+
+        for check in data.get("flow_checks", ()) or ():
+            if not isinstance(check, dict):
+                continue
+            column = self._channel_column(str(check.get("channel") or ""))
+            if column is None:
+                continue
+            for step, sample in enumerate(check.get("samples", ()) or ()):
+                if not isinstance(sample, dict) or step >= len(self._system_rows):
+                    continue
+                pressure_box, flow_box = self._system_rows[step][column]
+                pressure_box.setValue(float(sample.get("pressure_mbar") or 0.0))
+                flow_box.setValue(float(sample.get("flow_ul_min") or 0.0))
+                restored = True
+
+        for check in data.get("dispense_checks", ()) or ():
+            if not isinstance(check, dict):
+                continue
+            channel = str(check.get("channel") or "")
+            target = check.get("target_ul")
+            if isinstance(target, int | float) and target > 0:
+                self.target_volume.setValue(float(target))
+            flow = check.get("flow_ul_min")
+            if isinstance(flow, int | float) and flow > 0:
+                self.dispense_flow.setValue(float(flow))
+            rows = [row for row in self._gravimetric_rows if str(row["channel"]) == channel]
+            for row, weights in zip(rows, check.get("weights_g", ()) or (), strict=False):
+                if not isinstance(weights, dict):
+                    continue
+                row["empty"].setValue(float(weights.get("empty") or 0.0))
+                row["full"].setValue(float(weights.get("full") or 0.0))
+                restored = True
+
+        self.recalculate()
+        return restored
+
+    def _channel_column(self, channel: str) -> int | None:
+        try:
+            return self._channel_labels.index(channel)
+        except ValueError:
+            return None
+
+    def _select_bore(self, combo: QComboBox, bore_mm: float) -> None:
+        for index in range(combo.count()):
+            if abs(float(combo.itemData(index)) - bore_mm) < 1e-9:
+                combo.setCurrentIndex(index)
+                return
+
     def record_sweep_point(self, step: int, pressures: list[float], flows: list[float]) -> None:
         """Write one settled step of a measured sweep into the table.
 
@@ -890,14 +969,10 @@ class PreflightPanel(QWidget):
                 flow_box.setValue(0.0)
         self.recalculate()
 
-    def _set_verdict(self, feasible: bool | None, text: str) -> None:
-        self.system_verdict.setText(text)
-        self.system_verdict.setVisible(bool(text))
-        name = "VerdictPass" if feasible else "VerdictFail"
-        if self.system_verdict.objectName() != name:
-            self.system_verdict.setObjectName(name)
-            self.system_verdict.style().unpolish(self.system_verdict)
-            self.system_verdict.style().polish(self.system_verdict)
+    def _set_verdict(self, feasible: bool | None, detail: str = "") -> None:
+        self.verdict_feasible = feasible
+        self.system_verdict_detail.setText(detail)
+        self.system_verdict_detail.setVisible(bool(detail))
 
     # ---- consumption -----------------------------------------------------
     def _build_consumption_panel(self) -> QWidget:

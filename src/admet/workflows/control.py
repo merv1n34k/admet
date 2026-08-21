@@ -3,6 +3,7 @@ from __future__ import annotations
 from admet.engines.acquisition.settings import (
     CAMERA_SETTINGS,
     CORRECTION_SETTINGS,
+    CHARACTERISE_SETTINGS,
     FLUIGENT_SETTINGS,
     GRAVIMETRY_SETTINGS,
     PROTOCOL_SETTINGS,
@@ -116,6 +117,9 @@ RUN_MAIN_SETTINGS = (
 CHARACTERISE_MAIN_SETTINGS = (
     "run_oil_flow_ul_min",
     "run_aqueous_total_flow_ul_min",
+    "sweep_tolerance_ul_min",
+    "sweep_window_s",
+    "sweep_timeout_s",
 )
 GRAVIMETRY_MAIN_SETTINGS = (
     "gravimetric_target_ul",
@@ -269,103 +273,8 @@ def create_control_workflow() -> Workflow:
                 },
             ),
             Stage(
-                "characterise",
-                "4. System check: flow",
-                action="run_protocol",
-                description="Sweep the working flows to measure what the plumbing and chip cost.",
-                instructions=(
-                    "Optional. Run it after a chip, tubing or liquid change to learn whether the "
-                    "target flows are reachable before spending reagent.",
-                ),
-                instruction_cards=(
-                    StageInstruction(
-                        "Apply the correction factors first, or the measured flows are not true flows.",
-                        "not corrections_applied",
-                    ),
-                    StageInstruction(
-                        "Start the sweep. Every channel is scaled together so the phase ratio holds; "
-                        "each step settles before the next. Readings land in the pre-flight section.",
-                    ),
-                ),
-                settings=RUN_SETTINGS,
-                actions=(
-                    StageAction(
-                        "Start Sweep",
-                        "run_protocol",
-                        guard="fluidics_connected and corrections_applied",
-                        active_when="pipeline_running",
-                        kind="pipeline",
-                    ),
-                    StageAction("Pause", "pause_protocol", guard="pipeline_running", variant="secondary"),
-                    StageAction("Skip Step", "skip_protocol", guard="pipeline_waiting", variant="secondary"),
-                    StageAction("Continue", completes=True, guard="pipeline_complete", variant="warning"),
-                ),
-                editor=CONTROL_LIVE_EDITOR,
-                results=CONTROL_RESULTS,
-                features=("fluidics",),
-                pipeline=True,
-                skippable=True,
-                settings_options={
-                    "main": CHARACTERISE_MAIN_SETTINGS,
-                    "pipeline_name": "Characterise",
-                    "pipeline_label": "Start Sweep",
-                    "completion_message": (
-                        "Sweep complete. The readings are in the pre-flight section, and the "
-                        "check is stored with the project."
-                    ),
-                },
-            ),
-            Stage(
-                "gravimetry",
-                "5. System check: dispense",
-                action="run_protocol",
-                description="Dispense a weighed volume per channel to check what the sensors report.",
-                instructions=(
-                    "Optional. Run it when a channel's readings are suspect, or after changing a "
-                    "liquid, to derive the scale its profile should carry.",
-                ),
-                instruction_cards=(
-                    StageInstruction(
-                        "Have the balance ready. Each replicate stops twice: once to place a tube "
-                        "weighed empty, once to weigh it full.",
-                    ),
-                    StageInstruction(
-                        "Enter both masses in the pre-flight dispense table as you go. The factor "
-                        "it derives is what belongs in the liquid profile.",
-                    ),
-                ),
-                settings=GRAVIMETRY_SETTINGS,
-                actions=(
-                    StageAction(
-                        "Start Dispense",
-                        "run_protocol",
-                        guard="fluidics_connected and corrections_applied",
-                        active_when="pipeline_running",
-                        kind="pipeline",
-                    ),
-                    StageAction("Pause", "pause_protocol", guard="pipeline_running", variant="secondary"),
-                    StageAction("Proceed", "confirm_protocol", guard="pipeline_waiting", variant="warning"),
-                    StageAction("Skip Step", "skip_protocol", guard="pipeline_waiting", variant="secondary"),
-                    StageAction("Continue", completes=True, guard="pipeline_complete", variant="warning"),
-                ),
-                editor=CONTROL_LIVE_EDITOR,
-                results=CONTROL_RESULTS,
-                features=("fluidics",),
-                pipeline=True,
-                skippable=True,
-                settings_options={
-                    "main": GRAVIMETRY_MAIN_SETTINGS,
-                    "pipeline_name": "Gravimetry",
-                    "pipeline_label": "Start Dispense",
-                    "completion_message": (
-                        "Dispenses complete. The factors are in the pre-flight section, and the "
-                        "check is stored with the project."
-                    ),
-                },
-            ),
-            Stage(
                 "priming",
-                "6. Priming protocol",
+                "4. Priming protocol",
                 action="run_protocol",
                 description="Run the priming pipeline and confirm gated steps as prompted.",
                 instructions=("Run priming and press Proceed when the protocol asks for confirmation.",),
@@ -381,17 +290,157 @@ def create_control_workflow() -> Workflow:
                     StageAction("Pause", "pause_protocol", guard="pipeline_running", variant="secondary"),
                     StageAction("Proceed", "confirm_protocol", guard="pipeline_waiting", variant="warning"),
                     StageAction("Skip Step", "skip_protocol", guard="pipeline_waiting", variant="secondary"),
-                    StageAction("Continue", completes=True, guard="pipeline_complete", variant="warning"),
+                    StageAction(
+                        "Continue",
+                        completes=True,
+                        guard="not pipeline_running",
+                        variant="warning",
+                    ),
                 ),
                 editor=CONTROL_LIVE_EDITOR,
                 results=CONTROL_RESULTS,
                 features=("fluidics",),
                 pipeline=True,
+                skippable=True,
                 settings_options={
                     "main": PRIMING_MAIN_SETTINGS,
                     "pipeline_name": "Priming",
                     "pipeline_label": "Start Priming",
-                    "completion_message": "Priming complete. Prime the chip before starting test runs.",
+                    "completion_message": "Priming complete. The lines are wet, so the checks can be run.",
+                },
+            ),
+            Stage(
+                "gravimetry",
+                "5. System check: dispense",
+                action="run_protocol",
+                description="Dispense a weighed volume per channel to check what the sensors report.",
+                instructions=(
+                    "Optional. Run it when a channel's readings are suspect, or after changing a "
+                    "liquid, to derive the scale its profile should carry.",
+                ),
+                instruction_cards=(
+                    StageInstruction(
+                        "Dispense check needed. Run the dispenses, or load the last one if "
+                        "nothing about the setup has changed.",
+                        "check_due",
+                    ),
+                    StageInstruction(
+                        "Have the balance ready. Each replicate stops twice: once to place a tube "
+                        "weighed empty, once to weigh it full.",
+                    ),
+                    StageInstruction(
+                        "Enter both masses in the dispense table below as you go. The factor "
+                        "it derives is what belongs in the liquid profile.",
+                    ),
+                ),
+                settings=GRAVIMETRY_SETTINGS,
+                actions=(
+                    StageAction(
+                        "Start Dispense",
+                        "run_protocol",
+                        guard="fluidics_connected and corrections_applied",
+                        active_when="pipeline_running",
+                        kind="pipeline",
+                    ),
+                    StageAction("Pause", "pause_protocol", guard="pipeline_running", variant="secondary"),
+                    StageAction("Proceed", "confirm_protocol", guard="pipeline_waiting", variant="warning"),
+                    StageAction("Skip Step", "skip_protocol", guard="pipeline_waiting", variant="secondary"),
+                    StageAction(
+                        "Load Last",
+                        "load_last_check",
+                        guard="check_recorded and not pipeline_running",
+                        variant="secondary",
+                    ),
+                    StageAction(
+                        "Continue",
+                        completes=True,
+                        guard="check_satisfied and not pipeline_running",
+                        variant="warning",
+                    ),
+                ),
+                editor=CONTROL_LIVE_EDITOR,
+                results=CONTROL_RESULTS,
+                features=("fluidics",),
+                pipeline=True,
+                skippable=True,
+                settings_options={
+                    "sections": ("gravimetric",),
+                    "main": GRAVIMETRY_MAIN_SETTINGS,
+                    "pipeline_name": "Gravimetry",
+                    "pipeline_label": "Start Dispense",
+                    "completion_message": (
+                        "Dispenses complete. The factors are in the table below, and the "
+                        "check is stored with the project."
+                    ),
+                },
+            ),
+            Stage(
+                "characterise",
+                "6. System check: flow",
+                action="run_protocol",
+                description="Sweep the working flows to measure what the plumbing and chip cost.",
+                instructions=(
+                    "Optional. Run it after a chip, tubing or liquid change to learn whether the "
+                    "target flows are reachable before spending reagent.",
+                ),
+                instruction_cards=(
+                    StageInstruction(
+                        "This setup cannot reach the target flows. Lower the flows, raise the "
+                        "pressure limit, or shorten and widen the tubing -- the outlet first.",
+                        "check_infeasible",
+                    ),
+                    StageInstruction(
+                        "Flow check needed. Run the sweep, or load the last one if nothing "
+                        "about the setup has changed.",
+                        "check_due",
+                    ),
+                    StageInstruction(
+                        "Apply the correction factors first, or the measured flows are not true flows.",
+                        "not corrections_applied",
+                    ),
+                    StageInstruction(
+                        "Start the sweep. Every channel is scaled together so the phase ratio holds; "
+                        "each step settles before the next. Readings land in the table below.",
+                    ),
+                ),
+                settings=CHARACTERISE_SETTINGS,
+                actions=(
+                    StageAction(
+                        "Start Sweep",
+                        "run_protocol",
+                        guard="fluidics_connected and corrections_applied",
+                        active_when="pipeline_running",
+                        kind="pipeline",
+                    ),
+                    StageAction("Pause", "pause_protocol", guard="pipeline_running", variant="secondary"),
+                    StageAction("Skip Step", "skip_protocol", guard="pipeline_waiting", variant="secondary"),
+                    StageAction(
+                        "Load Last",
+                        "load_last_check",
+                        guard="check_recorded and not pipeline_running",
+                        variant="secondary",
+                    ),
+                    StageAction(
+                        "Continue",
+                        completes=True,
+                        guard="check_satisfied and not pipeline_running",
+                        variant="warning",
+                    ),
+                ),
+                editor=CONTROL_LIVE_EDITOR,
+                results=CONTROL_RESULTS,
+                features=("fluidics",),
+                pipeline=True,
+                skippable=True,
+                settings_options={
+                    "sections": ("layout", "system"),
+                    "main": CHARACTERISE_MAIN_SETTINGS,
+                    "pipeline_name": "Characterise",
+                    "pipeline_label": "Start Sweep",
+                    "completion_message": (
+                        "Sweep complete. The readings are in the table below, and the "
+                        "check is stored with the project."
+                    ),
                 },
             ),
             Stage(
@@ -419,14 +468,21 @@ def create_control_workflow() -> Workflow:
                     StageAction("Pause", "pause_protocol", guard="pipeline_running", variant="secondary"),
                     StageAction("Proceed", "confirm_protocol", guard="pipeline_waiting", variant="warning"),
                     StageAction("Skip Step", "skip_protocol", guard="pipeline_waiting", variant="secondary"),
-                    StageAction("Continue", completes=True, guard="pipeline_complete", variant="warning"),
+                    StageAction(
+                        "Continue",
+                        completes=True,
+                        guard="not pipeline_running",
+                        variant="warning",
+                    ),
                 ),
                 editor=CONTROL_LIVE_EDITOR,
                 results=CONTROL_RESULTS,
                 features=("fluidics",),
                 pipeline=True,
+                skippable=True,
                 completion_gate="recording_confirmation",
                 settings_options={
+                    "sections": ("flow", "consumption"),
                     "main": RUN_MAIN_SETTINGS,
                     "pipeline_name": "Drop-Seq",
                     "pipeline_label": "Start Run",
@@ -456,12 +512,18 @@ def create_control_workflow() -> Workflow:
                     StageAction("Pause", "pause_protocol", guard="pipeline_running", variant="secondary"),
                     StageAction("Proceed", "confirm_protocol", guard="pipeline_waiting", variant="warning"),
                     StageAction("Skip Step", "skip_protocol", guard="pipeline_waiting", variant="secondary"),
-                    StageAction("Continue", completes=True, guard="pipeline_complete", variant="warning"),
+                    StageAction(
+                        "Continue",
+                        completes=True,
+                        guard="not pipeline_running",
+                        variant="warning",
+                    ),
                 ),
                 editor=CONTROL_LIVE_EDITOR,
                 results=CONTROL_RESULTS,
                 features=("fluidics",),
                 pipeline=True,
+                skippable=True,
                 settings_options={
                     "main": WASH_MAIN_SETTINGS,
                     "pipeline_name": "Wash",

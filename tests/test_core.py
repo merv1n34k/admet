@@ -11,6 +11,7 @@ from admet.core.engine import (
     validate_action_settings,
 )
 from admet.core.run import RunJob, RunResult
+from admet.ui.workflow_view import KNOWN_GUARDS, guard_terms
 from admet.workflows import (
     EditorSpec,
     SettingsSpec,
@@ -82,6 +83,47 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertEqual(stage_ids, ["import", "video", "imaging", "view", "export"])
 
+    def test_a_standing_note_states_a_status_rather_than_a_moment(self):
+        # Instruction cards stay on screen for as long as their guard holds, so
+        # anything time-bound in them is wrong the moment after it is written.
+        # Elapsed time belongs in a notification, which answers an action and goes.
+        temporal = ("week", "day", "days", "ago", "hour", "minute", "yesterday", "today")
+
+        for stage in create_control_workflow().stages:
+            for card in stage.instruction_cards:
+                words = {word.strip(".,;:-").lower() for word in card.text.split()}
+                self.assertEqual(
+                    words & set(temporal), set(), f"{stage.id}: {card.text}"
+                )
+
+    def test_every_guard_a_stage_uses_is_one_the_window_answers(self):
+        # An unrecognised guard reads as true, so a typo would silently enable the
+        # button it was meant to hold shut. The grammar has no "or" and no
+        # brackets: an expression using them parses as one unknown name.
+        workflow = create_control_workflow()
+
+        used = {
+            term
+            for stage in workflow.stages
+            for action in (*stage.actions, *stage.controls)
+            for term in guard_terms(action.guard)
+        }
+        used |= {
+            term
+            for stage in workflow.stages
+            for card in stage.instruction_cards
+            for term in guard_terms(card.guard)
+        }
+
+        self.assertTrue(used)
+        self.assertEqual(used - KNOWN_GUARDS, set())
+
+    def test_guard_terms_reads_the_names_out_of_an_expression(self):
+        self.assertEqual(guard_terms("a and not b"), ("a", "b"))
+        self.assertEqual(guard_terms(""), ())
+        # Not an expression language: this is one unknown name, not a disjunction.
+        self.assertEqual(guard_terms("(a or b)"), ("(a or b)",))
+
     def test_control_workflow_declares_runtime_contract(self):
         workflow = create_control_workflow()
         stage_ids = [stage.id for stage in workflow.stages]
@@ -100,16 +142,17 @@ class WorkflowTests(unittest.TestCase):
                 "scene",
                 "fluigent",
                 "corrections",
-                "characterise",
-                "gravimetry",
                 "priming",
+                "gravimetry",
+                "characterise",
                 "runs",
                 "wash",
                 "cleanup",
             ],
         )
-        # The system check is optional and sits after corrections, because it needs the
-        # correction factors applied for its flow readings to be true flows.
+        # The checks are optional and sit after priming, because a dry line reads
+        # nothing useful -- and after corrections, because uncorrected flows are not
+        # true flows.
         characterise = next(stage for stage in workflow.stages if stage.id == "characterise")
         self.assertTrue(characterise.skippable)
         self.assertTrue(characterise.pipeline)

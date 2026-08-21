@@ -6,6 +6,9 @@ from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNELS,
     GRAVIMETRIC_REPLICATES,
     SENSOR_CALIBRATIONS,
+    STABILITY_DURATION_S,
+    STABILITY_TIMEOUT_S,
+    STABILITY_TOLERANCE_UL_MIN,
 )
 from admet.engines.acquisition.fluidics.liquids import default_profile_id, profiles_for_unit
 from admet.engines.acquisition.protocol import protocol_names
@@ -166,6 +169,37 @@ RUN_SETTINGS = ParamSchema(
     )
 )
 
+CHARACTERISE_SETTINGS = ParamSchema(
+    (
+        Param("pipeline_name", "Pipeline", ParamKind.CHOICE, default="Characterise", options=_pipeline_options()),
+        Param("run_oil_flow_ul_min", "Oil L Flow", ParamKind.FLOAT, default=300.0, minimum=0.0),
+        Param("run_aqueous_total_flow_ul_min", "Total Aqueous Flow", ParamKind.FLOAT, default=80.0, minimum=0.0),
+        # What the sweep accepts as settled, and how long it waits for it.
+        Param(
+            "sweep_tolerance_ul_min",
+            "Settle Tolerance",
+            ParamKind.FLOAT,
+            default=STABILITY_TOLERANCE_UL_MIN,
+            minimum=0.1,
+        ),
+        Param(
+            "sweep_window_s",
+            "Settle Window",
+            ParamKind.FLOAT,
+            default=STABILITY_DURATION_S,
+            minimum=0.5,
+        ),
+        Param(
+            "sweep_timeout_s",
+            "Settle Timeout",
+            ParamKind.FLOAT,
+            default=STABILITY_TIMEOUT_S,
+            minimum=1.0,
+        ),
+        Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
+    )
+)
+
 GRAVIMETRY_SETTINGS = ParamSchema(
     (
         Param("pipeline_name", "Pipeline", ParamKind.CHOICE, default="Gravimetry", options=_pipeline_options()),
@@ -200,6 +234,7 @@ CONTROL_ENGINE_SETTINGS = merge_schemas(
     CHANNEL_CONTROL_SETTINGS,
     RECORDING_SETTINGS,
     RUN_SETTINGS,
+    CHARACTERISE_SETTINGS,
     GRAVIMETRY_SETTINGS,
     WASH_SETTINGS,
     PROTOCOL_SETTINGS,

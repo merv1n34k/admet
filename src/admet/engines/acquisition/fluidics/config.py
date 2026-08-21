@@ -5,6 +5,9 @@ STATS_WINDOW_SAMPLES = 300
 STABILITY_TOLERANCE_UL_MIN = 2.0
 STABILITY_DURATION_S = 5.0
 STABILITY_WINDOW_SAMPLES = int(STABILITY_DURATION_S / (ACQUISITION_INTERVAL_MS / 1000.0))
+# How long a sweep step waits for a flow that will not settle before recording
+# what it has and moving on. A step that cannot settle is the finding, not a fault.
+STABILITY_TIMEOUT_S = 60.0
 
 FLUIDIC_CHANNELS = (
     ("oil_l", "Oil L", "IPA", 2.25, 0.0, 0.0),

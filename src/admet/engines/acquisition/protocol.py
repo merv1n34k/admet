@@ -18,6 +18,7 @@ from admet.engines.acquisition.fluidics.config import (
     PRIMING_AQUEOUS_FLOW_UL_MIN,
     PRIMING_OIL_FLOW_UL_MIN,
     STABILITY_DURATION_S,
+    STABILITY_TIMEOUT_S,
     STABILITY_TOLERANCE_UL_MIN,
 )
 
@@ -447,7 +448,7 @@ class StabilityTrigger(Trigger):
         sensor_index: int,
         tolerance_ul_min: float = STABILITY_TOLERANCE_UL_MIN,
         window_s: float = STABILITY_DURATION_S,
-        timeout_s: float = 60.0,
+        timeout_s: float = STABILITY_TIMEOUT_S,
     ):
         self._sensor_index = sensor_index
         self._tolerance = tolerance_ul_min
@@ -480,10 +481,18 @@ class StabilityTrigger(Trigger):
         return len(flows) >= 2 and (max(flows) - min(flows)) <= 2 * self._tolerance
 
     def progress(self) -> float:
+        """How close this step is to giving up, not to settling.
+
+        A settle has no schedule -- it happens when the flow holds still, which may
+        be at once or never. Reporting the window instead would sit at 100% for the
+        rest of the wait and read as a stall, which is exactly how an unsettled
+        sweep used to look. Filling towards the timeout says what is really being
+        waited on: if the bar fills, the step gave up and recorded the ceiling.
+        """
         if not self._started:
             return 0.0
         elapsed = time.monotonic() - self._started
-        return min(1.0, elapsed / self._window_s) if self._window_s else 1.0
+        return min(1.0, elapsed / self._timeout_s) if self._timeout_s else 1.0
 
     def description(self) -> str:
         return f"Stable: sensor {self._sensor_index} within {self._tolerance:g} uL/min"
@@ -595,6 +604,17 @@ def build_characterise_protocol(settings: dict) -> list[ProtocolStep]:
     """
     oil = float(settings["run_oil_flow_ul_min"])
     aqueous = float(settings["run_aqueous_total_flow_ul_min"]) / 2.0
+    # What counts as settled, and how long to wait for it. A rig that hunts around
+    # its setpoint needs a looser tolerance or a longer window; one that saturates
+    # needs a shorter timeout so the sweep is not spent waiting on it.
+    settle = {
+        "sensor_index": OIL_L_SENSOR,
+        "tolerance_ul_min": float(
+            settings.get("sweep_tolerance_ul_min", STABILITY_TOLERANCE_UL_MIN)
+        ),
+        "window_s": float(settings.get("sweep_window_s", STABILITY_DURATION_S)),
+        "timeout_s": float(settings.get("sweep_timeout_s", STABILITY_TIMEOUT_S)),
+    }
     steps: list[ProtocolStep] = []
     for fraction in CHARACTERISE_FRACTIONS:
         steps.append(
@@ -606,7 +626,7 @@ def build_characterise_protocol(settings: dict) -> list[ProtocolStep]:
                     BEADS_M_SENSOR: aqueous * fraction,
                 },
                 trigger_type="stability",
-                trigger_params={"sensor_index": OIL_L_SENSOR},
+                trigger_params=dict(settle),
                 on_complete="hold",
                 group="characterise",
             )
