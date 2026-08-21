@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from admet.core.engine import Param, ParamKind, ParamOption, ParamSchema
 from admet.engines.acquisition.fluidics.config import (
+    FLUIDIC_CHANNEL_UNITS,
     FLUIDIC_CHANNELS,
     SENSOR_CALIBRATIONS,
 )
+from admet.engines.acquisition.fluidics.liquids import default_profile_id, profiles_for_unit
 from admet.engines.acquisition.protocol import PIPELINES
 
 CORRECTION_PARAM_NAMES = tuple(
@@ -16,6 +18,10 @@ CORRECTION_PARAM_NAMES = tuple(
         f"{prefix}_offset",
         f"{prefix}_quadratic",
     )
+)
+
+LIQUID_PROFILE_PARAM_NAMES = tuple(
+    f"{prefix}_profile" for prefix, *_rest in FLUIDIC_CHANNELS
 )
 
 
@@ -97,11 +103,24 @@ FLUIGENT_SETTINGS = ParamSchema(
     )
 )
 
+def _profile_options(unit: str) -> tuple[ParamOption, ...]:
+    return tuple(ParamOption(profile.id, profile.name) for profile in profiles_for_unit(unit))
+
+
 CORRECTION_SETTINGS = ParamSchema(
     tuple(
         param
         for prefix, label, calibration, scale, offset, quadratic in FLUIDIC_CHANNELS
         for param in (
+            Param(
+                f"{prefix}_profile",
+                f"{label} Liquid",
+                ParamKind.CHOICE,
+                default=default_profile_id(
+                    prefix, FLUIDIC_CHANNEL_UNITS[prefix], calibration, scale
+                ),
+                options=_profile_options(FLUIDIC_CHANNEL_UNITS[prefix]),
+            ),
             Param(
                 f"{prefix}_calibration",
                 f"{label} Calibration",

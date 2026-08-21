@@ -13,7 +13,7 @@ from pathlib import Path
 from statistics import mean, median, pstdev
 from typing import Any, Callable
 
-from admet.core.discovery import ProjectRef, discover_projects, projects_root
+from admet.core.discovery import discover_projects, project_ref_label, projects_root
 from admet.core.engine import EngineRegistry
 from admet.core.project import ProjectStore
 from admet.core.session import session_path
@@ -1433,7 +1433,7 @@ class AnalyzeWorkflowView:
         row.settings[field] = cast_matrix_value(kind, value)
 
     def _project_options(self) -> dict[str, str]:
-        return {str(ref.path): _project_ref_label(ref) for ref in self.project_refs}
+        return {str(ref.path): project_ref_label(ref) for ref in self.project_refs}
 
     def _select_project(self, value: str | None) -> None:
         if not value:
@@ -1493,13 +1493,6 @@ class AnalyzeWorkflowView:
 
     def _refresh(self) -> None:
         self._render_current_stage()
-
-
-def _project_ref_label(ref: ProjectRef) -> str:
-    return (
-        f"{ref.project_id} · {(ref.updated or 'unknown')[:10]} · "
-        f"{ref.file_count} files / {ref.run_count} runs"
-    )
 
 
 def _analysis_role(engine: str) -> str:

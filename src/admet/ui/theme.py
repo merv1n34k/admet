@@ -259,12 +259,17 @@ QLabel#ChannelName {{
     color: {Theme.TEXT_WHITE};
     font-weight: 650;
 }}
-QLabel#ProjectBadge {{
+QLabel#ProjectBadge, QPushButton#ProjectBadge {{
     background: {Theme.BG_RAISED};
     border: 1px solid {Theme.BORDER_COOL};
     border-radius: {Theme.RADIUS}px;
     padding: 5px 9px;
     color: {Theme.TEXT_MUTED};
+    text-align: left;
+}}
+QPushButton#ProjectBadge:hover {{
+    border-color: {Theme.ACCENT};
+    color: {Theme.TEXT_WHITE};
 }}
 QLabel#StageTitle {{
     font-size: 24px;
@@ -297,6 +302,14 @@ QWidget#ChannelCard {{
     background: transparent;
     border: 0;
     border-radius: 0;
+}}
+/* The protocol is driving this channel, so it cannot be set by hand until the
+   run is paused. Dim the card so the mode is obvious at a glance. */
+QWidget#ChannelCard[locked="true"] QLabel {{
+    color: {Theme.TEXT_DISABLED};
+}}
+QWidget#ChannelCard[locked="true"] QLabel#ChannelName {{
+    color: {Theme.TEXT_MUTED};
 }}
 QWidget#TocRow:hover {{
     background: {Theme.BG_RAISED};

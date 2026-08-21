@@ -12,6 +12,14 @@ FLUIDIC_CHANNELS = (
     ("beads_m", "Beads M", "H2O", 1.0, 0.0, 0.0),
 )
 FLUIDIC_CHANNEL_LABELS = tuple(label for _key, label, *_rest in FLUIDIC_CHANNELS)
+
+# Which flow unit each channel carries. Liquid profiles are written per unit type,
+# so a channel is only offered the profiles for its own unit (M1/M2 are the same).
+FLUIDIC_CHANNEL_UNITS = {
+    "oil_l": "L",
+    "cells_m": "M",
+    "beads_m": "M",
+}
 OIL_L_SENSOR = 0
 CELLS_M_SENSOR = 1
 BEADS_M_SENSOR = 2

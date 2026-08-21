@@ -121,15 +121,18 @@ WASH_MAIN_SETTINGS = (
 )
 
 
-CORRECTION_PRIMARY_PARAMS = tuple(
-    name
-    for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
-    for name in (f"{prefix}_calibration", f"{prefix}_scale")
-)
+# A channel is set by picking a liquid; the raw correction terms the profile writes
+# stay visible underneath so the values are never hidden from the operator.
+CORRECTION_PRIMARY_PARAMS = tuple(f"{prefix}_profile" for prefix, *_rest in FLUIDIC_CHANNELS)
 CORRECTION_SECONDARY_PARAMS = tuple(
     name
     for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
-    for name in (f"{prefix}_offset", f"{prefix}_quadratic")
+    for name in (
+        f"{prefix}_calibration",
+        f"{prefix}_scale",
+        f"{prefix}_offset",
+        f"{prefix}_quadratic",
+    )
 )
 
 
@@ -253,7 +256,6 @@ def create_control_workflow() -> Workflow:
                     "primary": CORRECTION_PRIMARY_PARAMS,
                     "secondary": CORRECTION_SECONDARY_PARAMS,
                     "collapsed_count": 6,
-                    "header_action": "apply_corrections",
                 },
             ),
             Stage(
@@ -323,6 +325,7 @@ def create_control_workflow() -> Workflow:
                     "main": RUN_MAIN_SETTINGS,
                     "pipeline_name": "Drop-Seq",
                     "pipeline_label": "Start Run",
+                    "liquids": {"oil_l": "oil_l", "cells_m": "water_m", "beads_m": "water_m"},
                 },
             ),
             Stage(
@@ -358,6 +361,7 @@ def create_control_workflow() -> Workflow:
                     "main": WASH_MAIN_SETTINGS,
                     "pipeline_name": "Wash",
                     "pipeline_label": "Start Wash",
+                    "liquids": {"oil_l": "ipa_l", "cells_m": "ipa_m", "beads_m": "ipa_m"},
                 },
             ),
             Stage(

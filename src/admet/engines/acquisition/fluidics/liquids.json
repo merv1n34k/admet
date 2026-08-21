@@ -1,0 +1,78 @@
+{
+  "_comment": [
+    "Liquid profiles for the Fluigent flow units. Edit this file by hand; admet reads",
+    "it at startup and ships it as part of the package.",
+    "",
+    "unit         which flow unit the profile is for: 'L' or 'M'. A channel is only",
+    "             offered profiles matching the unit it carries.",
+    "calibration  Fluigent sensor calibration table (see SENSOR_CALIBRATIONS).",
+    "scale        proportional term of the sensor custom scale, i.e. the correction",
+    "             factor: true_flow = scale * sensor_reading. Derive it gravimetrically",
+    "             (dispense a target volume, weigh it, divide by the target).",
+    "offset       square term of the custom scale, 0 unless characterised.",
+    "quadratic    cubic term of the custom scale, 0 unless characterised.",
+    "density      g/mL, used to turn a weighed mass into a volume during calibration."
+  ],
+  "profiles": [
+    {
+      "id": "oil_l",
+      "name": "Oil (L)",
+      "unit": "L",
+      "calibration": "IPA",
+      "scale": 2.25,
+      "offset": 0.0,
+      "quadratic": 0.0,
+      "density": 1.614
+    },
+    {
+      "id": "ipa_l",
+      "name": "IPA (L)",
+      "unit": "L",
+      "calibration": "IPA",
+      "scale": 1.0,
+      "offset": 0.0,
+      "quadratic": 0.0,
+      "density": 0.786
+    },
+    {
+      "id": "water_l",
+      "name": "Water (L)",
+      "unit": "L",
+      "calibration": "H2O",
+      "scale": 1.0,
+      "offset": 0.0,
+      "quadratic": 0.0,
+      "density": 0.997
+    },
+    {
+      "id": "oil_m",
+      "name": "Oil (M)",
+      "unit": "M",
+      "calibration": "IPA",
+      "scale": 2.25,
+      "offset": 0.0,
+      "quadratic": 0.0,
+      "density": 1.614
+    },
+    {
+      "id": "ipa_m",
+      "name": "IPA (M)",
+      "unit": "M",
+      "calibration": "IPA",
+      "scale": 1.0,
+      "offset": 0.0,
+      "quadratic": 0.0,
+      "density": 0.786
+    },
+    {
+      "id": "water_m",
+      "name": "Water (M)",
+      "unit": "M",
+      "calibration": "H2O",
+      "scale": 1.0,
+      "offset": 0.0,
+      "quadratic": 0.0,
+      "density": 0.997
+    }
+  ]
+}

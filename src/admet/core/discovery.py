@@ -22,6 +22,14 @@ class ProjectRef:
     file_count: int = 0
 
 
+def project_ref_label(ref: ProjectRef) -> str:
+    """One-line description of a project, shared by the analyze and control pickers."""
+    return (
+        f"{ref.project_id} · {(ref.updated or 'unknown')[:10]} · "
+        f"{ref.file_count} files / {ref.run_count} runs"
+    )
+
+
 def projects_root(explicit: str | Path | None = None) -> Path:
     if explicit:
         return Path(explicit).expanduser().resolve()

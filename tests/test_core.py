@@ -116,7 +116,8 @@ class WorkflowTests(unittest.TestCase):
         expected_names = {
             f"{prefix}_{suffix}"
             for prefix in ("oil_l", "cells_m", "beads_m")
-            for suffix in ("calibration", "scale", "offset", "quadratic")
+            # a channel picks a liquid profile, which writes the correction terms
+            for suffix in ("profile", "calibration", "scale", "offset", "quadratic")
         }
         self.assertEqual(correction_names, expected_names)
 

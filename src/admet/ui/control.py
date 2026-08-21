@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QFileDialog,
     QMainWindow,
+    QMenu,
     QProgressBar,
     QPushButton,
     QComboBox,
@@ -41,6 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from admet.core.api import AdmetAPI
+from admet.core.discovery import discover_projects, project_ref_label, projects_root
 from admet.core.run import RunJob, RunResult
 from admet.core.project import ProjectStore
 from admet.core.engine import Param, ParamKind
@@ -48,9 +50,9 @@ from admet.core.session import load_session, new_session, save_session, session_
 from admet.workflows import Stage, StageControl, StageStatus
 from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNEL_LABELS,
-    FLUIDIC_CHANNELS,
 )
-from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
+from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES, LIQUID_PROFILE_PARAM_NAMES
+from admet.engines.acquisition.fluidics.liquids import profile_by_id
 from admet.ui import theme as ui
 from admet.ui.data import (
     VIDEO_TABLE_COLUMNS,
@@ -275,7 +277,9 @@ class ControlWindow(QMainWindow):
         self.setMinimumSize(1040, 720)
 
         self.status = QLabel("")
-        self.project_badge: QLabel | None = None
+        self.project_badge: QPushButton | None = None
+        self.discovery_root = projects_root()
+        self.project_refs = discover_projects(self.discovery_root)
         self.preview: PreviewDisplay | None = None
         self.action_table: QTableWidget | None = None
         self.camera_selector: QComboBox | None = None
@@ -403,12 +407,15 @@ class ControlWindow(QMainWindow):
         layout.addWidget(subtitle)
         layout.addStretch()
 
-        self.project_badge = QLabel(self._project_text())
+        # Same idea as the analyze project picker: the badge is the picker.
+        self.project_badge = QPushButton(self._project_text())
         self.project_badge.setObjectName("ProjectBadge")
+        self.project_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.project_badge.setToolTip("Select a project")
+        self.project_badge.clicked.connect(self._show_project_menu)
         layout.addWidget(self.project_badge)
         for label, callback in (
             ("New Project", self._new_project),
-            ("Select Project", self._select_project),
             ("Save Project", self._save_project),
         ):
             button = ui.button(label)
@@ -551,14 +558,39 @@ class ControlWindow(QMainWindow):
         self._append_log(f"project: created {self.project_path}")
         self._render_current_stage()
 
+    def _build_project_menu(self) -> QMenu:
+        """Discovered projects, listed the way the analyze picker lists them."""
+        self.project_refs = discover_projects(self.discovery_root)
+        menu = QMenu(self)
+        current = str(self.project_path) if self.project_path else ""
+        for ref in self.project_refs:
+            action = menu.addAction(project_ref_label(ref))
+            action.setCheckable(True)
+            action.setChecked(str(ref.path) == current)
+            action.triggered.connect(lambda _checked=False, path=ref.path: self._load_project_path(path))
+        if not self.project_refs:
+            empty = menu.addAction(f"No projects in {self.discovery_root}")
+            empty.setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("Browse...").triggered.connect(self._select_project)
+        return menu
+
+    def _show_project_menu(self) -> None:
+        if self.project_badge is None:
+            return
+        menu = self._build_project_menu()
+        menu.exec(self.project_badge.mapToGlobal(self.project_badge.rect().bottomLeft()))
+
     def _select_project(self) -> None:
         path = QFileDialog.getExistingDirectory(
             self,
             "Select admet project",
-            str(Path.cwd()),
+            str(self.discovery_root),
         )
-        if not path:
-            return
+        if path:
+            self._load_project_path(Path(path))
+
+    def _load_project_path(self, path: Path) -> None:
         try:
             self.api.session = load_session(path)
         except Exception as exc:
@@ -634,6 +666,7 @@ class ControlWindow(QMainWindow):
         self._refresh_runtime_state()
         if "fluidics_preflight" in stage.features:
             self._ensure_fluigent_availability()
+        self._apply_stage_liquids(stage)
         previous_page = self.current_stage_page
         page = self._activate_stage_page(stage)
         stage_changed = previous_page is not None and previous_page is not page
@@ -932,7 +965,7 @@ class ControlWindow(QMainWindow):
                 state.toggle,
             )
         if action == "pause_protocol":
-            paused = self.last_metadata.get("pipeline_state") == "paused"
+            paused = self._pipeline_paused()
             state = action_button_state(
                 control,
                 self._guard_value,
@@ -1011,6 +1044,7 @@ class ControlWindow(QMainWindow):
             on_stop=self._stop_channel,
         )
         self.channel_manager_layout.addWidget(self.channel_panel)
+        self.channel_panel.update_modes(channels, pipeline_paused=self._pipeline_paused())
         if self._latest_snapshot is not None:
             self.channel_panel.update_from_snapshot(self._latest_snapshot)
 
@@ -1060,7 +1094,7 @@ class ControlWindow(QMainWindow):
 
     def _collapsed_params(self, stage: Stage, full_params: list[Param]) -> list[Param]:
         if "primary" in stage.settings_options:
-            return self._correction_primary_params(full_params)
+            return self._declared_params(stage, "primary", full_params)
         params = self._main_settings(stage) or full_params
         if self._param_row_count(params) > 3:
             return params[:6]
@@ -1069,28 +1103,16 @@ class ControlWindow(QMainWindow):
     def _ordered_params(self, stage: Stage, params: list[Param]) -> list[Param]:
         if "primary" not in stage.settings_options and "secondary" not in stage.settings_options:
             return params
-        primary = self._correction_primary_params(params)
-        secondary = self._correction_secondary_params(params)
+        primary = self._declared_params(stage, "primary", params)
+        secondary = self._declared_params(stage, "secondary", params)
         ordered_names = {param.name for param in (*primary, *secondary)}
         return [*primary, *secondary, *(param for param in params if param.name not in ordered_names)]
 
-    def _correction_primary_params(self, params: list[Param]) -> list[Param]:
+    @staticmethod
+    def _declared_params(stage: Stage, key: str, params: list[Param]) -> list[Param]:
+        """Params the stage lists under settings_options[key], in declared order."""
         by_name = {param.name: param for param in params}
-        return [
-            by_name[name]
-            for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
-            for name in (f"{prefix}_calibration", f"{prefix}_scale")
-            if name in by_name
-        ]
-
-    def _correction_secondary_params(self, params: list[Param]) -> list[Param]:
-        by_name = {param.name: param for param in params}
-        return [
-            by_name[name]
-            for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
-            for name in (f"{prefix}_offset", f"{prefix}_quadratic")
-            if name in by_name
-        ]
+        return [by_name[name] for name in stage.settings_options.get(key, ()) if name in by_name]
 
     @staticmethod
     def _param_row_count(params: list[Param]) -> int:
@@ -1151,7 +1173,7 @@ class ControlWindow(QMainWindow):
             if self.monitor_table is not None:
                 self.monitor_table.update_from_snapshot(self._latest_snapshot)
             if self.channel_panel is not None:
-                self.channel_panel.update_modes(self._channel_states())
+                self.channel_panel.update_modes(self._channel_states(), pipeline_paused=self._pipeline_paused())
                 self.channel_panel.update_from_snapshot(self._latest_snapshot)
         if self.video_table is not None:
             self._sync_video_table(self._video_rows())
@@ -1181,13 +1203,6 @@ class ControlWindow(QMainWindow):
         title.setObjectName("FieldLabel")
         header_layout.addWidget(title)
         header_layout.addStretch()
-        header_action = stage.settings_options.get("header_action")
-        if header_action:
-            action = next((item for item in stage.actions if item.action == header_action), None)
-            apply_button = ui.button(action.label if action is not None else "Apply", variant="primary", size="inline")
-            apply_button.clicked.connect(self._apply_all_corrections)
-            apply_button.setEnabled(self._fluigent_ready())
-            header_layout.addWidget(apply_button)
         if can_expand:
             expand = ui.button("collapse" if self._action_show_all_params else "expand", size="large")
             expand.setMinimumWidth(96)
@@ -1203,6 +1218,25 @@ class ControlWindow(QMainWindow):
 
         self.action_table = self._param_table(params)
         self.action_layout.addWidget(self.action_table)
+        self._render_liquid_profile_summary(params)
+
+    def _render_liquid_profile_summary(self, params: list[Param]) -> None:
+        """Spell out what the selected liquids apply, so a profile is not a black box."""
+        selected = [param for param in params if param.name in LIQUID_PROFILE_PARAM_NAMES]
+        if not selected:
+            return
+        lines = []
+        for param in selected:
+            profile = profile_by_id(str(self.values.get(param.name, "")))
+            if profile is not None:
+                channel = param.label.removesuffix(" Liquid")
+                lines.append(f"{channel} - {profile.name}: {profile.summary()}")
+        if not lines:
+            return
+        label = QLabel("\n".join(lines))
+        label.setObjectName("StageSummary")
+        label.setWordWrap(True)
+        self.action_layout.addWidget(label)
 
     def _toggle_action_params(self) -> None:
         self._action_show_all_params = not self._action_show_all_params
@@ -1464,7 +1498,7 @@ class ControlWindow(QMainWindow):
         }
 
     def _toggle_pause(self) -> None:
-        action = "resume_protocol" if self.last_metadata.get("pipeline_state") == "paused" else "pause_protocol"
+        action = "resume_protocol" if self._pipeline_paused() else "pause_protocol"
         result = self._run(action, refresh=False, notify_success=False)
         if result is None:
             self._render_current_stage()
@@ -1476,6 +1510,9 @@ class ControlWindow(QMainWindow):
 
     def _pipeline_active(self) -> bool:
         return self.last_metadata.get("pipeline_state") in {"running", "paused", "stopping"}
+
+    def _pipeline_paused(self) -> bool:
+        return self.last_metadata.get("pipeline_state") == "paused"
 
     def _pipeline_stage(self) -> Stage:
         if self._pipeline_stage_id:
@@ -1711,7 +1748,7 @@ class ControlWindow(QMainWindow):
             if self.plot_panel is not None:
                 self.plot_panel.update_from_snapshot(latest)
             if self.channel_panel is not None:
-                self.channel_panel.update_modes(self._channel_states())
+                self.channel_panel.update_modes(self._channel_states(), pipeline_paused=self._pipeline_paused())
                 self.channel_panel.update_from_snapshot(latest)
             if self.monitor_table is not None:
                 self.monitor_table.update_from_snapshot(latest)
@@ -1953,6 +1990,37 @@ class ControlWindow(QMainWindow):
             return
         self._correction_apply_timer.start(180)
 
+    def _apply_stage_liquids(self, stage: Stage) -> None:
+        """Switch channels to the liquids a stage declares (runs use oil, wash IPA)."""
+        declared = stage.settings_options.get("liquids") or {}
+        changed = False
+        for prefix, profile_id in declared.items():
+            param = f"{prefix}_profile"
+            if self.values.get(param) == profile_id:
+                continue
+            profile = profile_by_id(str(profile_id))
+            if profile is None:
+                self._append_log(f"liquid: {stage.id} declares unknown profile {profile_id!r}")
+                continue
+            self.values[param] = profile_id
+            self.values.update(profile.corrections(prefix))
+            self._append_log(f"liquid: {prefix} -> {profile.name} (for {stage.id})")
+            changed = True
+        if changed and self._fluigent_ready():
+            self._schedule_correction_apply()
+
+    def _apply_liquid_profile(self, name: str, profile_id: Any) -> None:
+        """Write a liquid profile's correction terms onto its channel."""
+        profile = profile_by_id(str(profile_id))
+        if profile is None:
+            self._notify(f"Unknown liquid profile: {profile_id}", "danger")
+            return
+        prefix = name.removesuffix("_profile")
+        self.values.update(profile.corrections(prefix))
+        self._schedule_correction_apply()
+        self._append_log(f"liquid: {prefix} -> {profile.name} ({profile.summary()})")
+        QTimer.singleShot(0, self._render_current_stage)
+
     def _apply_correction_values(self) -> None:
         if self._run("apply_corrections", raise_errors=False, refresh=False) is not None:
             self._corrections_applied = True
@@ -2125,6 +2193,8 @@ class ControlWindow(QMainWindow):
             return
         if name in CAMERA_AUTO_APPLY_PARAMS:
             self._schedule_camera_apply()
+        if name in LIQUID_PROFILE_PARAM_NAMES:
+            self._apply_liquid_profile(name, value)
         if name in CORRECTION_PARAM_NAMES:
             self._schedule_correction_apply()
         if name == "simulated":
@@ -2406,15 +2476,19 @@ class ChannelControlPanel(QFrame):
             root.addWidget(row, 1)
         self.update_modes(channels)
 
-    def update_modes(self, channels: list[Any]) -> None:
+    def update_modes(self, channels: list[Any], *, pipeline_paused: bool = False) -> None:
         for index, row in enumerate(self._rows):
             if index >= len(channels):
                 row.set_status("missing")
+                row.set_editable(False)
                 continue
             channel = channels[index]
             mode = getattr(channel, "mode", "off")
             owner = getattr(channel, "owner", "user")
             row.set_status(f"{mode} / {owner}")
+            # Same rule the engine enforces: a channel the protocol drives is only
+            # writable while the protocol is paused.
+            row.set_editable(owner == "user" or pipeline_paused)
 
     def update_from_snapshot(self, snapshot: Any) -> None:
         for index, row in enumerate(self._rows):
@@ -2482,12 +2556,24 @@ class ChannelControlRow(QWidget):
         pressure_row.addWidget(self.pressure, 1)
         layout.addLayout(pressure_row)
 
-        stop_button = QPushButton("Stop")
-        stop_button.clicked.connect(lambda: on_stop(self._index))
-        layout.addWidget(stop_button)
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.clicked.connect(lambda: on_stop(self._index))
+        layout.addWidget(self.stop_button)
+        self._editable = True
 
     def set_status(self, text: str) -> None:
         self.status.setText(text)
+
+    def set_editable(self, editable: bool) -> None:
+        """Show whether this channel can be driven by hand right now."""
+        if editable == self._editable:
+            return
+        self._editable = editable
+        for widget in (self.flow, self.pressure, self.stop_button):
+            widget.setEnabled(editable)
+        self.setProperty("locked", not editable)
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     def update_values(self, pressure: float, flow: float, volume: float, stable: bool) -> None:
         state = "stable" if stable else "unstable"
