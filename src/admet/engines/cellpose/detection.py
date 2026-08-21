@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import csv
-import json
 import re
 from collections import defaultdict
 from collections.abc import Callable, Iterable
@@ -10,7 +8,6 @@ from typing import Any
 
 import numpy as np
 
-from . import scanprotocol
 from .cache import Cache
 from .config import load_config
 
@@ -375,32 +372,6 @@ class CellposeDetection:
             return
         cv2 = _require_cv2()
         cv2.imwrite(str(self._frame_output / f"frame_{frame_idx}.png"), overlay)
-
-    def _write_layout(self, input_dir: str | Path, output_path: Path, frame_indices: list[int]) -> None:
-        layout = scanprotocol.build_layout(input_dir, len(frame_indices))
-        if layout is None:
-            return
-        layout["frames"] = list(frame_indices)
-        with (output_path / "layout.json").open("w", encoding="utf-8") as handle:
-            json.dump(layout, handle)
-
-    def _write_results_csv(self, csv_path: Path) -> None:
-        fieldnames = [
-            "frame",
-            "droplet_id",
-            "center_x",
-            "center_y",
-            "diameter_px",
-            "diameter_um",
-            "area_px",
-            "area_um2",
-            "inclusions",
-        ]
-        with csv_path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(self.results_data)
-
 
 def _require_cv2():
     try:

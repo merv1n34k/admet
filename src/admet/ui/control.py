@@ -950,45 +950,6 @@ class ControlWindow(QMainWindow):
         if self._latest_snapshot is not None:
             self.channel_panel.update_from_snapshot(self._latest_snapshot)
 
-    def _correction_matrix_widget(self) -> QWidget:
-        panel = QFrame()
-        panel.setObjectName("InlinePanel")
-        root = QVBoxLayout(panel)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
-        title = QLabel("Correction Factors")
-        title.setObjectName("FieldLabel")
-        root.addWidget(title)
-
-        rows = len(FLUIDIC_CHANNELS)
-        table = QTableWidget(rows, 5)
-        table.setObjectName("RawConfigTable")
-        table.setHorizontalHeaderLabels(("Channel", "Calibration", "Scale", "Offset", "Quadratic"))
-        table.verticalHeader().hide()
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        for column in range(1, 5):
-            table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
-        table.setShowGrid(True)
-
-        self._syncing_table = True
-        for row, (prefix, label, _calibration, _scale, _offset, _quadratic) in enumerate(FLUIDIC_CHANNELS):
-            item = QTableWidgetItem(label)
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            table.setItem(row, 0, item)
-            for column, suffix in enumerate(("calibration", "scale", "offset", "quadratic"), start=1):
-                param = self._param_by_name(f"{prefix}_{suffix}")
-                editor = self._param_editor(param)
-                table.setCellWidget(row, column, editor)
-        self._syncing_table = False
-
-        table.resizeRowsToContents()
-        _fit_table_height(table)
-        root.addWidget(table)
-        return panel
-
     def _camera_selector_row(self) -> QWidget:
         row = QWidget()
         row.setObjectName("CameraSelectorRow")
@@ -1379,9 +1340,6 @@ class ControlWindow(QMainWindow):
             self._render_current_stage()
         return result
 
-    def _toggle_action(self, metadata_key: str, on_action: str, off_action: str) -> None:
-        self._run(off_action if self.last_metadata.get(metadata_key) else on_action)
-
     def _toggle_pipeline(self, stage: Stage) -> None:
         if self._pipeline_active():
             self._run("stop_protocol", refresh=False)
@@ -1399,36 +1357,6 @@ class ControlWindow(QMainWindow):
         self.workflow_state = replace(self.workflow_state, statuses=statuses)
         self._completion_pending = False
         self._run("run_protocol", self._protocol_run_settings(stage), refresh=False)
-        self._render_current_stage()
-
-    def _start_pipeline_stage(self, stage: Stage) -> None:
-        if self._pipeline_active():
-            return
-        self._latest_pipeline_event = None
-        self._clear_pipeline_confirmation()
-        self._completion_pending = False
-        if stage.completion_gate == "recording_confirmation":
-            self._control_recording_dir = None
-            self._runs_completion_confirmed = False
-        self._pipeline_stage_id = stage.id
-        statuses = dict(self.workflow_state.statuses)
-        statuses[stage.id] = StageStatus.ACTIVE
-        self.workflow_state = replace(self.workflow_state, statuses=statuses)
-        if self._run("run_protocol", self._protocol_run_settings(stage), refresh=False) is None:
-            self._render_current_stage()
-            return
-        self._render_current_stage()
-
-    def _stop_pipeline_stage(self) -> None:
-        self._run("stop_protocol", refresh=False, notify_success=False)
-        self._latest_pipeline_event = None
-        self._pipeline_stage_id = ""
-        self._tube_switch_notice_step = -1
-        self._clear_pipeline_confirmation()
-        self._completion_pending = False
-        self._dismiss_notification()
-        if self.last_metadata.get("recording_active"):
-            self._run("stop_recording", raise_errors=False, refresh=False, notify_success=False)
         self._render_current_stage()
 
     def _skip_pipeline_step(self, stage: Stage) -> None:
@@ -1841,25 +1769,6 @@ class ControlWindow(QMainWindow):
             return "processing"
         return "inactive"
 
-    def _stage_progress(self, stage: Stage, status: str) -> float:
-        if status == "done":
-            return 100.0
-        if status in {"inactive", "error"}:
-            return 0.0
-        if has_feature(stage, "camera"):
-            if self.runtime_state["camera_live"]:
-                return 100.0
-            if self.runtime_state["camera"]:
-                return 65.0
-            if self.last_metadata.get("camera_count"):
-                return 30.0
-            return 0.0
-        if stage.pipeline:
-            return self._pipeline_progress_percent()
-        if stage.action and self.last_metadata.get("action") == stage.action:
-            return 100.0
-        return 45.0
-
     def _pipeline_step_progress_percent(self) -> float:
         event = self._latest_pipeline_event
         if event is None:
@@ -1991,13 +1900,6 @@ class ControlWindow(QMainWindow):
 
     def _stop_channel(self, channel_index: int) -> None:
         self._run("stop_channel", {"channel_index": channel_index}, refresh=False)
-
-    def _set_channel_response(self, channel_index: int, response_s: int) -> None:
-        self._run(
-            "set_channel_response",
-            {"channel_index": channel_index, "channel_response_s": response_s},
-            refresh=False,
-        )
 
     def _schedule_camera_apply(self) -> None:
         self._refresh_runtime_state()
@@ -2249,15 +2151,6 @@ class ControlWindow(QMainWindow):
                 item for item in metadata_sources() if isinstance(item, dict)
             )
         return recordings
-
-    def _camera_status_text(self) -> str:
-        metadata = self.last_metadata
-        connected = "connected" if metadata.get("camera_connected") else "not connected"
-        live = "live" if metadata.get("camera_live") else "idle"
-        fps = float(metadata.get("camera_fps") or 0.0)
-        frame_shape = metadata.get("camera_frame_shape") or []
-        shape = "x".join(str(value) for value in frame_shape) if frame_shape else "no frame"
-        return f"Camera {connected}, {live}. {fps:.1f} fps. Frame: {shape}."
 
     def _show_stage_instruction(self, stage: Stage | None = None) -> None:
         if stage is None:
@@ -3146,29 +3039,6 @@ QPushButton#NotificationButton:pressed {{
     background: {Theme.BG_CONTROL_PRESSED};
 }}
 """
-
-
-def _parse_value(param: Param, text: str) -> Any:
-    text = text.strip()
-    if text == "" and param.default is None:
-        return None
-    if param.kind is ParamKind.BOOLEAN:
-        lowered = text.lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-        raise ValueError(f"{param.label} must be true or false")
-    if param.kind is ParamKind.INTEGER:
-        return param.validate(int(text))
-    if param.kind is ParamKind.FLOAT:
-        return param.validate(float(text))
-    if param.kind is ParamKind.CHOICE and param.options:
-        for option in param.options:
-            if text == str(option.value) or text == option.label:
-                return param.validate(option.value)
-        raise ValueError(f"{param.label} must be one of {', '.join(str(o.value) for o in param.options)}")
-    return param.validate(text)
 
 
 def _display_value(value: Any) -> str:

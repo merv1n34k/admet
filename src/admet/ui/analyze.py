@@ -632,7 +632,7 @@ class AnalyzeWorkflowView:
                     "opencv-preview w-full"
                 )
                 if not preview_ok:
-                    ui.label("Preview unavailable. Relocate the source or use the arm64 analyze environment before editing crop/frame values.").classes(
+                    ui.label("Preview unavailable. Relocate the source before editing crop/frame values.").classes(
                         "editor-note"
                     )
                 self._slider_editor(target, "preview_frame", "Preview frame", 0, frame_max, 1, 0)
@@ -921,13 +921,6 @@ class AnalyzeWorkflowView:
             row_uid=None,
             multi=True,
         )
-
-    def _browse_matrix_source(self, event: Any) -> None:
-        row = _event_row(event)
-        uid = str(row.get("uid") or "")
-        selected = next((item for item in self.matrix if item.uid == uid), None)
-        start = Path(selected.source_path).parent if selected is not None else self._project_path().parent
-        self._open_path_browser(title="Select source", start=start, mode="source", row_uid=uid or None)
 
     def _open_path_browser(
         self,
@@ -1439,9 +1432,6 @@ class AnalyzeWorkflowView:
             return
         row.settings[field] = cast_matrix_value(kind, value)
 
-    def _set_setting(self, key: str, value: Any) -> None:
-        self.settings[key] = value
-
     def _project_options(self) -> dict[str, str]:
         return {str(ref.path): _project_ref_label(ref) for ref in self.project_refs}
 
@@ -1759,20 +1749,6 @@ def _fmt(value: Any, digits: int = 2) -> str:
     return f"{number:.{digits}f}"
 
 
-def _summary_table_rows(summaries: list[RawSummary]) -> list[dict[str, Any]]:
-    return [
-        {
-            "sample": summary.sample_id,
-            "rows": summary.rows,
-            "frames": summary.frames,
-            "droplets": summary.droplets,
-            "mean_diameter": f"{summary.mean_diameter:.2f}" if summary.mean_diameter else "",
-            "cv_percent": f"{summary.cv_percent:.2f}" if summary.cv_percent else "",
-        }
-        for summary in summaries
-    ]
-
-
 def _fluidics_rows(runs: list[FluidicsRun]) -> list[dict[str, Any]]:
     rows = []
     for run in runs:
@@ -1879,39 +1855,12 @@ def _chart_color(index: int) -> str:
     return _CHART_COLORS[index % len(_CHART_COLORS)]
 
 
-def _diameter_chart(summaries: list[RawSummary]) -> dict[str, Any]:
-    return _bar_chart(
-        "Mean diameter",
-        [summary.sample_id for summary in summaries],
-        [round(summary.mean_diameter, 3) for summary in summaries],
-        theme.PALETTE.accent,
-    )
-
-
-def _count_chart(summaries: list[RawSummary]) -> dict[str, Any]:
-    return _bar_chart(
-        "Droplet rows",
-        [summary.sample_id for summary in summaries],
-        [summary.droplets for summary in summaries],
-        theme.PALETTE.success_hover,
-    )
-
-
 def _cv_chart(summaries: list[RawSummary]) -> dict[str, Any]:
     return _bar_chart(
         "CV %",
         [summary.sample_id for summary in summaries],
         [round(summary.cv_percent, 3) for summary in summaries],
         theme.PALETTE.danger_hover,
-    )
-
-
-def _frequency_chart(summaries: list[RawSummary]) -> dict[str, Any]:
-    return _bar_chart(
-        "Frequency (Hz)",
-        [summary.sample_id for summary in summaries],
-        [round(summary.frequency_hz, 2) for summary in summaries],
-        theme.PALETTE.warning,
     )
 
 
@@ -2255,7 +2204,7 @@ def _compact_path(value: str, *, max_parts: int = 4) -> str:
 
 def _friendly_video_error(message: str) -> str:
     if "cannot open video" in message.lower():
-        return "OpenCV cannot open this video. Re-locate the file, verify the codec, or run analyze from the arm64 environment."
+        return "OpenCV cannot open this video. Re-locate the file or verify the codec."
     if "not readable" in message.lower():
         return "The video path is missing or not readable. Re-locate the source file."
     return message
@@ -2443,18 +2392,6 @@ def _style() -> str:
     .notification-title { color: var(--text-muted); font-size: 11px; font-weight: 650; text-transform: uppercase; }
     .notification-text { color: var(--text); font-size: 13px; font-weight: 600; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }
     .control-box { background: transparent; border: 0; border-radius: 0; gap: 6px; }
-    .control-box-title { font-size: 16px; line-height: 22px; font-weight: 650; color: var(--text); }
-    .process-bar {
-      background: var(--bg-raised);
-      border: 1px solid var(--border);
-      border-radius: 8px 8px 0 0;
-      min-height: 24px;
-    }
-    .process-bar .q-linear-progress {
-      height: 18px;
-      border-radius: 8px 8px 0 0;
-      overflow: hidden;
-    }
     .admet-process {
       background: var(--bg-raised);
       border: 1px solid var(--border);
