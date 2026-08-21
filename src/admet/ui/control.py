@@ -2578,7 +2578,9 @@ class ControlWindow(QMainWindow):
             return text
         record = self._last_check(stage)
         if record is None:
-            return f"{text} No {kind} check on record for this rig."
+            # Phrased as the same fact in its empty state: "no record" on its own
+            # reads as the stage not carrying this information at all.
+            return f"{text} Last {kind} check: never run on this rig."
         day = record.recorded_at[:10] or "an unrecorded date"
         return f"{text} Last {kind} check: {day}, project {record.project_id}."
 
