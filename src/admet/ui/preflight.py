@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from admet.ui import theme as ui
+from admet.ui.theme import Theme
 from admet.workflows.preflight import (
     REFERENCE_FLOWS,
     FlowSetup,
@@ -117,6 +119,183 @@ def _formula(*lines: str) -> QLabel:
     return label
 
 
+class LayoutScheme(QWidget):
+    """The fluidic layout drawn as plumbing, with each run's inputs on its pipe.
+
+    Pipe thickness follows the bore and colour follows how much of the pressure
+    budget that run costs, so a line that is too narrow or too long is visible as
+    a picture rather than only as a number.
+    """
+
+    NODE_W = 64
+    NODE_H = 30
+    CELL_W = 116
+    CELL_H = 46
+    ROW_H = 96
+    TOP_PAD = 4
+
+    def __init__(
+        self,
+        channel_labels: tuple[str, ...],
+        run_cells: list[list[QWidget]],
+        outlet_cell: QWidget,
+        run_style: Callable[[int, int], tuple[float, float]],
+        outlet_style: Callable[[], tuple[float, float]],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._labels = channel_labels
+        self._runs = run_cells
+        self._outlet = outlet_cell
+        self._run_style = run_style
+        self._outlet_style = outlet_style
+        for row in run_cells:
+            for cell in row:
+                cell.setParent(self)
+                cell.setFixedSize(self.CELL_W, self.CELL_H)
+        outlet_cell.setParent(self)
+        outlet_cell.setFixedSize(self.CELL_W, self.CELL_H)
+        rows = max(1, len(channel_labels))
+        self.setFixedHeight(
+            int(self.TOP_PAD + self.CELL_H + 6 + self.NODE_H + 18 + (rows - 1) * self.ROW_H)
+        )
+        self.setMinimumWidth(760)
+
+    # -- geometry ----------------------------------------------------------
+    def _columns(self) -> tuple[float, float, float, float]:
+        margin = 8.0
+        span = max(1.0, self.width() - 2 * margin - self.NODE_W)
+        return (
+            margin,                      # source
+            margin + span * 0.26,        # flow unit
+            margin + span * 0.72,        # chip inlets
+            margin + span,               # collection tube
+        )
+
+    def _spans(self, row: int) -> list[tuple[float, float]]:
+        """Where each run of a channel starts and ends.
+
+        The first run always reaches the flow unit; the rest share what is left up
+        to the chip, so a channel with a converter is drawn in three pieces and one
+        without it in two. Every channel runs into its own chip inlet.
+        """
+        xp, xf, xc, _xt = self._columns()
+        legs = len(self._runs[row]) if row < len(self._runs) else 0
+        spans = [(xp + self.NODE_W, xf)]
+        start = xf + self.NODE_W
+        rest = max(0, legs - 1)
+        if rest:
+            step = (xc - start) / rest
+            spans += [(start + step * i, start + step * (i + 1)) for i in range(rest)]
+        return spans
+
+    def _chip_rect(self) -> QRectF:
+        """The chip, tall enough to take every inlet on its own edge."""
+        _xp, _xf, xc, _xt = self._columns()
+        top = self._row_y(0) - self.NODE_H / 2
+        bottom = self._row_y(max(0, len(self._labels) - 1)) + self.NODE_H / 2
+        return QRectF(xc, top, self.NODE_W, max(self.NODE_H, bottom - top))
+
+    def _row_y(self, row: int) -> float:
+        """Pipe centre for a channel: the inputs ride above it, the node label below."""
+        return self.TOP_PAD + self.CELL_H + 6 + self.NODE_H / 2 + row * self.ROW_H
+
+    def _mid_y(self) -> float:
+        return (self._row_y(0) + self._row_y(max(0, len(self._labels) - 1))) / 2.0
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        _xp, _xf, xc, xt = self._columns()
+        for row, cells in enumerate(self._runs):
+            y = self._row_y(row)
+            for cell, (start, end) in zip(cells, self._spans(row), strict=False):
+                cell.move(int((start + end) / 2 - self.CELL_W / 2), int(y - self.CELL_H - 6))
+        self._outlet.move(
+            int((xc + self.NODE_W + xt) / 2 - self.CELL_W / 2),
+            int(self._mid_y() - self.CELL_H - 6),
+        )
+
+    # -- painting ----------------------------------------------------------
+    def _pipe_pen(self, bore_mm: float, share: float) -> QPen:
+        width = max(2.0, min(9.0, 2.0 + bore_mm * 6.0))
+        if share >= 1.0:
+            colour = QColor(Theme.DANGER)
+        elif share >= 0.5:
+            colour = QColor(Theme.WARNING)
+        else:
+            colour = QColor(Theme.ACCENT)
+        pen = QPen(colour)
+        pen.setWidthF(width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        return pen
+
+    def _absent_pen(self) -> QPen:
+        pen = QPen(QColor(Theme.BORDER_COOL))
+        pen.setWidthF(1.0)
+        pen.setStyle(Qt.PenStyle.DotLine)
+        return pen
+
+    def _draw_converter(self, painter: QPainter, x: float, y: float) -> None:
+        """Mark where the bore steps, as the 1/16" to 1/32" union does on the oil line."""
+        painter.setPen(QPen(QColor(Theme.TEXT_MUTED), 1))
+        painter.setBrush(QColor(Theme.BG_RAISED))
+        painter.drawRect(QRectF(x - 4, y - 7, 8, 14))
+
+    def _draw_node(self, painter: QPainter, x: float, y: float, text: str) -> None:
+        rect = QRectF(x, y - self.NODE_H / 2, self.NODE_W, self.NODE_H)
+        painter.setPen(QPen(QColor(Theme.BORDER_COOL), 1))
+        painter.setBrush(QColor(Theme.BG_CONTROL))
+        painter.drawRoundedRect(rect, 6, 6)
+        painter.setPen(QColor(Theme.TEXT_WHITE))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        xp, xf, xc, xt = self._columns()
+        mid = self._mid_y()
+        chip = self._chip_rect()
+
+        for row, label in enumerate(self._labels):
+            y = self._row_y(row)
+            previous_bore = 0.0
+            for leg, (start, end) in enumerate(self._spans(row)):
+                bore, share = self._run_style(row, leg)
+                if bore <= 0:
+                    # No tubing on this run: the parts butt together, so keep the
+                    # path continuous but show there is nothing to account for.
+                    painter.setPen(self._absent_pen())
+                    painter.drawLine(QPointF(start, y), QPointF(end, y))
+                    continue
+                painter.setPen(self._pipe_pen(bore, share))
+                painter.drawLine(QPointF(start, y), QPointF(end, y))
+                if previous_bore and abs(bore - previous_bore) > 1e-9:
+                    self._draw_converter(painter, start, y)
+                previous_bore = bore
+            self._draw_node(painter, xp, y, f"P{row + 1}")
+            self._draw_node(painter, xf, y, f"F{row + 1}")
+            painter.setPen(QColor(Theme.TEXT_MUTED))
+            painter.drawText(
+                QRectF(xp, y + self.NODE_H / 2, xf - xp, 16),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                label,
+            )
+
+        # Every inlet lands on the chip's own edge; the streams only meet inside it,
+        # and what leaves is the one outlet all three channels are charged for.
+        painter.setPen(QPen(QColor(Theme.BORDER_COOL), 1))
+        painter.setBrush(QColor(Theme.BG_CONTROL))
+        painter.drawRoundedRect(chip, 6, 6)
+        painter.setPen(QColor(Theme.TEXT_WHITE))
+        painter.drawText(chip, Qt.AlignmentFlag.AlignCenter, "Chip")
+
+        bore, share = self._outlet_style()
+        painter.setPen(self._pipe_pen(bore, share))
+        painter.drawLine(QPointF(chip.right(), mid), QPointF(xt, mid))
+        self._draw_node(painter, xt, mid, "Tube")
+        painter.end()
+
+
 class PreflightPanel(QWidget):
     """Planning section of the control window.
 
@@ -129,11 +308,13 @@ class PreflightPanel(QWidget):
         *,
         channel_labels: tuple[str, ...],
         liquids: Callable[[], dict[str, tuple[float, float]]],
+        channel_units: dict[str, str] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("PreflightPanel")
         self._channel_labels = channel_labels
+        self._channel_units = channel_units or {}
         self._liquids = liquids
         self._syncing = False
 
@@ -233,54 +414,28 @@ class PreflightPanel(QWidget):
     def _build_tubing_panel(self) -> QWidget:
         panel, body = _panel("Fluidic layout back pressure")
         hint = QLabel(
-            "The layout as plumbed: fill in each run's length and bore where it sits on "
-            "the scheme. Inlets are in parallel, so a channel pays only for its own runs; "
-            "the outlet is after the junction and carries all three flows, so its drop is "
-            "added to every channel. Leave a run at 0 cm where there is none. Bores are "
-            "inner diameters."
+            "The layout as plumbed. Fill in each run's length and bore on the pipe it "
+            "belongs to; pipe thickness follows the bore and turns amber, then red, as a "
+            "run eats into the pressure budget. Inlets are parallel, so a channel pays "
+            "only for its own runs, while the outlet carries all three flows and is "
+            "charged to every channel. The L unit runs 1/16\" out to a union and 1/32\" "
+            "into the chip, so it has the extra run the M units do not."
         )
         hint.setObjectName("StageSummary")
         hint.setWordWrap(True)
         body.addWidget(hint)
 
-        scheme = QGridLayout()
-        scheme.setContentsMargins(0, 6, 0, 0)
-        scheme.setHorizontalSpacing(6)
-        scheme.setVerticalSpacing(8)
-        for column, name in enumerate(("", "source -> sensor", "", "sensor -> chip", "converter", "", "", "chip -> collect", "")):
-            if not name:
-                continue
-            header = QLabel(name)
-            header.setObjectName("FieldLabel")
-            scheme.addWidget(header, 0, column, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        # Defaults follow the drawn scheme: 1/16" out of the source, converted to
-        # 1/32" before the chip. Only the oil line carries the converter by default.
-        defaults = {
-            0: ((20.0, 0.75), (10.0, 0.75), (5.0, 0.25)),
-            1: ((20.0, 0.75), (15.0, 0.25), (0.0, 0.25)),
-            2: ((20.0, 0.75), (15.0, 0.25), (0.0, 0.25)),
-        }
         self._segment_inputs: dict[str, list[tuple[QDoubleSpinBox, QComboBox]]] = {}
-        for index, channel in enumerate(self._channel_labels):
-            row = index + 1
-            scheme.addWidget(_node(f"P{index + 1}"), row, 0)
+        run_cells: list[list[QWidget]] = []
+        for channel in self._channel_labels:
             rows: list[tuple[QDoubleSpinBox, QComboBox]] = []
-            legs = defaults.get(index, defaults[1])
-            scheme.addWidget(self._segment_cell(*legs[0], rows), row, 1)
-            scheme.addWidget(_node(f"F{index + 1}"), row, 2)
-            scheme.addWidget(self._segment_cell(*legs[1], rows), row, 3)
-            scheme.addWidget(self._segment_cell(*legs[2], rows), row, 4)
+            run_cells.append([self._segment_cell(*leg, rows) for leg in self._legs(channel)])
             self._segment_inputs[channel] = rows
-            name = QLabel(channel)
-            name.setObjectName("SchemeLink")
-            scheme.addWidget(name, row, 5)
 
-        channels = len(self._channel_labels)
-        chip = _node("C\nchip")
-        scheme.addWidget(chip, 1, 6, channels, 1)
+        # Built before the scheme: it colours its pipes against this budget.
+        self.pressure_limit = _spin(0.0, 20000.0, 2000.0, " mbar", decimals=0)
+        self.pressure_limit.valueChanged.connect(self.recalculate)
 
-        middle = channels // 2 + 1
         self.outlet_length = _spin(0.0, 10000.0, 20.0, " cm")
         self.outlet_bore = self._bore_combo(0.25)
         self.outlet_length.valueChanged.connect(self.recalculate)
@@ -291,15 +446,19 @@ class PreflightPanel(QWidget):
         outlet_layout.setSpacing(2)
         outlet_layout.addWidget(self.outlet_length)
         outlet_layout.addWidget(self.outlet_bore)
-        scheme.addWidget(outlet_cell, middle, 7)
-        scheme.addWidget(_node("T\ncollect"), middle, 8)
-        body.addLayout(scheme)
+
+        self.scheme = LayoutScheme(
+            self._channel_labels,
+            run_cells,
+            outlet_cell,
+            run_style=self._run_style,
+            outlet_style=self._outlet_style,
+        )
+        body.addWidget(self.scheme)
 
         limits = QGridLayout()
         limits.setContentsMargins(0, 4, 0, 0)
         limits.setHorizontalSpacing(10)
-        self.pressure_limit = _spin(0.0, 20000.0, 2000.0, " mbar", decimals=0)
-        self.pressure_limit.valueChanged.connect(self.recalculate)
         _field(limits, 0, 0, "Pressure limit", self.pressure_limit)
         body.addLayout(limits)
 
@@ -307,6 +466,44 @@ class PreflightPanel(QWidget):
         self.layout_result.setWordWrap(True)
         body.addWidget(self.layout_result)
         return panel
+
+    def _legs(self, channel: str) -> tuple[tuple[float, float], ...]:
+        """Runs of tubing on a channel, as (length cm, bore mm) defaults.
+
+        The L unit is plumbed in 1/16" and stepped down to 1/32" at a union before
+        the chip, so it carries a third run the 1/32"-throughout M units do not.
+        """
+        if self._channel_units.get(channel) == "L":
+            return ((20.0, 0.75), (10.0, 0.75), (5.0, 0.25))
+        return ((20.0, 0.25), (15.0, 0.25))
+
+    def _run_style(self, row: int, leg: int) -> tuple[float, float]:
+        """Bore and share of the pressure budget, for drawing one run."""
+        if row >= len(self._channel_labels):
+            return (0.0, 0.0)
+        channel = self._channel_labels[row]
+        cells = self._segment_inputs.get(channel, [])
+        if leg >= len(cells):
+            return (0.0, 0.0)
+        length, bore = cells[leg]
+        bore_mm = float(bore.currentData())
+        if length.value() <= 0:
+            return (0.0, 0.0)
+        flows = (self.oil_flow.value(), self.beads_flow.value(), self.cells_flow.value())
+        flow = flows[row] if row < len(flows) else 0.0
+        drop = Segment(length.value(), bore_mm).resistance(
+            self._channel_viscosity(channel)
+        ) * flow
+        limit = self.pressure_limit.value()
+        return (bore_mm, drop / limit if limit else 0.0)
+
+    def _outlet_style(self) -> tuple[float, float]:
+        bore_mm = float(self.outlet_bore.currentData())
+        total = self.oil_flow.value() + self.beads_flow.value() + self.cells_flow.value()
+        viscosity = self._channel_viscosity(self._channel_labels[0]) if self._channel_labels else 1.24
+        drop = Segment(self.outlet_length.value(), bore_mm).resistance(viscosity) * total
+        limit = self.pressure_limit.value()
+        return (bore_mm, drop / limit if limit else 0.0)
 
     def _segment_cell(
         self,
@@ -363,6 +560,8 @@ class PreflightPanel(QWidget):
         return paths
 
     def _recalculate_tubing(self) -> None:
+        if getattr(self, "scheme", None) is not None:
+            self.scheme.update()
         paths = self._channel_paths()
         outlet = Segment(self.outlet_length.value(), float(self.outlet_bore.currentData()))
         loads = layout_back_pressure(

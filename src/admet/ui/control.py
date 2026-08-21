@@ -50,6 +50,7 @@ from admet.core.session import load_session, new_session, save_session, session_
 from admet.workflows import Stage, StageControl, StageStatus
 from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNEL_LABELS,
+    FLUIDIC_CHANNEL_UNITS,
     FLUIDIC_CHANNELS,
 )
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES, LIQUID_PROFILE_PARAM_NAMES
@@ -604,6 +605,10 @@ class ControlWindow(QMainWindow):
         if self._preflight is None:
             self._preflight = PreflightPanel(
                 channel_labels=FLUIDIC_CHANNEL_LABELS,
+                channel_units={
+                    label: FLUIDIC_CHANNEL_UNITS[prefix]
+                    for prefix, label, *_rest in FLUIDIC_CHANNELS
+                },
                 liquids=self._channel_liquids,
             )
             self.stage_stack.addWidget(self._preflight)
