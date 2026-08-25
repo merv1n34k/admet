@@ -148,8 +148,18 @@ class ProjectStore:
         record whether or not it ever reached the end.
         """
         kind = str(snapshot.get("kind") or "check").strip() or "check"
-        check_id = check_id or _stamped_id(f"check-{kind}")
-        path = self.records_dir / "checks" / f"{check_id}.json"
+        if check_id:
+            path = self.records_dir / "checks" / f"{check_id}.json"
+        else:
+            # Stamps are one a second, and a run restarted straight away would
+            # otherwise take the name of the one it was restarted from.
+            check_id = _stamped_id(f"check-{kind}")
+            path = self.records_dir / "checks" / f"{check_id}.json"
+            attempt = 2
+            while path.exists():
+                path = self.records_dir / "checks" / f"{check_id}-{attempt}.json"
+                attempt += 1
+            check_id = path.stem
         _write_metadata(path, {**snapshot, "check_id": check_id})
 
         file = self.upsert_file_path(
