@@ -85,6 +85,8 @@ from admet.ui.workflow_view import (
     active_when,
     has_feature,
     instruction_text,
+    PIPELINE_FINISHED,
+    pipeline_is_running,
     stage_controls,
     toc_row_states,
 )
@@ -1567,6 +1569,7 @@ class ControlWindow(QMainWindow):
 
         if stage.completion_gate == "recording_confirmation":
             self._runs_completion_confirmed = False
+        self._latest_pipeline_event = None
         if stage.id in CHECK_KINDS:
             self._stored_check_stage = ""
             self._check_run_id = ""
@@ -1780,10 +1783,16 @@ class ControlWindow(QMainWindow):
                 return
             self._last_poll_error = ""
             self.last_result = result
+            was_running = self.last_metadata.get("pipeline_state")
             self.last_metadata = dict(result.metadata)
             self._refresh_runtime_state()
             self._sync_preview_overlay()
             self._stop_recording_on_finished_pipeline()
+            if self.last_metadata.get("pipeline_state") != was_running:
+                # Buttons are guarded on this state, and the events that used to
+                # refresh them stop arriving exactly when it changes. Whoever sees
+                # the change first has to be the one to ask again.
+                self._refresh_action_box(self.workflow.current_stage(self.workflow_state))
 
     def _stop_recording_on_finished_pipeline(self) -> None:
         if not self.last_metadata.get("recording_active"):
@@ -1824,7 +1833,7 @@ class ControlWindow(QMainWindow):
             else:
                 self._sync_toc()
         finished = self._pipeline_event_state(latest)
-        if finished in {"completed", "idle", "error"}:
+        if finished in PIPELINE_FINISHED:
             # However it ended, what it measured is worth keeping: a sweep stopped
             # half way still says what those steps cost.
             self._store_system_check(
@@ -2044,10 +2053,6 @@ class ControlWindow(QMainWindow):
             # A setup that cannot reach its flows is worth seeing from the contents,
             # not only from inside the stage that measured it.
             return "error"
-        if has_feature(stage, "camera") and self._camera_scene_ready():
-            return "done"
-        if "fluidics_preflight" in stage.features and self._fluigent_ready():
-            return "done"
         if status is StageStatus.COMPLETE:
             return "done"
         if status is StageStatus.ACTIVE:
@@ -2093,7 +2098,10 @@ class ControlWindow(QMainWindow):
         if name == "fluidics_connected":
             return self.runtime_state["fluidics"]
         if name == "pipeline_running":
-            return self.last_metadata.get("pipeline_state") in {"running", "paused", "stopping"}
+            return pipeline_is_running(
+                str(self.last_metadata.get("pipeline_state") or ""),
+                self._pipeline_event_state(self._latest_pipeline_event),
+            )
         if name == "pipeline_waiting":
             return bool(self._pending_pipeline_confirmation()) and self.last_metadata.get("pipeline_state") == "running"
         if name == "pipeline_complete":

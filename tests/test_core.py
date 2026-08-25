@@ -11,7 +11,7 @@ from admet.core.engine import (
     validate_action_settings,
 )
 from admet.core.run import RunJob, RunResult
-from admet.ui.workflow_view import KNOWN_GUARDS, guard_terms
+from admet.ui.workflow_view import KNOWN_GUARDS, guard_terms, pipeline_is_running
 from admet.workflows import (
     EditorSpec,
     SettingsSpec,
@@ -82,6 +82,24 @@ class WorkflowTests(unittest.TestCase):
         stage_ids = [stage.id for stage in workflow.stages]
 
         self.assertEqual(stage_ids, ["import", "video", "imaging", "view", "export"])
+
+    def test_a_finished_protocol_is_not_running_even_while_the_poll_lags(self):
+        # The poll is on a timer and the protocol's events stop the moment it
+        # ends, so there is a window where the poll still says running and nothing
+        # is left to correct it. That window is where Continue stayed disabled.
+        self.assertFalse(pipeline_is_running("running", "completed"))
+        self.assertFalse(pipeline_is_running("stopping", "idle"))
+        self.assertFalse(pipeline_is_running("running", "error"))
+
+    def test_a_protocol_that_is_going_is_still_running(self):
+        self.assertTrue(pipeline_is_running("running", "running"))
+        self.assertTrue(pipeline_is_running("paused", ""))
+        self.assertTrue(pipeline_is_running("stopping", "running"))
+
+    def test_nothing_going_is_not_running(self):
+        self.assertFalse(pipeline_is_running("idle", ""))
+        self.assertFalse(pipeline_is_running("", ""))
+        self.assertFalse(pipeline_is_running("completed", ""))
 
     def test_a_standing_note_states_a_status_rather_than_a_moment(self):
         # Instruction cards stay on screen for as long as their guard holds, so

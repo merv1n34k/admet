@@ -58,6 +58,25 @@ KNOWN_GUARDS = frozenset(
 )
 
 
+# What a protocol reports while it is doing something, and once it is not.
+PIPELINE_BUSY = frozenset({"running", "paused", "stopping"})
+PIPELINE_FINISHED = frozenset({"completed", "idle", "error"})
+
+
+def pipeline_is_running(polled_state: str, event_state: str = "") -> bool:
+    """Whether a protocol is still going, from two sources that disagree in time.
+
+    The polled state lags: it is read on a timer. The protocol's own events are
+    immediate but stop arriving the moment it finishes -- which is exactly when
+    the buttons guarded on this need to change. Taking a finished event as final
+    closes the window where the poll still says running and nothing is left to
+    say otherwise.
+    """
+    if event_state in PIPELINE_FINISHED:
+        return False
+    return polled_state in PIPELINE_BUSY
+
+
 def guard_terms(guard: str) -> tuple[str, ...]:
     """The names a guard expression refers to, without their negation."""
     terms = []
