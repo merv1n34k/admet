@@ -64,7 +64,13 @@ from admet.workflows.check_history import (
     latest_check,
     load_check,
 )
-from admet.workflows.preflight import CHECK_DISPENSE, CHECK_FLOW
+from admet.workflows.preflight import (
+    CHECK_COMPLETE,
+    CHECK_DISPENSE,
+    CHECK_FLOW,
+    CHECK_PARTIAL,
+    CHECK_STARTED,
+)
 from admet.ui import theme as ui
 from admet.ui.data import (
     VIDEO_TABLE_COLUMNS,
@@ -320,6 +326,8 @@ class ControlWindow(QMainWindow):
         # Scanning every project is cheap but not free, so the history is read once
         # and dropped whenever something could have changed it.
         self._check_records: tuple[CheckRecord, ...] | None = None
+        # The record a running check writes to, so its start and its end are one.
+        self._check_run_id = ""
 
         self.setWindowTitle("admet control")
         self.resize(1440, 920)
@@ -1561,6 +1569,7 @@ class ControlWindow(QMainWindow):
             self._runs_completion_confirmed = False
         if stage.id in CHECK_KINDS:
             self._stored_check_stage = ""
+            self._check_run_id = ""
         if stage.settings_options.get("pipeline_name") == "Characterise":
             self._last_sweep_step = -1
             self._sweep_reading = None
@@ -1569,7 +1578,11 @@ class ControlWindow(QMainWindow):
         statuses = dict(self.workflow_state.statuses)
         statuses[stage.id] = StageStatus.ACTIVE
         self.workflow_state = replace(self.workflow_state, statuses=statuses)
-        self._run("run_protocol", self._protocol_run_settings(stage), refresh=False)
+        started = self._run("run_protocol", self._protocol_run_settings(stage), refresh=False)
+        if started is not None:
+            # On disk before the first reading: a run that is stopped or that
+            # never finishes still leaves the setup it was measuring.
+            self._store_system_check(stage, status=CHECK_STARTED)
         self._render_current_stage()
 
     def _skip_pipeline_step(self, stage: Stage) -> None:
@@ -1810,35 +1823,53 @@ class ControlWindow(QMainWindow):
                 self._refresh_action_box(stage)
             else:
                 self._sync_toc()
-        if self._pipeline_event_state(latest) == "completed":
-            # The protocol is done, but the stage is not: light up Continue and let
-            # the operator decide when to move on.
-            self._store_system_check(stage)
+        finished = self._pipeline_event_state(latest)
+        if finished in {"completed", "idle", "error"}:
+            # However it ended, what it measured is worth keeping: a sweep stopped
+            # half way still says what those steps cost.
+            self._store_system_check(
+                stage,
+                status=CHECK_COMPLETE if finished == "completed" else CHECK_PARTIAL,
+            )
             self._refresh_action_box(stage)
 
-    def _store_system_check(self, stage: Stage) -> None:
-        """Keep a finished check as a project record.
+    def _store_system_check(self, stage: Stage, *, status: str = CHECK_COMPLETE) -> None:
+        """Keep a check as a project record, from the moment it starts.
 
-        Only the numbers: what was measured, and the setup it was measured on. No
-        video and no fluidics trace, because a check is about the rig rather than
-        about a sample.
+        Written twice: as the run begins, carrying everything entered -- tube runs,
+        bores, flows, limits, liquids, the settling rule -- and again as it ends,
+        carrying what was measured. The first write is what survives a run that is
+        stopped, crashes, or is walked away from; the second replaces it in place,
+        so one run is one record. Numbers only: no video and no fluidics trace,
+        because a check is about the rig rather than about a sample.
         """
         kind = CHECK_KINDS.get(stage.id, "")
-        if not kind or self._stored_check_stage == stage.id:
+        if not kind:
             return
-        self._stored_check_stage = stage.id
+        if status != CHECK_STARTED and self._stored_check_stage == stage.id:
+            return
         if self.project_path is None or self.api.session is None:
             self._append_log("system check: no project open, nothing stored")
             return
         snapshot = self._ensure_preflight().snapshot(
-            kind, datetime.now(timezone.utc).isoformat(timespec="seconds")
+            kind,
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            status=status,
+            settings=self._protocol_run_settings(stage),
         )
         try:
             store = ProjectStore(self.project_path, self.api.session)
-            path = store.append_system_check(snapshot.to_dict(), summary=snapshot.summary())
+            path = store.append_system_check(
+                snapshot.to_dict(),
+                summary=snapshot.summary(),
+                check_id=self._check_run_id,
+            )
         except Exception as exc:
             self._append_log(f"system check: not stored ({type(exc).__name__}: {exc})")
             return
+        self._check_run_id = path.stem
+        if status != CHECK_STARTED:
+            self._stored_check_stage = stage.id
         self.project_path = store.path
         self.api.session = store.session
         self.api.workdir = str(store.path)

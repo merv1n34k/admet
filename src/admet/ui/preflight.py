@@ -34,8 +34,10 @@ from admet.engines.acquisition.fluidics.config import GRAVIMETRIC_REPLICATES
 from admet.ui.tables import GridTable, fit_table_height
 from admet.ui.theme import Theme
 from admet.workflows.preflight import (
+    CHECK_COMPLETE,
     CHECK_DISPENSE,
     CHECK_FLOW,
+    CHECK_STARTED,
     REFERENCE_FLOWS,
     CheckConditions,
     CheckSnapshot,
@@ -860,14 +862,29 @@ class PreflightPanel(QWidget):
             )
         return tuple(checks)
 
-    def snapshot(self, kind: str, recorded_at: str) -> CheckSnapshot:
-        """One check, with everything its verdict rests on."""
+    def snapshot(
+        self,
+        kind: str,
+        recorded_at: str,
+        *,
+        status: str = CHECK_COMPLETE,
+        settings: dict | None = None,
+    ) -> CheckSnapshot:
+        """One check, with everything its verdict rests on.
+
+        A snapshot taken as a run starts carries no readings yet -- only the setup
+        it is about to measure, which is the part that would otherwise be lost if
+        the run never finished.
+        """
+        measured = status != CHECK_STARTED
         return CheckSnapshot(
             kind=kind,
             recorded_at=recorded_at,
+            status=status,
+            settings=dict(settings or {}),
             conditions=self.conditions(),
-            flow_checks=self.flow_checks() if kind == CHECK_FLOW else (),
-            dispense_checks=self.dispense_checks() if kind == CHECK_DISPENSE else (),
+            flow_checks=self.flow_checks() if measured and kind == CHECK_FLOW else (),
+            dispense_checks=self.dispense_checks() if measured and kind == CHECK_DISPENSE else (),
         )
 
     def load_snapshot(self, data: dict) -> bool:

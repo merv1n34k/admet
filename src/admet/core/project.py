@@ -129,15 +129,26 @@ class ProjectStore:
         self._register_control_recording(normalized)
         self.save()
 
-    def append_system_check(self, snapshot: dict[str, Any], *, summary: str = "") -> Path:
+    def append_system_check(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        summary: str = "",
+        check_id: str = "",
+    ) -> Path:
         """Store one system check as its own JSON record under records/checks.
 
         Checks accumulate rather than overwrite: what matters is comparing today's
         chip against the last one, so each run keeps its own stamped file and the
         manifest lists them all under a single item.
+
+        A run writes twice -- once as it starts, carrying everything entered, and
+        once as it ends, carrying what was measured. Passing the id returned by
+        the first write lets the second replace it in place, so one run is one
+        record whether or not it ever reached the end.
         """
         kind = str(snapshot.get("kind") or "check").strip() or "check"
-        check_id = _stamped_id(f"check-{kind}")
+        check_id = check_id or _stamped_id(f"check-{kind}")
         path = self.records_dir / "checks" / f"{check_id}.json"
         _write_metadata(path, {**snapshot, "check_id": check_id})
 

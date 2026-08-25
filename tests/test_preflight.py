@@ -1,9 +1,12 @@
 import json
 import unittest
+from dataclasses import replace
 
 from admet.workflows.preflight import (
     CHECK_DISPENSE,
     CHECK_FLOW,
+    CHECK_PARTIAL,
+    CHECK_STARTED,
     CheckConditions,
     CheckSnapshot,
     DispenseCheck,
@@ -427,6 +430,42 @@ class CheckSnapshotTests(unittest.TestCase):
                 ),
             ),
         )
+
+    def test_a_run_records_its_setup_before_it_has_measured_anything(self):
+        # What a stopped run leaves behind: the lengths, bores and flows that were
+        # entered, with no readings yet.
+        snapshot = CheckSnapshot(
+            kind=CHECK_FLOW,
+            recorded_at="2026-08-25T10:00:00+00:00",
+            status=CHECK_STARTED,
+            settings={"sweep_timeout_s": 60.0},
+            conditions=self._conditions(),
+        )
+
+        written = snapshot.to_dict()
+
+        self.assertEqual(written["status"], CHECK_STARTED)
+        self.assertEqual(written["settings"]["sweep_timeout_s"], 60.0)
+        self.assertEqual(written["flow_checks"], [])
+        self.assertEqual(written["conditions"]["layout"]["outlet"]["length_cm"], 20.0)
+        self.assertIn("started", snapshot.summary())
+
+    def test_a_partial_run_says_so_rather_than_reading_as_a_verdict(self):
+        stopped = CheckSnapshot(
+            kind=CHECK_FLOW,
+            recorded_at="t",
+            status=CHECK_PARTIAL,
+            conditions=self._conditions(),
+        )
+
+        self.assertIn("stopped before anything was measured", stopped.summary())
+
+    def test_a_partial_run_that_did_measure_keeps_its_readings(self):
+        measured = self._flow_snapshot([(100.0, 50.0), (200.0, 100.0)])
+        partial = replace(measured, status=CHECK_PARTIAL)
+
+        self.assertTrue(partial.to_dict()["flow_checks"])
+        self.assertTrue(partial.summary().startswith("partial "))
 
     def test_a_snapshot_survives_a_json_round_trip(self):
         snapshot = self._flow_snapshot([(500.0, 50.0), (1000.0, 100.0), (1500.0, 150.0)])

@@ -303,6 +303,25 @@ class SystemCheckRecordTests(unittest.TestCase):
             self.assertEqual(item.metadata["check_count"], 2)
             self.assertEqual(item.metadata["latest_summary"], "second")
 
+    def test_a_run_rewrites_its_own_record_rather_than_adding_one(self):
+        # A run writes as it starts and again as it ends. Both writes are the same
+        # run, so they are the same record -- but a second run is a second record.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = self._store(tmpdir)
+
+            started = store.append_system_check({"kind": "flow", "status": "started"}, summary="started")
+            check_id = json.loads(started.read_text(encoding="utf-8"))["check_id"]
+            ended = store.append_system_check(
+                {"kind": "flow", "status": "complete"}, summary="done", check_id=check_id
+            )
+            other_run = store.append_system_check({"kind": "flow"}, summary="second run")
+
+            self.assertEqual(started, ended)
+            self.assertNotEqual(started, other_run)
+            self.assertEqual(json.loads(ended.read_text(encoding="utf-8"))["status"], "complete")
+            item = next(item for item in store.session.items if item.id == "system-checks")
+            self.assertEqual(item.metadata["check_count"], 2)
+
     def test_a_stored_check_survives_a_reload(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             store = self._store(tmpdir)

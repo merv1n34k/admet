@@ -504,6 +504,13 @@ SNAPSHOT_VERSION = 1
 CHECK_FLOW = "flow"
 CHECK_DISPENSE = "dispense"
 
+# A record is written when a run starts and rewritten when it ends, so its status
+# says which of those it is showing. A run that was stopped or that never reached
+# the end keeps everything it did measure, marked as partial.
+CHECK_STARTED = "started"
+CHECK_COMPLETE = "complete"
+CHECK_PARTIAL = "partial"
+
 
 @dataclass(frozen=True)
 class CheckConditions:
@@ -632,12 +639,16 @@ class CheckSnapshot:
     conditions: CheckConditions
     flow_checks: tuple[FlowCheck, ...] = ()
     dispense_checks: tuple[DispenseCheck, ...] = ()
+    status: str = CHECK_COMPLETE
+    settings: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
             "version": SNAPSHOT_VERSION,
             "kind": self.kind,
+            "status": self.status,
             "recorded_at": self.recorded_at,
+            "settings": dict(self.settings),
             "conditions": self.conditions.to_dict(),
             "flow_checks": [check.to_dict() for check in self.flow_checks],
             "dispense_checks": [check.to_dict() for check in self.dispense_checks],
@@ -645,17 +656,22 @@ class CheckSnapshot:
 
     def summary(self) -> str:
         """One line for the log and the manifest."""
+        if self.status == CHECK_STARTED:
+            return f"{self.kind} check: started"
+        if self.status == CHECK_PARTIAL and not (self.flow_checks or self.dispense_checks):
+            return f"{self.kind} check: stopped before anything was measured"
+        prefix = "partial " if self.status == CHECK_PARTIAL else ""
         if self.kind == CHECK_FLOW:
             failed = [check.channel for check in self.flow_checks if not check.feasibility.feasible]
             if not self.flow_checks:
                 return "flow check: nothing measured"
             if failed:
-                return f"flow check: not feasible on {', '.join(failed)}"
+                return f"{prefix}flow check: not feasible on {', '.join(failed)}"
             worst = max(check.resistance.resistance for check in self.flow_checks)
-            return f"flow check: feasible, worst channel {worst:,.1f} mbar per uL/min"
+            return f"{prefix}flow check: feasible, worst channel {worst:,.1f} mbar per uL/min"
         if not self.dispense_checks:
             return "dispense check: nothing weighed"
         factors = ", ".join(
             f"{check.channel} {check.result.mean_relative:.3f}" for check in self.dispense_checks
         )
-        return f"dispense check: {factors}"
+        return f"{prefix}dispense check: {factors}"
