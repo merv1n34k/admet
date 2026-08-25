@@ -2605,13 +2605,12 @@ class ControlWindow(QMainWindow):
         if self.instruction_card is not None and self._instruction_text == text:
             return
         if self.instruction_card is not None:
-            card = self.instruction_card
-            self.instruction_card = None
-            if self.notification_layout is not None:
-                self.notification_layout.removeWidget(card)
-            card.blockSignals(True)
-            card.close()
-            card.deleteLater()
+            # Same card, new words. Rebuilding it tore the widget down and put an
+            # identical one back on every stage change, which is seen as a blink.
+            self._instruction_text = text
+            self.instruction_card.set_text(text)
+            self._position_notification()
+            return
         parent = self.notification_host or self.centralWidget()
         if parent is None:
             return
@@ -3215,6 +3214,12 @@ class NotificationCard(QFrame):
             layout.addWidget(actions)
 
         self.setStyleSheet(_notification_qss(kind))
+
+    def set_text(self, text: str) -> None:
+        """Replace the words without replacing the card."""
+        self.text_label.setText(text)
+        self.text_label.setMinimumHeight(0)
+        self.updateGeometry()
 
     def fit_to_parent(self, available_width: int, available_height: int) -> None:
         width = min(580, max(220, available_width))
