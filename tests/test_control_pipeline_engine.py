@@ -77,6 +77,25 @@ class PipelineEngineTests(unittest.TestCase):
         self.assertEqual(manager.calls[-1], ("release_all",))
         self.assertEqual(_last_event(events).state, PipelineState.COMPLETED)
 
+    def test_a_stopped_pipeline_does_not_stay_stopping(self):
+        # Stopping is what it is doing, not where it ends up. Left as the final
+        # state it reads as still running, and every gated action stays shut --
+        # which is how a finished stage became impossible to leave.
+        manager = FakeChannelManager()
+        events: Queue[PipelineEvent] = Queue()
+        steps = [PipelineStep(f"hold {index}", {0: 5.0}, TimeTrigger(5.0)) for index in range(3)]
+        engine = PipelineEngine([*steps], manager, FakeAcquisition(), events, {0: 2}, tick_s=0.001)
+
+        engine.start()
+        time.sleep(0.05)
+        engine.stop()
+        engine.join(timeout=2.0)
+
+        self.assertFalse(engine.is_alive())
+        self.assertEqual(engine.state, PipelineState.IDLE)
+        self.assertNotEqual(engine.state, PipelineState.STOPPING)
+        self.assertEqual(manager.calls[-1], ("release_all",))
+
     def test_confirmation_step_can_be_skipped(self):
         manager = FakeChannelManager()
         events: Queue[PipelineEvent] = Queue()

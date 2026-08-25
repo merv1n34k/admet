@@ -586,5 +586,44 @@ class AcquisitionEngineTests(unittest.TestCase):
         self.assertEqual(camera.applied["DeviceLinkThroughputLimit"], 125_000_000)
 
 
+class PipelineStateReportingTests(unittest.TestCase):
+    class _DeadPipeline:
+        state = "running"
+
+        def is_alive(self):
+            return False
+
+    class _LivePipeline:
+        state = "running"
+
+        def is_alive(self):
+            return True
+
+    def _engine(self):
+        from admet.engines import create_engine_registry
+
+        return create_engine_registry("control").create("acquisition")
+
+    def test_a_dead_thread_is_not_reported_as_busy(self):
+        # Whatever the thread last wrote is not what it is doing once it is gone,
+        # and reporting it as busy leaves every gated action shut for good.
+        engine = self._engine()
+        engine._pipeline = self._DeadPipeline()
+
+        self.assertEqual(engine.pipeline_state, "idle")
+
+    def test_a_live_thread_is_reported_as_it_says(self):
+        engine = self._engine()
+        engine._pipeline = self._LivePipeline()
+
+        self.assertEqual(engine.pipeline_state, "running")
+
+    def test_no_pipeline_is_idle(self):
+        engine = self._engine()
+        engine._pipeline = None
+
+        self.assertEqual(engine.pipeline_state, "idle")
+
+
 if __name__ == "__main__":
     unittest.main()

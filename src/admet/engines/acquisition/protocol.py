@@ -820,6 +820,12 @@ class PipelineEngine(threading.Thread):
             self._emit_event(error_msg=str(exc))
         finally:
             self._channel_manager.pipeline_release_all()
+            if self._state is PipelineState.STOPPING:
+                # Stopping is what the pipeline is doing, not where it ends up.
+                # Left as the final state it reads as a pipeline that is still
+                # going, and everything gated on that stays shut for good.
+                self._state = PipelineState.IDLE
+                log.info("Pipeline stopped")
             self._emit_event()
 
     def _execute_step(self, step: PipelineStep) -> None:

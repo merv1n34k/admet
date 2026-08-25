@@ -372,10 +372,14 @@ class AcquisitionEngine:
 
     @property
     def pipeline_state(self) -> str:
-        if self._pipeline:
-            state = self._pipeline.state
-            return str(getattr(state, "value", state))
-        return "idle"
+        if not self._pipeline:
+            return "idle"
+        state = str(getattr(self._pipeline.state, "value", self._pipeline.state))
+        if state in {"running", "paused", "stopping"} and not self._pipeline.is_alive():
+            # The thread is gone, so whatever it last wrote is not what it is
+            # doing -- reporting it as busy would leave every gated action shut.
+            return "idle"
+        return state
 
     def start_polling(self) -> None:
         if self.polling_active:
