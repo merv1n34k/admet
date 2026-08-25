@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import numpy as np
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPen
+from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QLineEdit,
     QSpinBox,
-    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -57,6 +56,7 @@ from admet.engines.acquisition.fluidics.config import (
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES, LIQUID_PROFILE_PARAM_NAMES
 from admet.engines.acquisition.fluidics.liquids import profile_by_id
 from admet.ui.preflight import PreflightPanel
+from admet.ui.tables import GridTable, fit_table_height
 from admet.workflows.check_history import (
     CHECK_INTERVAL_DAYS,
     CheckRecord,
@@ -229,16 +229,6 @@ def _panel_box(title: str, object_name: str = "Panel") -> tuple[QFrame, QVBoxLay
 
 
 class ControlStagePage(QWidget):
-    # Pinning the page's height is only safe if the pin follows the content: a
-    # section that grows later -- a verdict appearing, a log gaining lines --
-    # would otherwise be squeezed into the height measured before it existed.
-    layout_changed = Signal()
-
-    def event(self, event: QEvent) -> bool:
-        if event.type() == QEvent.Type.LayoutRequest:
-            self.layout_changed.emit()
-        return super().event(event)
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.mounted_signature: tuple[Any, ...] | None = None
@@ -357,7 +347,7 @@ class ControlWindow(QMainWindow):
         self.results_layout: QVBoxLayout | None = None
         self.log_panel: QFrame | None = None
         self.log_layout: QVBoxLayout | None = None
-        self.stage_stack: QStackedWidget | None = None
+        self.page_scroll: QScrollArea | None = None
         self.stage_pages: dict[str, ControlStagePage] = {}
         self.current_stage_page: ControlStagePage | None = None
         self.channel_panel: ChannelControlPanel | None = None
@@ -436,16 +426,11 @@ class ControlWindow(QMainWindow):
         self._wheel_guard = _WheelGuard(page_scroll)
         QApplication.instance().installEventFilter(self._wheel_guard)
 
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(12)
-        page_scroll.setWidget(content)
-
-        self.stage_stack = QStackedWidget()
-        self.stage_stack.setObjectName("StageStack")
-        content_layout.addWidget(self.stage_stack)
-        content_layout.addStretch()
+        # One stage's page is in the scroll area at a time. A stacked widget would
+        # report the height of its tallest page instead, which is what forced the
+        # height to be pinned by hand -- and a pinned height cannot follow content
+        # that grows after it was measured.
+        self.page_scroll = page_scroll
         workspace_layout.addWidget(page_scroll, 1)
         root.addWidget(workspace, 1)
 
@@ -522,46 +507,20 @@ class ControlWindow(QMainWindow):
         layout.addStretch()
         return panel
 
-    def _size_stack_to_current(self) -> None:
-        """Hold the stack at exactly the height of the page on show.
-
-        A stacked layout reports the tallest page it holds, so a short stage would
-        otherwise be handed a tall one's height and have to place the surplus --
-        as a gap under the last panel, or as a panel stretched to swallow it.
-        Pinning the stack to the current page leaves no surplus to place, and the
-        scroll area takes over when a page is taller than the viewport.
-        """
-        if self.stage_stack is None:
-            return
-        current = self.stage_stack.currentWidget()
-        if current is None:
-            return
-        for index in range(self.stage_stack.count()):
-            page = self.stage_stack.widget(index)
-            page.setSizePolicy(
-                QSizePolicy.Policy.Preferred,
-                QSizePolicy.Policy.Preferred if page is current else QSizePolicy.Policy.Ignored,
-            )
-        # Sections and editors mounted a moment ago have no useful hint until the
-        # layout has been activated, so measure only after it has.
-        page_layout = current.layout()
-        if page_layout is not None:
-            page_layout.activate()
-        height = max(current.sizeHint().height(), current.minimumSizeHint().height())
-        if self.stage_stack.height() != height:
-            self.stage_stack.setFixedHeight(height)
-
     def _activate_stage_page(self, stage: Stage) -> ControlStagePage:
         page = self.stage_pages.get(stage.id)
         if page is None:
             page = ControlStagePage()
-            page.layout_changed.connect(self._size_stack_to_current)
             self.stage_pages[stage.id] = page
-            if self.stage_stack is not None:
-                self.stage_stack.addWidget(page)
-        if self.stage_stack is not None and self.stage_stack.currentWidget() is not page:
-            self.stage_stack.setCurrentWidget(page)
-        self._size_stack_to_current()
+        if self.page_scroll is not None and self.page_scroll.widget() is not page:
+            # takeWidget hands the outgoing page back rather than deleting it, so
+            # every stage keeps its editors, its plots and its scroll position.
+            previous = self.page_scroll.takeWidget()
+            if previous is not None:
+                previous.setParent(None)
+                previous.hide()
+            self.page_scroll.setWidget(page)
+            page.show()
         self.current_stage_page = page
         self.action_box_panel = page.action_box_panel
         self.action_box_layout = page.action_box_layout
@@ -883,10 +842,6 @@ class ControlWindow(QMainWindow):
         self._sync_log()
         self._sync_toc()
         self._show_stage_instruction(stage)
-        self._size_stack_to_current()
-        # Widgets mounted in this pass report their real height only once Qt has
-        # laid them out, so measure again on the next turn of the event loop.
-        QTimer.singleShot(0, self._size_stack_to_current)
 
     def _render_action_box(self, stage: Stage) -> None:
         action_box = QFrame()
@@ -1299,7 +1254,7 @@ class ControlWindow(QMainWindow):
         self._syncing_table = False
 
         table.resizeRowsToContents()
-        _fit_table_height(table)
+        fit_table_height(table)
         return table
 
     def _render_results(self, stage: Stage) -> None:
@@ -1341,7 +1296,7 @@ class ControlWindow(QMainWindow):
                 if item is not None and item.text() != row.get(key, ""):
                     item.setText(row.get(key, ""))
         self.video_table.resizeRowsToContents()
-        _fit_table_height(self.video_table)
+        fit_table_height(self.video_table)
 
     def _render_action(self, stage: Stage) -> None:
         full_params = self._ordered_params(stage, self._stage_params(stage))
@@ -2770,39 +2725,6 @@ class ControlWindow(QMainWindow):
                 self._clear_layout(child_layout, delete=delete)
 
 
-class GridTable(QTableWidget):
-    """A table whose separators stop at the edge of the content.
-
-    Qt's own grid draws a line after every cell, the last row and column
-    included, so the outer lines are drawn twice over -- once by the grid, once
-    by the frame -- and being straight they cannot follow the frame's rounded
-    corners. Painting only the lines between cells leaves the frame as the sole
-    boundary, free to round.
-    """
-
-    def __init__(self, rows: int = 0, columns: int = 0, parent: QWidget | None = None) -> None:
-        super().__init__(rows, columns, parent)
-        self.setShowGrid(False)
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        super().paintEvent(event)
-        if self.rowCount() < 1 or self.columnCount() < 1:
-            return
-        painter = QPainter(self.viewport())
-        painter.setPen(QPen(QColor(Theme.BORDER_COOL), 1))
-        width = self.viewport().width()
-        height = self.viewport().height()
-        for column in range(self.columnCount() - 1):
-            x = self.columnViewportPosition(column) + self.columnWidth(column) - 1
-            if 0 <= x < width:
-                painter.drawLine(x, 0, x, height)
-        for row in range(self.rowCount() - 1):
-            y = self.rowViewportPosition(row) + self.rowHeight(row) - 1
-            if 0 <= y < height:
-                painter.drawLine(0, y, width, y)
-        painter.end()
-
-
 class ChannelControlPanel(QFrame):
     def __init__(
         self,
@@ -2968,7 +2890,7 @@ class FluidicsMonitorTable(QFrame):
         for row in range(count):
             self._set_item(row, 0, FLUIDIC_CHANNEL_LABELS[row])
         self.table.resizeRowsToContents()
-        _fit_table_height(self.table)
+        fit_table_height(self.table)
 
     def update_from_snapshot(self, snapshot: Any) -> None:
         channel_count = min(
@@ -2992,7 +2914,7 @@ class FluidicsMonitorTable(QFrame):
             self._set_item(row, 7, f"{volume:.3f} uL")
             self._set_item(row, 8, "yes" if stable else "no")
         self.table.resizeRowsToContents()
-        _fit_table_height(self.table)
+        fit_table_height(self.table)
 
     def update_csv_status(self, filepath: str | None, row_count: int) -> None:
         if filepath:
@@ -3406,15 +3328,8 @@ def _video_table(rows: list[dict[str, str]]) -> QTableWidget:
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row_index, column_index, item)
     table.resizeRowsToContents()
-    _fit_table_height(table)
+    fit_table_height(table)
     return table
-
-
-def _fit_table_height(table: QTableWidget, *, max_rows: int | None = None) -> None:
-    height = table.horizontalHeader().height() + table.frameWidth() * 2
-    row_count = table.rowCount() if max_rows is None else min(table.rowCount(), max_rows)
-    height += sum(table.rowHeight(row) for row in range(row_count))
-    table.setFixedHeight(height)
 
 
 def _short_control_label(label: str) -> str:

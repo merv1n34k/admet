@@ -17,17 +17,21 @@ from collections.abc import Callable
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
+    QAbstractScrollArea,
     QComboBox,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QLabel,
+    QHeaderView,
     QSpinBox,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from admet.engines.acquisition.fluidics.config import GRAVIMETRIC_REPLICATES
+from admet.ui.tables import GridTable, fit_table_height
 from admet.ui.theme import Theme
 from admet.workflows.preflight import (
     CHECK_DISPENSE,
@@ -56,6 +60,7 @@ from admet.workflows.preflight import (
 
 GRAVIMETRIC_ROWS = GRAVIMETRIC_REPLICATES
 SYSTEM_SWEEP_ROWS = 5
+SWEEP_ROW_HEIGHT = 28
 
 # Inner diameters, which is what sets the resistance. Tubing is usually quoted by
 # outer diameter -- 1/32" and 1/16" are ODs, not bores -- so the labels carry the
@@ -638,38 +643,41 @@ class PreflightPanel(QWidget):
         protocol.setWordWrap(True)
         body.addWidget(protocol)
 
-        table = QGridLayout()
-        table.setContentsMargins(0, 4, 0, 0)
-        table.setHorizontalSpacing(8)
-        table.setVerticalSpacing(4)
-        step_header = QLabel("Step")
-        step_header.setObjectName("FieldLabel")
-        table.addWidget(step_header, 1, 0)
-        for index, channel in enumerate(self._channel_labels):
-            name = QLabel(channel)
-            name.setObjectName("ChannelName")
-            table.addWidget(name, 0, 1 + index * 2, 1, 2, alignment=Qt.AlignmentFlag.AlignHCenter)
-            for offset, unit in enumerate(("mbar", "uL/min")):
-                header = QLabel(unit)
-                header.setObjectName("FieldLabel")
-                table.addWidget(header, 1, 1 + index * 2 + offset)
+        # A real table rather than a bare grid of spin boxes: the rows of a sweep
+        # have to be told apart at a glance, and a grid draws nothing between them.
+        table = GridTable(SYSTEM_SWEEP_ROWS, 1 + 2 * len(self._channel_labels))
+        headers = ["Step"]
+        for channel in self._channel_labels:
+            headers += [f"{channel}\nmbar", f"{channel}\nuL/min"]
+        table.setHorizontalHeaderLabels(headers)
+        table.verticalHeader().hide()
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        for column in range(1, table.columnCount()):
+            table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+        # Rows are a fixed height, so their spacing cannot drift with whatever
+        # space is left over.
+        table.verticalHeader().setDefaultSectionSize(SWEEP_ROW_HEIGHT)
 
         self._system_rows: list[list[tuple[QDoubleSpinBox, QDoubleSpinBox]]] = []
         for index in range(SYSTEM_SWEEP_ROWS):
-            label = QLabel(str(index + 1))
-            label.setObjectName("MutedText")
-            table.addWidget(label, index + 2, 0)
+            step = QTableWidgetItem(str(index + 1))
+            step.setFlags(step.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            table.setItem(index, 0, step)
             row: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
             for channel_index in range(len(self._channel_labels)):
                 pressure = _spin(0.0, 20000.0, 0.0, "", decimals=0)
                 flow = _spin(0.0, 20000.0, 0.0, "", decimals=2)
                 pressure.valueChanged.connect(self.recalculate)
                 flow.valueChanged.connect(self.recalculate)
-                table.addWidget(pressure, index + 2, 1 + channel_index * 2)
-                table.addWidget(flow, index + 2, 2 + channel_index * 2)
+                table.setCellWidget(index, 1 + channel_index * 2, pressure)
+                table.setCellWidget(index, 2 + channel_index * 2, flow)
                 row.append((pressure, flow))
             self._system_rows.append(row)
-        body.addLayout(table)
+        fit_table_height(table)
+        body.addWidget(table)
 
         self.system_fit = _value_label("Enter at least two points.")
         self.system_fit.setWordWrap(True)
