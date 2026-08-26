@@ -77,3 +77,39 @@ class ThemeAssetTests(unittest.TestCase):
         for name, colour in expected.items():
             with self.subTest(name=name):
                 self.assertIn(f'stroke="{colour}"', (ASSETS / name).read_text(encoding="utf-8"))
+
+
+class CloseWarningTests(unittest.TestCase):
+    def test_nothing_connected_is_nothing_to_warn_about(self):
+        from admet.ui.window import connected_devices
+
+        self.assertEqual(connected_devices(), ())
+
+    def test_each_live_thing_is_named(self):
+        from admet.ui.window import connected_devices
+
+        devices = connected_devices(
+            camera=True, camera_live=True, fluidics=True, recording=True, protocol="runs"
+        )
+
+        self.assertEqual(
+            devices,
+            (
+                "Camera (live preview)",
+                "Fluigent pressure controller",
+                "Recording in progress",
+                "Protocol running (runs)",
+            ),
+        )
+
+    def test_a_connected_camera_that_is_not_previewing_says_so(self):
+        from admet.ui.window import connected_devices
+
+        self.assertEqual(connected_devices(camera=True), ("Camera",))
+        self.assertEqual(connected_devices(camera=True, camera_live=True), ("Camera (live preview)",))
+
+    def test_a_camera_that_is_off_is_not_listed_by_its_preview_flag(self):
+        # camera_live only qualifies a camera that is connected in the first place.
+        from admet.ui.window import connected_devices
+
+        self.assertEqual(connected_devices(camera=False, camera_live=True), ())

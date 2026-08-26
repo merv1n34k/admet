@@ -66,6 +66,32 @@ def log_state(entries: list[str] | tuple[str, ...], *, limit: int = 80, empty_te
     return LogState(lines=tuple(entries[-limit:]), empty_text=empty_text)
 
 
+def connected_devices(
+    *,
+    camera: bool = False,
+    camera_live: bool = False,
+    fluidics: bool = False,
+    recording: bool = False,
+    protocol: str = "",
+) -> tuple[str, ...]:
+    """What is still live, named the way an operator would name it.
+
+    Closing the window disconnects everything on the way out, so this is the list
+    that has to be shown before it happens -- a stray click should not take the
+    hardware down in the middle of an experiment.
+    """
+    devices = []
+    if camera:
+        devices.append("Camera (live preview)" if camera_live else "Camera")
+    if fluidics:
+        devices.append("Fluigent pressure controller")
+    if recording:
+        devices.append("Recording in progress")
+    if protocol:
+        devices.append(f"Protocol running ({protocol})")
+    return tuple(devices)
+
+
 def structure_signature(*parts: Any) -> tuple[Any, ...]:
     return tuple(parts)
 

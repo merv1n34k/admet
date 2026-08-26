@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QFileDialog,
     QMainWindow,
+    QMessageBox,
     QMenu,
     QProgressBar,
     QPushButton,
@@ -79,7 +80,13 @@ from admet.ui.data import (
     video_row,
 )
 from admet.ui.theme import STATUS_COLORS, Theme
-from admet.ui.window import log_state, panel_specs, structure_changed, structure_signature
+from admet.ui.window import (
+    connected_devices,
+    log_state,
+    panel_specs,
+    structure_changed,
+    structure_signature,
+)
 from admet.ui.workflow_view import (
     action_button_state,
     active_when,
@@ -2714,7 +2721,40 @@ class ControlWindow(QMainWindow):
         super().resizeEvent(event)
         self._position_notification()
 
+    def _connected_devices(self) -> tuple[str, ...]:
+        self._refresh_runtime_state()
+        return connected_devices(
+            camera=self.runtime_state["camera"],
+            camera_live=self.runtime_state["camera_live"],
+            fluidics=self.runtime_state["fluidics"],
+            recording=bool(self.last_metadata.get("recording_active")),
+            protocol=(self._pipeline_stage_id or "pipeline") if self._pipeline_active() else "",
+        )
+
+    def _confirm_close(self, devices: tuple[str, ...]) -> bool:
+        listed = "\n".join(f"  {index}. {name}" for index, name in enumerate(devices, start=1))
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Close admet control")
+        dialog.setText("These devices are still connected:")
+        dialog.setInformativeText(f"{listed}\n\nAre you sure you want to close the app?")
+        proceed = dialog.addButton("Proceed", QMessageBox.ButtonRole.AcceptRole)
+        cancel = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        ui.apply_button_style(proceed, variant="warning")
+        ui.apply_button_style(cancel)
+        # Cancel is the default: the destructive answer should be the deliberate one.
+        dialog.setDefaultButton(cancel)
+        dialog.setEscapeButton(cancel)
+        dialog.exec()
+        return dialog.clickedButton() is proceed
+
     def closeEvent(self, event) -> None:
+        devices = self._connected_devices()
+        if devices and not self._confirm_close(devices):
+            # Closing disconnects everything on the way out, so a stray click
+            # here would take the hardware down mid-experiment.
+            event.ignore()
+            return
         if self._camera_frame_unsubscribe is not None:
             self._camera_frame_unsubscribe()
             self._camera_frame_unsubscribe = None
