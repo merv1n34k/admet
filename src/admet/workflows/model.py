@@ -20,6 +20,11 @@ class StageAction:
     action: str | None = None
     off_action: str | None = None
     guard: str = ""
+    # When the highlight is earned, if that is not simply when the button works.
+    # Continue is deliberately available on a stage whose protocol was never run
+    # -- moving on is allowed -- but it should only be *suggested* once the work
+    # behind it is done. Empty means the guard decides both.
+    suggest_when: str = ""
     active_when: str = ""
     kind: str = "button"
     advances: bool = False

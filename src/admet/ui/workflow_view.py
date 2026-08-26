@@ -50,6 +50,7 @@ KNOWN_GUARDS = frozenset(
         "pipeline_waiting",
         "pipeline_complete",
         "corrections_applied",
+        "devices_released",
         "check_infeasible",
         "check_recorded",
         "check_due",

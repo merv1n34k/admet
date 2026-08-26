@@ -83,6 +83,40 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertEqual(stage_ids, ["import", "video", "imaging", "view", "export"])
 
+    def test_continue_is_available_before_it_is_the_thing_to_do(self):
+        # Moving on without running a stage's protocol is allowed, so Continue is
+        # enabled from the start -- but the highlight means "this is what to do
+        # next", and on arrival it is not.
+        workflow = create_control_workflow()
+
+        for stage in workflow.stages:
+            for action in stage.actions:
+                if not action.completes or not action.guard:
+                    continue
+                if "not pipeline_running" in action.guard:
+                    with self.subTest(stage=stage.id):
+                        self.assertEqual(action.suggest_when, "pipeline_complete")
+
+    def test_a_completing_action_that_is_always_available_earns_its_highlight(self):
+        # Cleanup's Continue has no guard at all: it is always clickable, so
+        # without a separate condition it would arrive already highlighted.
+        cleanup = next(s for s in create_control_workflow().stages if s.id == "cleanup")
+        proceed = next(action for action in cleanup.actions if action.completes)
+
+        self.assertEqual(proceed.guard, "")
+        self.assertEqual(proceed.suggest_when, "devices_released")
+
+    def test_every_suggest_condition_is_a_guard_the_window_answers(self):
+        used = {
+            term
+            for stage in create_control_workflow().stages
+            for action in stage.actions
+            for term in guard_terms(action.suggest_when)
+        }
+
+        self.assertTrue(used)
+        self.assertEqual(used - KNOWN_GUARDS, set())
+
     def test_a_finished_protocol_is_not_running_even_while_the_poll_lags(self):
         # The poll is on a timer and the protocol's events stop the moment it
         # ends, so there is a window where the poll still says running and nothing

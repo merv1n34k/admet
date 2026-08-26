@@ -84,6 +84,7 @@ from admet.ui.workflow_view import (
     action_button_state,
     active_when,
     has_feature,
+    guard_enabled,
     instruction_text,
     PIPELINE_FINISHED,
     pipeline_is_running,
@@ -882,7 +883,10 @@ class ControlWindow(QMainWindow):
             spec = self._command_spec(stage, control)
             if spec is None:
                 continue
-            controls.append((spec[0], spec[1], spec[2], spec[3], spec[4], bool(control.completes)))
+            suggested = bool(control.completes) and guard_enabled(
+                control.suggest_when or control.guard, self._guard_value
+            )
+            controls.append((spec[0], spec[1], spec[2], spec[3], spec[4], suggested))
         controls.append(("E-STOP", lambda _checked=False: self._emergency_stop(), True, False, False, False))
         return controls
 
@@ -2116,6 +2120,9 @@ class ControlWindow(QMainWindow):
             return self._pipeline_event_state(self._latest_pipeline_event) == "completed"
         if name == "corrections_applied":
             return self._corrections_applied
+        if name == "devices_released":
+            self._refresh_runtime_state()
+            return not (self.runtime_state["camera"] or self.runtime_state["fluidics"])
         if name == "check_infeasible":
             return self._check_infeasible(
                 self.workflow.current_stage(self.workflow_state).id
