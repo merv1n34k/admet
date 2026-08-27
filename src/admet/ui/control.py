@@ -160,6 +160,9 @@ PREVIEW_MAX_HEIGHT = 520
 
 LEFT_RAIL_WIDTH = 246
 
+# How many past checks a stage shows before the list starts scrolling.
+CHECK_HISTORY_ROWS = 6
+
 # Which stages produce a stored check, and what kind of snapshot each one writes.
 CHECK_KINDS = {
     "characterise": CHECK_FLOW,
@@ -338,6 +341,7 @@ class ControlWindow(QMainWindow):
         self._check_records: tuple[CheckRecord, ...] | None = None
         # The record a running check writes to, so its start and its end are one.
         self._check_run_id = ""
+        self.check_history_table: QTableWidget | None = None
 
         self.setWindowTitle("admet control")
         self.resize(1440, 920)
@@ -844,20 +848,87 @@ class ControlWindow(QMainWindow):
         if page is None:
             return
         self._clear_layout(page.sections_layout, delete=False)
+        self.check_history_table: QTableWidget | None = None
         keys = tuple(stage.settings_options.get("sections") or ())
-        if not keys:
+        history = self._build_check_history(stage)
+        if not keys and history is None:
             page.sections_host.hide()
             return
         for section in self._ensure_preflight().sections_for(keys):
             page.sections_layout.addWidget(section)
             section.show()
+        if history is not None:
+            page.sections_layout.addWidget(history)
         page.sections_host.show()
+
+    def _build_check_history(self, stage: Stage) -> QWidget | None:
+        """Every check of this kind already on record, oldest question first:
+        what did this rig read last time?
+        """
+        kind = self._check_kind(stage)
+        if not kind:
+            return None
+        panel, body = _panel_box(f"Previous {kind} checks")
+        hint = QLabel(
+            "Every run of this check that has been recorded, on this rig, in any "
+            "project. A run that was stopped part way is listed with what it did "
+            "measure."
+        )
+        hint.setObjectName("StageSummary")
+        hint.setWordWrap(True)
+        body.addWidget(hint)
+
+        table = GridTable(0, 3)
+        table.setHorizontalHeaderLabels(("When", "Project", "Result"))
+        table.verticalHeader().hide()
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        body.addWidget(table)
+        self.check_history_table = table
+        self._sync_check_history(stage)
+        return panel
+
+    def _sync_check_history(self, stage: Stage | None = None) -> None:
+        table = self.check_history_table
+        if table is None:
+            return
+        stage = stage or self.workflow.current_stage(self.workflow_state)
+        kind = self._check_kind(stage)
+        records = [record for record in self._check_history() if record.kind == kind]
+        table.setRowCount(len(records) or 1)
+        if not records:
+            empty = QTableWidgetItem("No run of this check has been recorded yet.")
+            empty.setFlags(empty.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            table.setItem(0, 0, empty)
+            table.setSpan(0, 0, 1, table.columnCount())
+        else:
+            table.clearSpans()
+            for row, record in enumerate(records):
+                when = record.recorded_at[:16].replace("T", " ") or "unrecorded"
+                for column, text in enumerate((when, record.project_id, record.summary)):
+                    item = QTableWidgetItem(text)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    table.setItem(row, column, item)
+        table.resizeRowsToContents()
+        # Tall enough to read at a glance, and no taller: a rig checked weekly for
+        # a year should not push the rest of the stage off the page.
+        fit_table_height(table, max_rows=CHECK_HISTORY_ROWS)
+        table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            if len(records) > CHECK_HISTORY_ROWS
+            else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
 
     def _sync_stage(self, stage: Stage) -> None:
         self._sync_action_box(stage)
         self._sync_param_editors()
         self._sync_results()
         self._sync_log()
+        self._sync_check_history(stage)
         self._sync_toc()
         self._show_stage_instruction(stage)
 
@@ -1894,6 +1965,8 @@ class ControlWindow(QMainWindow):
         self.api.session = store.session
         self.api.workdir = str(store.path)
         self._check_records = None
+        # The list on this very stage is one of the things the record changes.
+        self._sync_check_history(stage)
         self._append_log(f"system check stored as {path.name}: {snapshot.summary()}")
 
     def _capture_sweep_point(self, stage: Stage, event: Any) -> None:
