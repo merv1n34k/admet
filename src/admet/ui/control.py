@@ -342,6 +342,7 @@ class ControlWindow(QMainWindow):
         # The record a running check writes to, so its start and its end are one.
         self._check_run_id = ""
         self.check_history_table: QTableWidget | None = None
+        self._check_history_rows: list[CheckRecord] = []
 
         self.setWindowTitle("admet control")
         self.resize(1440, 920)
@@ -849,6 +850,7 @@ class ControlWindow(QMainWindow):
             return
         self._clear_layout(page.sections_layout, delete=False)
         self.check_history_table: QTableWidget | None = None
+        self._check_history_rows: list[CheckRecord] = []
         keys = tuple(stage.settings_options.get("sections") or ())
         history = self._build_check_history(stage)
         if not keys and history is None:
@@ -872,7 +874,8 @@ class ControlWindow(QMainWindow):
         hint = QLabel(
             "Every run of this check that has been recorded, on this rig, in any "
             "project. A run that was stopped part way is listed with what it did "
-            "measure."
+            "measure. Click a run to put its readings and the setup it was measured "
+            "on back into this stage."
         )
         hint.setObjectName("StageSummary")
         hint.setWordWrap(True)
@@ -886,11 +889,18 @@ class ControlWindow(QMainWindow):
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setCursor(Qt.CursorShape.PointingHandCursor)
+        table.cellClicked.connect(self._load_check_row)
         body.addWidget(table)
         self.check_history_table = table
         self._sync_check_history(stage)
         return panel
+
+    def _load_check_row(self, row: int, _column: int = 0) -> None:
+        if 0 <= row < len(self._check_history_rows):
+            self._load_check_record(self._check_history_rows[row])
 
     def _sync_check_history(self, stage: Stage | None = None) -> None:
         table = self.check_history_table
@@ -899,6 +909,7 @@ class ControlWindow(QMainWindow):
         stage = stage or self.workflow.current_stage(self.workflow_state)
         kind = self._check_kind(stage)
         records = [record for record in self._check_history() if record.kind == kind]
+        self._check_history_rows = records
         table.setRowCount(len(records) or 1)
         if not records:
             empty = QTableWidgetItem("No run of this check has been recorded yet.")
@@ -914,8 +925,9 @@ class ControlWindow(QMainWindow):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     table.setItem(row, column, item)
         table.resizeRowsToContents()
-        # Tall enough to read at a glance, and no taller: a rig checked weekly for
-        # a year should not push the rest of the stage off the page.
+        # Every run stays listed. The panel is tall enough to read at a glance and
+        # scrolls past that, so a rig checked weekly for a year neither loses its
+        # history nor pushes the rest of the stage off the page.
         fit_table_height(table, max_rows=CHECK_HISTORY_ROWS)
         table.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
@@ -2243,15 +2255,22 @@ class ControlWindow(QMainWindow):
         return latest_check(self._check_history(), kind)
 
     def _load_last_check(self, stage: Stage) -> None:
-        """Bring the last stored check back instead of running another.
+        """Bring the last stored check back instead of running another."""
+        record = self._last_check(stage)
+        if record is None:
+            self._notify("No stored check to load", "warning")
+            return
+        self._load_check_record(record)
+
+    def _load_check_record(self, record: CheckRecord) -> None:
+        """Put a stored run back into the stage that measured it.
 
         Only worth doing when nothing about the setup has moved since -- the
         readings are re-shown exactly as they were taken, and the stage is left
         for the operator to accept or re-run.
         """
-        record = self._last_check(stage)
-        if record is None:
-            self._notify("No stored check to load", "warning")
+        if self._guard_value("pipeline_running"):
+            self._notify("A protocol is running -- its readings would be replaced", "warning")
             return
         data = load_check(record.path)
         if not data:
