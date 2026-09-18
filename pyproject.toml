@@ -12,7 +12,6 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   "numpy>=1.26",
   "pandas>=2.2",
-  "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
