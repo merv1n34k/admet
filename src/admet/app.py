@@ -159,12 +159,5 @@ def _scalar(value: str) -> Any:
         return value
 
 
-def create_engine_api(engine_id: str):
-    """One engine on its own, for tests and for the analysis runner."""
-    from admet.core.api import AdmetAPI
-
-    return AdmetAPI(Admet().engine(engine_id))
-
-
 if __name__ == "__main__":
     raise SystemExit(main())

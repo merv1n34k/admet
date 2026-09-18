@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from admet.core.api import AdmetAPI
 from admet.core.engine import EngineRegistry, action_spec
 from admet.core.project import ProjectStore
 from admet.core.run import JsonlRunSink, RunJob, RunResult
@@ -217,7 +216,7 @@ class AnalyzeBatchRunner:
                 else:
                     cache_dir.mkdir(parents=True, exist_ok=True)
                     with JsonlRunSink(rows_path) as target_sink:
-                        result = AdmetAPI(engine, session=store.session, workdir=str(store.path)).run(
+                        result = engine.run(
                             RunJob(
                                 id=job_id,
                                 engine=engine_id,
@@ -228,6 +227,8 @@ class AnalyzeBatchRunner:
                                 sink=target_sink,
                                 progress=file_progress,
                                 metadata={
+                                    "session_id": store.session.project_id,
+                                    "workdir": str(store.path),
                                     "project_id": store.session.project_id,
                                     "run_id": run_target.run_id,
                                     "sample_id": sample_id,

@@ -296,6 +296,65 @@ class Admet:
                 waiting = True
         return waiting
 
+    # -- analysis ------------------------------------------------------------
+    ANALYSIS_ROLES = ("analysis_video", "analysis_image_dir")
+
+    def add_analysis_source(self, path: Path, *, engine: str, sample_id: str = "") -> dict[str, Any]:
+        """Register something to analyse with the open project."""
+        if self.project is None:
+            raise NoProject("no project is open; create or open one first")
+        file = self.project.register_analysis_file(
+            path, engine=engine, sample_id=sample_id or Path(path).stem
+        )
+        self.project.save()
+        return {"id": file.id, "role": file.role, "path": file.path, "engine": engine}
+
+    def analysis_sources(self) -> list[dict[str, Any]]:
+        if self.project is None:
+            return []
+        return [
+            {
+                "id": file.id,
+                "role": file.role,
+                "path": str(self.project.resolve_file_path(file)),
+                "engine": file.metadata.get("engine", ""),
+                "sample_id": file.metadata.get("sample_id", ""),
+            }
+            for file in self.project.files_by_role(self.ANALYSIS_ROLES)
+        ]
+
+    def analyze(self, *, engine: str = "", cache: str = "use") -> dict[str, Any]:
+        """Analyse everything the project holds, writing the results into it."""
+        if self.project is None:
+            raise NoProject("no project is open; create or open one first")
+        from admet.engines import create_engine_registry
+        from admet.workflows.analyze_runner import AnalyzeBatchRunner, AnalyzeTarget
+
+        targets = [
+            AnalyzeTarget(
+                project_path=self.project.path,
+                source_path=Path(source["path"]),
+                engine=engine or source["engine"],
+                sample_id=source["sample_id"],
+                cache_policy=cache,
+            )
+            for source in self.analysis_sources()
+        ]
+        report = AnalyzeBatchRunner(create_engine_registry("analyze")).run(targets)
+        self.project = ProjectStore(self.project.path)
+        return {
+            "projects": len(report.projects),
+            "jobs": [
+                {
+                    "sample_id": job.sample_id,
+                    "engine": job.engine,
+                    "status": job.status,
+                    "warnings": list(job.warnings),
+                }
+                for job in report.jobs
+            ],
+        }
+
     # -- what an operation needs from core -----------------------------------
     def state(self) -> dict[str, Any]:
         """What is true right now, as the guards understand it."""
@@ -307,6 +366,7 @@ class Admet:
                 "camera": False,
                 "corrections": False,
                 "running": False,
+                "sources": len(self.analysis_sources()),
             }
         return {
             "project": self.project is not None,
@@ -314,6 +374,7 @@ class Admet:
             "camera": bool(getattr(engine.camera, "connected", False)),
             "corrections": self._marks.get("corrections", False),
             "running": engine.pipeline_state in {"running", "paused", "stopping"},
+            "sources": len(self.analysis_sources()),
         }
 
     def mark(self, name: str, value: Any) -> None:

@@ -20,7 +20,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from admet.core.engine import Param, ParamKind
+from pathlib import Path
+
+from admet.core.engine import Param, ParamKind, ParamOption
 from admet.engines.acquisition.fluidics.config import (
     GRAVIMETRIC_REPLICATES,
     STABILITY_DURATION_S,
@@ -44,6 +46,12 @@ class Runner(Protocol):
     def state(self) -> dict[str, Any]: ...
 
     def mark(self, name: str, value: Any) -> None: ...
+
+    def add_analysis_source(self, path: Path, *, engine: str, sample_id: str) -> dict[str, Any]: ...
+
+    def analysis_sources(self) -> list[dict[str, Any]]: ...
+
+    def analyze(self, *, engine: str, cache: str) -> dict[str, Any]: ...
 
 
 # ---- requirements ----------------------------------------------------------
@@ -75,6 +83,10 @@ REQUIREMENTS: dict[str, tuple[Callable[[dict[str, Any]], bool], str]] = {
     "running": (
         lambda state: state["running"],
         "no protocol is running",
+    ),
+    "sources": (
+        lambda state: state["sources"] > 0,
+        "the project holds nothing to analyse; add a video or an image directory first",
     ),
 }
 
@@ -190,6 +202,30 @@ def _start_recording(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]
 
 def _stop_recording(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
     return runner.engine_action("acquisition", "stop_recording", {}).metadata
+
+
+# ---- analysis --------------------------------------------------------------
+
+
+def _add_source(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
+    from admet.workflows.analyze_runner import infer_engine
+
+    path = Path(str(settings["path"])).expanduser()
+    if not path.exists():
+        raise Refused(f"add_source: {path} does not exist")
+    engine_id = str(settings.get("engine") or "") or infer_engine(path)
+    return runner.add_analysis_source(path, engine=engine_id, sample_id=str(settings.get("sample_id") or ""))
+
+
+def _analyze(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
+    return runner.analyze(
+        engine=str(settings.get("engine") or ""),
+        cache=str(settings.get("cache") or "use"),
+    )
+
+
+def _sources(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
+    return {"sources": runner.analysis_sources()}
 
 
 OPERATIONS: tuple[Operation, ...] = (
@@ -349,6 +385,50 @@ OPERATIONS: tuple[Operation, ...] = (
     ),
     Operation("stop_recording", "Stop recording", "End the recording and file it in the project.",
               requires=("project",), run=_stop_recording),
+    Operation(
+        "add_source",
+        "Add something to analyse",
+        "Register a video or an image directory with the project so it can be analysed.",
+        params=(
+            Param("path", "Path", ParamKind.PATH, default="", required=True,
+                  description="A video file, or a directory of images"),
+            Param("engine", "Engine", ParamKind.CHOICE, default="",
+                  options=(ParamOption("", "infer from the file"),
+                           ParamOption("opencv", "opencv"),
+                           ParamOption("cellpose", "cellpose")),
+                  description="Which analysis engine; inferred from the file when left empty"),
+            Param("sample_id", "Sample", ParamKind.TEXT, default="",
+                  description="Names this source in the results; defaults to the file name"),
+        ),
+        requires=("project",),
+        run=_add_source,
+    ),
+    Operation(
+        "sources",
+        "What is there to analyse",
+        "Everything the project holds that analysis can be run over.",
+        requires=("project",),
+        run=_sources,
+    ),
+    Operation(
+        "analyze",
+        "Analyse the project",
+        "Run analysis over everything registered, writing results into the project.",
+        params=(
+            Param("engine", "Engine", ParamKind.CHOICE, default="",
+                  options=(ParamOption("", "as each source was registered"),
+                           ParamOption("opencv", "opencv"),
+                           ParamOption("cellpose", "cellpose")),
+                  description="Override which engine analyses every source"),
+            Param("cache", "Cache", ParamKind.CHOICE, default="use",
+                  options=(ParamOption("use", "reuse a previous result"),
+                           ParamOption("refresh", "recompute and replace"),
+                           ParamOption("ignore", "recompute without storing")),
+                  description="What to do about work already done"),
+        ),
+        requires=("project", "sources"),
+        run=_analyze,
+    ),
 )
 
 BY_ID = {operation.id: operation for operation in OPERATIONS}

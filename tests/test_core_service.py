@@ -237,3 +237,76 @@ class RealEngineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnalysisTests(unittest.TestCase):
+    """The analysis side goes through core the same way acquisition does."""
+
+    def _video(self, directory: Path) -> Path:
+        # A file with a video suffix is enough: nothing here decodes it.
+        path = directory / "sample.avi"
+        path.write_bytes(b"not really a video")
+        return path
+
+    def test_something_to_analyse_is_registered_with_the_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            admet = Admet()
+            store = admet.create_project(Path(tmp) / "rig.admetp")
+
+            added = admet.do("add_source", {"path": str(self._video(Path(tmp)))})
+
+            self.assertEqual(added["engine"], "opencv")
+            self.assertEqual(added["role"], "analysis_video")
+            session = load_session(store.path)
+            self.assertEqual([file.role for file in session.files], ["analysis_video"])
+
+    def test_the_engine_is_inferred_from_what_was_added(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            admet = Admet()
+            admet.create_project(Path(tmp) / "rig.admetp")
+            images = Path(tmp) / "frames"
+            images.mkdir()
+
+            video = admet.do("add_source", {"path": str(self._video(Path(tmp)))})
+            directory = admet.do("add_source", {"path": str(images)})
+
+            self.assertEqual(video["engine"], "opencv")
+            self.assertEqual(directory["engine"], "cellpose")
+
+    def test_adding_something_that_is_not_there_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            admet = Admet()
+            admet.create_project(Path(tmp) / "rig.admetp")
+
+            with self.assertRaises(Exception) as caught:
+                admet.do("add_source", {"path": f"{tmp}/nothing.avi"})
+
+            self.assertIn("does not exist", str(caught.exception))
+
+    def test_analysing_with_nothing_to_analyse_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            admet = Admet()
+            admet.create_project(Path(tmp) / "rig.admetp")
+
+            with self.assertRaises(Exception) as caught:
+                admet.do("analyze", {})
+
+            self.assertIn("nothing to analyse", str(caught.exception))
+
+    def test_analysing_without_a_project_is_refused(self):
+        with self.assertRaises(Exception) as caught:
+            Admet().do("analyze", {})
+
+        self.assertIn("no project is open", str(caught.exception))
+
+    def test_sources_lists_what_was_added(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            admet = Admet()
+            admet.create_project(Path(tmp) / "rig.admetp")
+            admet.do("add_source", {"path": str(self._video(Path(tmp))), "sample_id": "run01"})
+
+            listed = admet.do("sources", {})["sources"]
+
+            self.assertEqual(len(listed), 1)
+            self.assertEqual(listed[0]["sample_id"], "run01")
+            self.assertEqual(listed[0]["engine"], "opencv")
