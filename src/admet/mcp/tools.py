@@ -77,11 +77,12 @@ def operation_tools() -> list[dict[str, Any]]:
     tools = []
     for op in OPERATIONS:
         needs = f" Needs: {', '.join(op.requires)}." if op.requires else ""
+        belongs = f"[{op.target}]"
         waits = " Returns once started; the protocol runs on." if op.starts_protocol else ""
         tools.append(
             {
                 "name": op.id,
-                "description": f"{op.description}{needs}{waits}",
+                "description": f"{belongs} {op.description}{needs}{waits}",
                 "inputSchema": _schema(op.params),
             }
         )

@@ -47,6 +47,14 @@ class Runner(Protocol):
 
     def mark(self, name: str, value: Any) -> None: ...
 
+    def create_project(self, path: str, project_id: str) -> Any: ...
+
+    def open_project(self, path: str) -> Any: ...
+
+    def describe_project(self) -> dict[str, Any]: ...
+
+    def discover_projects(self, root: str) -> list[dict[str, Any]]: ...
+
     def add_analysis_source(self, path: Path, *, engine: str, sample_id: str) -> dict[str, Any]: ...
 
     def analysis_sources(self) -> list[dict[str, Any]]: ...
@@ -91,11 +99,20 @@ REQUIREMENTS: dict[str, tuple[Callable[[dict[str, Any]], bool], str]] = {
 }
 
 
+# What an operation is about. Some belong to the instrument, some to the analysis
+# of what it produced, and some to neither -- the session both of them work in.
+CONTROL = "control"
+ANALYZE = "analyze"
+GENERAL = "general"
+TARGETS = (GENERAL, CONTROL, ANALYZE)
+
+
 @dataclass(frozen=True)
 class Operation:
     id: str
     label: str
     description: str
+    target: str = CONTROL
     params: tuple[Param, ...] = ()
     requires: tuple[str, ...] = ()
     # True when this hands a step list to the pipeline and returns before it has
@@ -209,6 +226,27 @@ def _stop_recording(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]
     return runner.engine_action("acquisition", "stop_recording", {}).metadata
 
 
+# ---- the session -----------------------------------------------------------
+
+
+def _project_create(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
+    runner.create_project(str(settings["path"]), str(settings.get("project_id") or ""))
+    return runner.describe_project()
+
+
+def _project_open(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
+    runner.open_project(str(settings["path"]))
+    return runner.describe_project()
+
+
+def _project_status(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
+    return runner.describe_project()
+
+
+def _project_list(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
+    return {"projects": runner.discover_projects(str(settings["root"]))}
+
+
 # ---- analysis --------------------------------------------------------------
 
 
@@ -234,6 +272,42 @@ def _sources(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
 
 
 OPERATIONS: tuple[Operation, ...] = (
+    Operation(
+        "project_create",
+        "Create a project",
+        "Start a project and make it the one this session writes into.",
+        target=GENERAL,
+        params=(
+            Param("path", "Path", ParamKind.PATH, default="", required=True,
+                  description="Where to create it; .admetp is added if missing"),
+            Param("project_id", "Name", ParamKind.TEXT, default="",
+                  description="Defaults to the directory name"),
+        ),
+        run=_project_create,
+    ),
+    Operation(
+        "project_open",
+        "Open a project",
+        "Work in an existing project.",
+        target=GENERAL,
+        params=(Param("path", "Path", ParamKind.PATH, default="", required=True),),
+        run=_project_open,
+    ),
+    Operation(
+        "project_status",
+        "Which project is open",
+        "The open project and what it holds.",
+        target=GENERAL,
+        run=_project_status,
+    ),
+    Operation(
+        "project_list",
+        "Projects on disk",
+        "Projects found under a directory.",
+        target=GENERAL,
+        params=(Param("root", "Directory", ParamKind.PATH, default="", required=True),),
+        run=_project_list,
+    ),
     Operation(
         "connect",
         "Connect fluidics",
@@ -271,7 +345,8 @@ OPERATIONS: tuple[Operation, ...] = (
         uses=("apply_corrections",),
         run=_apply_corrections,
     ),
-    Operation("status", "Status", "What the instrument and the session are doing.", uses=("camera_status",), run=_status),
+    Operation("status", "Status", "What the instrument and the session are doing.",
+              target=GENERAL, uses=("camera_status",), run=_status),
     Operation(
         "set_flow",
         "Set a channel's flow",
@@ -415,6 +490,7 @@ OPERATIONS: tuple[Operation, ...] = (
             Param("sample_id", "Sample", ParamKind.TEXT, default="",
                   description="Names this source in the results; defaults to the file name"),
         ),
+        target=ANALYZE,
         requires=("project",),
         run=_add_source,
     ),
@@ -422,6 +498,7 @@ OPERATIONS: tuple[Operation, ...] = (
         "sources",
         "What is there to analyse",
         "Everything the project holds that analysis can be run over.",
+        target=ANALYZE,
         requires=("project",),
         run=_sources,
     ),
@@ -441,6 +518,7 @@ OPERATIONS: tuple[Operation, ...] = (
                            ParamOption("ignore", "recompute without storing")),
                   description="What to do about work already done"),
         ),
+        target=ANALYZE,
         requires=("project", "sources"),
         run=_analyze,
     ),

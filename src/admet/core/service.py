@@ -157,7 +157,12 @@ class Admet:
         if not target:
             return {
                 "operations": [
-                    {"id": op.id, "label": op.label, "requires": list(op.requires)}
+                    {
+                        "id": op.id,
+                        "label": op.label,
+                        "target": op.target,
+                        "requires": list(op.requires),
+                    }
                     for op in OPERATIONS_BY_ID.values()
                 ],
                 "pipelines": [
@@ -185,6 +190,7 @@ class Admet:
             "kind": "operation",
             "id": op.id,
             "label": op.label,
+            "target": op.target,
             "description": op.description,
             "requires": [
                 {"name": name, "why": _requirement_reason(name)} for name in op.requires
@@ -241,14 +247,19 @@ class Admet:
         }
 
     # -- operations ---------------------------------------------------------
-    def operations(self) -> list[dict[str, Any]]:
-        """Everything that can be asked for, with its parameters and its guards."""
+    def operations(self, target: str = "") -> list[dict[str, Any]]:
+        """Everything that can be asked for, with its parameters and its guards.
+
+        Narrowed to one half of the system when asked: the instrument, the
+        analysis of what it produced, or the session both work in.
+        """
         from admet.workflows.operations import OPERATIONS
 
         return [
             {
                 "id": op.id,
                 "label": op.label,
+                "target": op.target,
                 "description": op.description,
                 "requires": list(op.requires),
                 "params": [
@@ -264,6 +275,7 @@ class Admet:
                 ],
             }
             for op in OPERATIONS
+            if not target or op.target == target
         ]
 
     def do(self, operation_id: str, settings: dict[str, Any] | None = None) -> dict[str, Any]:

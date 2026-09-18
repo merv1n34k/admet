@@ -25,6 +25,23 @@ class SurfaceTests(unittest.TestCase):
         self.assertEqual(operations["prime"]["requires"], ["fluidics", "corrections", "idle"])
         self.assertIn("prime_oil_volume_ul", [p["name"] for p in operations["prime"]["params"]])
 
+    def test_one_half_of_the_system_can_be_listed_on_its_own(self):
+        _exit_code, out, _err = _run(["operations", "--target", "control"])
+
+        listed = json.loads(out)
+        self.assertTrue(all(op["target"] == "control" for op in listed))
+        self.assertIn("prime", {op["id"] for op in listed})
+        self.assertNotIn("analyze", {op["id"] for op in listed})
+
+    def test_a_project_is_opened_by_an_operation_like_anything_else(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exit_code, out, _err = _run(
+                ["do", "project_create", "--set", f"path={tmp}/rig.admetp"]
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(json.loads(out)["project_id"], "rig")
+
     def test_pipelines_are_listed(self):
         _exit_code, out, _err = _run(["pipelines"])
 

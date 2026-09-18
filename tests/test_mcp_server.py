@@ -46,6 +46,13 @@ class SurfaceTests(unittest.TestCase):
         self.assertIn("Needs: fluidics, corrections, idle", tools["prime"]["description"])
         self.assertNotIn("Needs:", tools["connect"]["description"])
 
+    def test_a_tool_says_which_half_of_the_system_it_belongs_to(self):
+        tools = {tool["name"]: tool for tool in self.server.tools()}
+
+        self.assertTrue(tools["prime"]["description"].startswith("[control]"))
+        self.assertTrue(tools["analyze"]["description"].startswith("[analyze]"))
+        self.assertTrue(tools["project_open"]["description"].startswith("[general]"))
+
     def test_a_tool_carries_the_parameters_its_operation_declares(self):
         tools = {tool["name"]: tool for tool in self.server.tools()}
 

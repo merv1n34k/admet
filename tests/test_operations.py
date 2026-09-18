@@ -10,7 +10,17 @@ import unittest
 from pathlib import Path
 
 from admet.core.service import Admet
-from admet.workflows.operations import BY_ID, OPERATIONS, REQUIREMENTS, Refused, operation
+from admet.workflows.operations import (
+    ANALYZE,
+    BY_ID,
+    CONTROL,
+    GENERAL,
+    OPERATIONS,
+    REQUIREMENTS,
+    TARGETS,
+    Refused,
+    operation,
+)
 from admet.workflows.pipelines import PIPELINES, pipeline, step
 
 
@@ -52,6 +62,50 @@ class DeclarationTests(unittest.TestCase):
             operation("teleport")
 
         self.assertIn("prime", str(caught.exception))
+
+
+class TargetTests(unittest.TestCase):
+    """Which half of the system an operation belongs to."""
+
+    def test_every_operation_says_which_half_it_belongs_to(self):
+        for op in OPERATIONS:
+            with self.subTest(operation=op.id):
+                self.assertIn(op.target, TARGETS)
+
+    def test_the_instrument_and_the_analysis_are_told_apart(self):
+        self.assertEqual(operation("prime").target, CONTROL)
+        self.assertEqual(operation("start_recording").target, CONTROL)
+        self.assertEqual(operation("analyze").target, ANALYZE)
+        self.assertEqual(operation("add_source").target, ANALYZE)
+
+    def test_the_session_belongs_to_neither(self):
+        # A project is where the instrument writes and where the analysis reads,
+        # so opening one is not an instrument operation.
+        for name in ("project_create", "project_open", "project_status", "project_list"):
+            with self.subTest(operation=name):
+                self.assertEqual(operation(name).target, GENERAL)
+
+    def test_nothing_general_needs_the_instrument(self):
+        # If a general operation required fluidics it would not be general.
+        for op in OPERATIONS:
+            if op.target == GENERAL:
+                with self.subTest(operation=op.id):
+                    self.assertNotIn("fluidics", op.requires)
+                    self.assertNotIn("camera", op.requires)
+
+    def test_the_analysis_half_never_touches_the_instrument(self):
+        for op in OPERATIONS:
+            if op.target == ANALYZE:
+                with self.subTest(operation=op.id):
+                    self.assertEqual(op.uses, ())
+                    self.assertFalse(op.starts_protocol)
+
+    def test_one_half_can_be_asked_for_on_its_own(self):
+        from admet.core.service import Admet
+
+        listed = Admet().operations(ANALYZE)
+
+        self.assertEqual({op["id"] for op in listed}, {"add_source", "sources", "analyze"})
 
 
 class GuardTests(unittest.TestCase):
@@ -269,6 +323,7 @@ class DescribeTests(unittest.TestCase):
         described = Admet().describe("prime")
 
         self.assertEqual(described["kind"], "operation")
+        self.assertEqual(described["target"], "control")
         self.assertEqual(described["protocol"], "Priming")
         reasons = {entry["name"]: entry["why"] for entry in described["requires"]}
         self.assertIn("run connect first", reasons["fluidics"])

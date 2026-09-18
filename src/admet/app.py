@@ -47,7 +47,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="an operation, pipeline or engine; omit for all three layers",
     )
 
-    sub.add_parser("operations", help="everything that can be asked for, and what it needs first")
+    operations = sub.add_parser(
+        "operations", help="everything that can be asked for, and what it needs first"
+    )
+    operations.add_argument(
+        "--target",
+        choices=("general", "control", "analyze"),
+        default="",
+        help="only the session, the instrument, or the analysis",
+    )
 
     do = sub.add_parser("do", help="carry out one operation")
     do.add_argument("operation")
@@ -92,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "describe":
         return _attempt(lambda: admet.describe(args.target))
     if args.command == "operations":
-        return _print(admet.operations())
+        return _print(admet.operations(args.target))
     if args.command == "pipelines":
         return _print(admet.pipelines())
     if args.command == "status":

@@ -26,64 +26,6 @@ from admet.mcp.tools import DESCRIBE_TOOL, operation_tools, pipeline_tools
 PROTOCOL_VERSION = "2024-11-05"
 SERVER = {"name": "admet", "version": "0.1.0"}
 
-# Sessions are core's, not an engine's, so they are tools in their own right: a
-# client opens a project first, then everything it does lands inside it.
-PROJECT_TOOLS = (
-    {
-        "name": "project_open",
-        "description": "Open an existing project. Actions that write files need one open.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"path": {"type": "string", "description": "Path to a .admetp directory"}},
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "project_create",
-        "description": "Create a project and make it the one runs write into.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Where to create it, ending in .admetp"},
-                "project_id": {"type": "string", "description": "Name for it; defaults to the directory name"},
-            },
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "project_status",
-        "description": "Which project is open, and what it holds.",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-    {
-        "name": "project_list",
-        "description": "Projects found under a directory.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"root": {"type": "string", "description": "Directory to look in"}},
-            "required": ["root"],
-            "additionalProperties": False,
-        },
-    },
-)
-
-_PROJECT_CALLS = {
-    "project_open": lambda admet, args: _opened(admet, admet.open_project(args["path"])),
-    "project_create": lambda admet, args: _opened(
-        admet, admet.create_project(args["path"], args.get("project_id", ""))
-    ),
-    "project_status": lambda admet, _args: admet.describe_project(),
-    "project_list": lambda admet, args: {"projects": admet.discover_projects(args["root"])},
-}
-
-
-def _opened(admet: Admet, store: Any) -> dict[str, Any]:
-    del store
-    return admet.describe_project()
-
-
 class SimulationRefused(Exception):
     """An action would have reached the instrument while in simulated mode."""
 
@@ -101,15 +43,13 @@ class AdmetServer:
         self.admet = Admet(project=project)
 
     def tools(self) -> list[dict[str, Any]]:
-        return [DESCRIBE_TOOL, *PROJECT_TOOLS, *operation_tools(), *pipeline_tools()]
+        return [DESCRIBE_TOOL, *operation_tools(), *pipeline_tools()]
 
     # -- calling ------------------------------------------------------------
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         arguments = dict(arguments or {})
         if name == "describe":
             return self.admet.describe(str(arguments.get("target") or ""))
-        if name in _PROJECT_CALLS:
-            return _PROJECT_CALLS[name](self.admet, arguments)
         if name.startswith("plan_"):
             return {"stages": self.admet.plan(name[len("plan_") :], arguments)}
         if name.startswith("run_"):
