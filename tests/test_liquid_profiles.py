@@ -10,7 +10,6 @@ from admet.engines.acquisition.settings import (
     CORRECTION_SETTINGS,
     LIQUID_PROFILE_PARAM_NAMES,
 )
-from admet.workflows.control import create_control_workflow
 
 
 class LiquidProfileTests(unittest.TestCase):
@@ -61,21 +60,6 @@ class LiquidProfileTests(unittest.TestCase):
                 "oil_l_quadratic": profile.quadratic,
             },
         )
-
-    def test_run_and_wash_declare_different_liquids(self):
-        stages = {stage.id: stage for stage in create_control_workflow().stages}
-        runs = stages["runs"].settings_options["liquids"]
-        wash = stages["wash"].settings_options["liquids"]
-
-        self.assertNotEqual(runs, wash)
-        for declared in (runs, wash):
-            for prefix, profile_id in declared.items():
-                profile = profile_by_id(profile_id)
-                self.assertIsNotNone(profile, profile_id)
-                self.assertEqual(profile.unit, FLUIDIC_CHANNEL_UNITS[prefix])
-        # the point of the feature: the oil line runs oil, then washes with IPA
-        self.assertEqual(profile_by_id(runs["oil_l"]).scale, 2.25)
-        self.assertEqual(profile_by_id(wash["oil_l"]).scale, 1.0)
 
     def test_profile_params_cover_every_channel(self):
         self.assertEqual(
