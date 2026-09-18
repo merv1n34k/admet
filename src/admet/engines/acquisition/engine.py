@@ -100,8 +100,9 @@ ACQUISITION_ACTIONS = (
             "camera_video_fps",
             "camera_preview_off_recording",
         ),
+        outputs=("video", "fluidics_csv"),
     ),
-    ActionSpec("stop_recording", "Stop Recording", "recording"),
+    ActionSpec("stop_recording", "Stop Recording", "recording", artifact="control_recording"),
     ActionSpec(
         "run_protocol",
         "Run Protocol",

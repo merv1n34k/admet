@@ -20,7 +20,7 @@ import sys
 import traceback
 from typing import Any, TextIO
 
-from admet.core.run import RunJob
+from admet.core.service import Admet
 from admet.mcp.tools import tools_for
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -29,6 +29,64 @@ SERVER = {"name": "admet", "version": "0.1.0"}
 # Engines offered by default. Analysis engines are heavy to import, so they are
 # loaded only when asked for.
 DEFAULT_ENGINES = ("acquisition",)
+
+
+# Sessions are core's, not an engine's, so they are tools in their own right: a
+# client opens a project first, then everything it does lands inside it.
+PROJECT_TOOLS = (
+    {
+        "name": "project_open",
+        "description": "Open an existing project. Actions that write files need one open.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "Path to a .admetp directory"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "project_create",
+        "description": "Create a project and make it the one runs write into.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Where to create it, ending in .admetp"},
+                "project_id": {"type": "string", "description": "Name for it; defaults to the directory name"},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "project_status",
+        "description": "Which project is open, and what it holds.",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "project_list",
+        "description": "Projects found under a directory.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"root": {"type": "string", "description": "Directory to look in"}},
+            "required": ["root"],
+            "additionalProperties": False,
+        },
+    },
+)
+
+_PROJECT_CALLS = {
+    "project_open": lambda admet, args: _opened(admet, admet.open_project(args["path"])),
+    "project_create": lambda admet, args: _opened(
+        admet, admet.create_project(args["path"], args.get("project_id", ""))
+    ),
+    "project_status": lambda admet, _args: admet.describe_project(),
+    "project_list": lambda admet, args: {"projects": admet.discover_projects(args["root"])},
+}
+
+
+def _opened(admet: Admet, store: Any) -> dict[str, Any]:
+    del store
+    return admet.describe_project()
 
 
 class SimulationRefused(Exception):
@@ -43,41 +101,39 @@ class AdmetServer:
     rather than quietly given it.
     """
 
-    def __init__(self, *, engines: tuple[str, ...] = DEFAULT_ENGINES, simulated: bool = False):
+    def __init__(
+        self,
+        *,
+        engines: tuple[str, ...] = DEFAULT_ENGINES,
+        simulated: bool = False,
+        project: str | None = None,
+    ):
         self.simulated = simulated
         self._engine_ids = engines
-        self._apis: dict[str, Any] = {}
+        self.admet = Admet(project=project)
 
     # -- engines ------------------------------------------------------------
-    def api(self, engine_id: str):
-        from admet.app import create_engine_api
-
-        if engine_id not in self._apis:
-            self._apis[engine_id] = create_engine_api(engine_id)
-        return self._apis[engine_id]
-
     def tools(self) -> list[dict[str, Any]]:
-        tools: list[dict[str, Any]] = []
+        tools = list(PROJECT_TOOLS)
         for engine_id in self._engine_ids:
             try:
-                tools.extend(tools_for(self.api(engine_id).engine))
+                tools.extend(tools_for(self.admet.engine(engine_id)))
             except Exception as exc:  # an engine whose stack is not installed
                 _warn(f"engine {engine_id} unavailable: {exc}")
         return tools
 
     # -- calling ------------------------------------------------------------
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        arguments = dict(arguments or {})
+        if name in _PROJECT_CALLS:
+            return _PROJECT_CALLS[name](self.admet, arguments)
+
         engine_id, _, action = name.partition("_")
         if engine_id not in self._engine_ids or not action:
             raise LookupError(f"no tool named {name!r}")
 
-        settings = dict(arguments or {})
-        settings = self._apply_simulation(action, settings)
-
-        api = self.api(engine_id)
-        result = api.run(
-            RunJob(id=f"mcp_{action}", engine=api.id, action=action, settings=settings)
-        )
+        settings = self._apply_simulation(action, arguments)
+        result = self.admet.run(engine_id, action, settings, job_id=f"mcp_{action}")
         return {
             "status": result.status,
             "warnings": list(result.warnings),
@@ -112,7 +168,7 @@ class AdmetServer:
 
     def _params_of(self, action: str) -> tuple[str, ...]:
         for engine_id in self._engine_ids:
-            for spec in self.api(engine_id).engine.actions:
+            for spec in self.admet.engine(engine_id).actions:
                 if spec.id == action:
                     return spec.params
         return ()

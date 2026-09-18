@@ -90,12 +90,25 @@ class ParamSchema:
 
 @dataclass(frozen=True)
 class ActionSpec:
+    """What an engine can be asked to do.
+
+    An engine declares the files an action writes, but never where they go: it is
+    handed paths and writes to them. Core decides the location, because only core
+    knows which project is open, and an engine that chose its own paths could
+    write outside the session nobody would then find it in.
+    """
+
     id: str
     label: str
     category: str
     params: tuple[str, ...] = ()
     destructive: bool = False
     description: str = ""
+    # Logical names of the files this action writes, filled in by core.
+    outputs: tuple[str, ...] = ()
+    # The kind of artifact this action leaves behind, registered by core when it
+    # completes. Empty means the action produces nothing worth recording.
+    artifact: str = ""
 
 
 def action_spec(actions: Iterable[ActionSpec], action_id: str) -> ActionSpec:

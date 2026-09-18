@@ -16,11 +16,16 @@ class ToolTests(unittest.TestCase):
 
     def test_every_action_an_engine_declares_becomes_a_tool(self):
         # The tool list is generated from the engine, so the two cannot drift.
-        engine = self.server.api("acquisition").engine
+        # Project tools are core's and are counted separately.
+        engine = self.server.admet.engine("acquisition")
 
         names = {tool["name"] for tool in tools_for(engine)}
 
-        self.assertEqual(len(names), len(engine.actions))
+        self.assertTrue({name for name in names if name.startswith("acquisition_")})
+        self.assertEqual(
+            len([name for name in names if name.startswith("acquisition_")]),
+            len(engine.actions),
+        )
         self.assertIn("acquisition_run_protocol", names)
         self.assertIn("acquisition_connect_fluidics", names)
 
@@ -135,6 +140,44 @@ class ProtocolTests(unittest.TestCase):
         )
 
         self.assertTrue(response["result"]["isError"])
+
+    def test_a_client_can_open_a_project_before_it_writes_anything(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            created = handle(
+                self.server,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 10,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "project_create",
+                        "arguments": {"path": f"{tmp}/rig.admetp"},
+                    },
+                },
+            )
+
+            payload = json.loads(created["result"]["content"][0]["text"])
+            self.assertTrue(payload["open"])
+            self.assertEqual(payload["project_id"], "rig")
+
+    def test_writing_without_a_project_is_refused_with_the_reason(self):
+        response = handle(
+            self.server,
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {
+                    "name": "acquisition_start_recording",
+                    "arguments": {"recording_label": "x"},
+                },
+            },
+        )
+
+        self.assertTrue(response["result"]["isError"])
+        self.assertIn("needs a project open", response["result"]["content"][0]["text"])
 
     def test_a_session_runs_from_stdin_to_stdout(self):
         requests = "\n".join(

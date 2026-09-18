@@ -1,9 +1,12 @@
 """Command line entry point.
 
-There is no interface here beyond a terminal. An engine is asked what it can do,
-or told to do one thing, and it answers as JSON -- the same surface the MCP
-server exposes, so what a person drives by hand a program can drive too, without
-a second code path behind it.
+There is no interface here beyond a terminal. It asks core what an engine can do,
+or tells core to do one thing, and prints the answer as JSON -- the same surface
+the MCP server drives, so what a person does by hand a program can do too,
+through the same path.
+
+Nothing here talks to an engine directly. Core owns the session and decides where
+anything is written.
 """
 
 from __future__ import annotations
@@ -11,10 +14,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
-from admet.core.api import AdmetAPI
-from admet.core.run import RunJob
+from admet.core.service import Admet
 
 ENGINES = ("acquisition", "opencv", "cellpose")
 
@@ -40,7 +43,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--settings-json",
         help="all settings as one JSON object, for values a shell would mangle",
     )
-    run.add_argument("--workdir", help="project directory the action writes into")
+    run.add_argument(
+        "--project",
+        help="project to run in; actions that write files need one",
+    )
+    run.add_argument(
+        "--create-project",
+        action="store_true",
+        help="create the project named by --project if it is not there yet",
+    )
 
     serve = sub.add_parser("serve", help="expose the engines over MCP on stdio")
     serve.add_argument(
@@ -56,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "describe":
-        print(json.dumps(create_engine_api(args.engine).describe(), indent=2, sort_keys=True))
+        print(json.dumps(Admet().describe(args.engine), indent=2, sort_keys=True))
         return 0
     if args.command == "run":
         return _run(args)
@@ -69,9 +80,13 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
-    api = create_engine_api(args.engine)
-    if args.workdir:
-        api.workdir = args.workdir
+    admet = Admet()
+    if args.project:
+        path = Path(args.project)
+        if args.create_project and not (path / "manifest.json").is_file():
+            admet.create_project(path)
+        else:
+            admet.open_project(path)
 
     settings: dict[str, Any] = {}
     if args.settings_json:
@@ -83,12 +98,10 @@ def _run(args: argparse.Namespace) -> int:
             return 2
         settings[name] = _scalar(value)
 
-    # An engine reports failure by raising, so anything returned is a result and
+    # Core reports failure by raising, so anything returned is a result and
     # anything raised is the message worth showing.
     try:
-        result = api.run(
-            RunJob(id=f"cli_{args.action}", engine=api.id, action=args.action, settings=settings)
-        )
+        result = admet.run(args.engine, args.action, settings, job_id=f"cli_{args.action}")
     except Exception as exc:
         print(
             json.dumps({"error": type(exc).__name__, "message": str(exc)}, indent=2),
@@ -126,14 +139,16 @@ def _scalar(value: str) -> Any:
         return value
 
 
-def create_engine_api(engine_id: str) -> AdmetAPI:
-    from admet.engines import create_engine_registry
+def create_engine_api(engine_id: str):
+    """An engine on its own, for tests and for the analysis runner.
 
-    if engine_id == "acquisition":
-        return AdmetAPI(create_engine_registry("control").create(engine_id))
-    if engine_id in {"opencv", "cellpose"}:
-        return AdmetAPI(create_engine_registry("analyze").create(engine_id))
-    raise LookupError(f"unknown engine: {engine_id}")
+    Everything an operator or a program does goes through Admet instead: an
+    engine reached directly has no session, so anything it writes lands outside
+    the project.
+    """
+    from admet.core.api import AdmetAPI
+
+    return AdmetAPI(Admet().engine(engine_id))
 
 
 if __name__ == "__main__":
