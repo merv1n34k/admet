@@ -9,13 +9,15 @@ from admet.engines.acquisition.fluidics.config import (
     STABILITY_TIMEOUT_S,
     STABILITY_TOLERANCE_UL_MIN,
 )
-from admet.engines.acquisition.protocol import (
-    PIPELINES,
-    protocol_names,
-    StabilityTrigger,
+from admet.engines.acquisition.protocols import (
+    PROTOCOLS,
     build_characterise_protocol,
     build_gravimetry_protocol,
     build_protocol,
+    protocol_names,
+)
+from admet.engines.acquisition.triggers import (
+    StabilityTrigger,
     create_trigger,
 )
 
@@ -108,7 +110,7 @@ class CharacteriseProtocolTests(unittest.TestCase):
 
     def test_reachable_through_build_protocol_without_a_stored_step_list(self):
         self.assertEqual(len(build_protocol("Characterise", SETTINGS)), 6)
-        self.assertNotIn("Characterise", PIPELINES)
+        self.assertIn("Characterise", PROTOCOLS)
 
     def test_every_buildable_protocol_is_an_allowed_pipeline_name(self):
         # the pipeline_name choice validates against protocol_names(), so a name that
@@ -225,7 +227,7 @@ class GravimetryProtocolTests(unittest.TestCase):
             build_gravimetry_protocol(GRAVIMETRY_SETTINGS),
         )
         self.assertIn("Gravimetry", protocol_names())
-        self.assertNotIn("Gravimetry", PIPELINES)
+        self.assertIn("Gravimetry", PROTOCOLS)
 
 
 if __name__ == "__main__":

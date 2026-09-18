@@ -8,10 +8,12 @@ from admet.core.run import RunJob
 from admet.engines.acquisition.camera import Camera, CameraAvailability
 from admet.engines.acquisition import AcquisitionEngine
 from admet.engines.acquisition.fluidics import PressureChannelInfo, SensorChannelInfo
-from admet.engines.acquisition.protocol import (
+from admet.engines.acquisition.pipeline import (
     PipelineEngine,
-    ProtocolStep,
     build_pipeline_steps,
+)
+from admet.engines.acquisition.protocols import (
+    ProtocolStep,
     build_dropseq_protocol,
     build_priming_protocol,
     build_protocol,

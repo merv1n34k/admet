@@ -2,12 +2,14 @@ import time
 import unittest
 from queue import Queue
 
-from admet.engines.acquisition.protocol import (
+from admet.engines.acquisition.pipeline import (
     PipelineEngine,
     PipelineEvent,
     PipelineState,
     PipelineStep,
     StepStatus,
+)
+from admet.engines.acquisition.triggers import (
     TimeTrigger,
 )
 

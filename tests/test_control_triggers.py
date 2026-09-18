@@ -1,10 +1,12 @@
 import unittest
 
-from admet.engines.acquisition.protocol import (
-    ConditionTrigger,
-    ConfirmationTrigger,
+from admet.engines.acquisition.pipeline import (
     PipelineStep,
     StepStatus,
+)
+from admet.engines.acquisition.triggers import (
+    ConditionTrigger,
+    ConfirmationTrigger,
     ThresholdTrigger,
     TimeTrigger,
     VolumeTrigger,

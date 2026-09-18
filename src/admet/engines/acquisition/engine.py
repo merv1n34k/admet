@@ -24,7 +24,8 @@ from admet.engines.acquisition.recording import (
     RecordingCoordinator,
     WriterFactory,
 )
-from admet.engines.acquisition.protocol import PipelineEngine, build_pipeline_steps, build_protocol
+from admet.engines.acquisition.pipeline import PipelineEngine, build_pipeline_steps
+from admet.engines.acquisition.protocols import build_protocol
 from admet.engines.acquisition.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES
 
 ActionHandler = Callable[[dict[str, Any]], dict[str, Any]]

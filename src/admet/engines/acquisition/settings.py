@@ -11,7 +11,7 @@ from admet.engines.acquisition.fluidics.config import (
     STABILITY_TOLERANCE_UL_MIN,
 )
 from admet.engines.acquisition.fluidics.liquids import default_profile_id, profiles_for_unit
-from admet.engines.acquisition.protocol import protocol_names
+from admet.engines.acquisition.protocols import protocol_names
 
 CORRECTION_PARAM_NAMES = tuple(
     name
