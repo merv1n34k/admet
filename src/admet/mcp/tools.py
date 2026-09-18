@@ -49,6 +49,28 @@ def _schema(params: tuple[Param, ...]) -> dict[str, Any]:
     }
 
 
+DESCRIBE_TOOL = {
+    "name": "describe",
+    "description": (
+        "What exists and how the layers fit together. With no target: the operations "
+        "and pipelines that are the way in, and the engines underneath. With one: that "
+        "operation's parameters and what must be true before it runs, that pipeline's "
+        "stages, or that engine's actions and which operations drive them."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "An operation, pipeline or engine id; omit for all three layers",
+            }
+        },
+        "required": [],
+        "additionalProperties": False,
+    },
+}
+
+
 def operation_tools() -> list[dict[str, Any]]:
     from admet.workflows.operations import OPERATIONS
 

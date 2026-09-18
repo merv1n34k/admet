@@ -30,13 +30,34 @@ class SurfaceTests(unittest.TestCase):
 
         self.assertIn("setup", {line["id"] for line in json.loads(out)})
 
-    def test_there_is_no_command_for_engine_actions(self):
-        # They stay reachable from Python; the command line is the workflow layer.
+    def test_nothing_on_the_command_line_runs_an_engine_action(self):
+        # Reading them is useful and describe does that. Running one is the low
+        # level, and the command line is the workflow layer -- engine actions stay
+        # reachable from Python instead.
         commands = build_parser()._subparsers._group_actions[0].choices  # type: ignore[attr-defined]
 
-        self.assertNotIn("describe", commands)
-        self.assertIn("do", commands)
-        self.assertIn("run", commands)
+        self.assertEqual(
+            set(commands),
+            {"describe", "operations", "do", "pipelines", "plan", "run", "status", "serve"},
+        )
+        self.assertEqual(commands["do"]._actions[1].dest, "operation")
+        self.assertEqual(commands["run"]._actions[1].dest, "pipeline")
+
+    def test_describe_reads_a_layer_without_running_anything(self):
+        exit_code, out, _err = _run(["describe", "acquisition"])
+
+        described = json.loads(out)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(described["kind"], "engine")
+        self.assertIn("connect", described["actions"][0]["used_by"])
+
+    def test_describe_shows_the_three_layers_together(self):
+        _exit_code, out, _err = _run(["describe"])
+
+        described = json.loads(out)
+        self.assertTrue(described["operations"])
+        self.assertTrue(described["pipelines"])
+        self.assertTrue(described["engines"])
 
     def test_a_plan_shows_the_stages_without_running_them(self):
         exit_code, out, _err = _run(["plan", "setup"])

@@ -101,6 +101,11 @@ class Operation:
     # True when this hands a step list to the pipeline and returns before it has
     # finished. A pipeline built from operations has to know which ones to wait on.
     starts_protocol: bool = False
+    # The engine actions this drives, declared so the two layers can be read
+    # against each other. A test checks that each one exists.
+    uses: tuple[str, ...] = ()
+    # The protocol this runs, if it runs one.
+    protocol: str = ""
     run: Callable[[Runner, dict[str, Any]], dict[str, Any]] = field(repr=False, default=None)  # type: ignore[assignment]
 
     def check(self, state: dict[str, Any]) -> None:
@@ -242,11 +247,12 @@ OPERATIONS: tuple[Operation, ...] = (
                 description="Drive the SDK's simulator instead of an instrument",
             ),
         ),
+        uses=("connect_fluidics",),
         run=_connect,
     ),
     Operation("disconnect", "Disconnect fluidics", "Release the instrument.",
-              requires=("fluidics",), run=_disconnect),
-    Operation("connect_camera", "Connect camera", "Open the camera.", run=_connect_camera),
+              requires=("fluidics",), uses=("disconnect_fluidics",), run=_disconnect),
+    Operation("connect_camera", "Connect camera", "Open the camera.", uses=("connect_camera",), run=_connect_camera),
     Operation(
         "apply_corrections",
         "Apply correction factors",
@@ -262,9 +268,10 @@ OPERATIONS: tuple[Operation, ...] = (
             )
         ),
         requires=("fluidics",),
+        uses=("apply_corrections",),
         run=_apply_corrections,
     ),
-    Operation("status", "Status", "What the instrument and the session are doing.", run=_status),
+    Operation("status", "Status", "What the instrument and the session are doing.", uses=("camera_status",), run=_status),
     Operation(
         "set_flow",
         "Set a channel's flow",
@@ -274,6 +281,7 @@ OPERATIONS: tuple[Operation, ...] = (
             _number("channel_flow_ul_min", "Flow", 0.0, unit="uL/min"),
         ),
         requires=("fluidics", "corrections", "idle"),
+        uses=("set_channel_flow",),
         run=_set_flow,
     ),
     Operation(
@@ -282,6 +290,7 @@ OPERATIONS: tuple[Operation, ...] = (
         "Take one channel to zero.",
         params=(_whole("channel_index", "Channel", 0, minimum=0),),
         requires=("fluidics",),
+        uses=("stop_channel",),
         run=_stop_channel,
     ),
     Operation(
@@ -294,6 +303,7 @@ OPERATIONS: tuple[Operation, ...] = (
             TICK,
         ),
         requires=("fluidics", "corrections", "idle"),
+        protocol="Priming",
         starts_protocol=True,
         run=_protocol("Priming"),
     ),
@@ -310,6 +320,7 @@ OPERATIONS: tuple[Operation, ...] = (
             TICK,
         ),
         requires=("fluidics", "idle"),
+        protocol="Wash",
         starts_protocol=True,
         run=_protocol("Wash"),
     ),
@@ -327,6 +338,7 @@ OPERATIONS: tuple[Operation, ...] = (
             TICK,
         ),
         requires=("fluidics", "corrections", "idle"),
+        protocol="Characterise",
         starts_protocol=True,
         run=_protocol("Characterise"),
     ),
@@ -342,6 +354,7 @@ OPERATIONS: tuple[Operation, ...] = (
             TICK,
         ),
         requires=("fluidics", "corrections", "idle"),
+        protocol="Gravimetry",
         starts_protocol=True,
         run=_protocol("Gravimetry"),
     ),
@@ -358,19 +371,20 @@ OPERATIONS: tuple[Operation, ...] = (
             TICK,
         ),
         requires=("project", "fluidics", "corrections", "idle"),
+        protocol="Drop-Seq",
         starts_protocol=True,
         run=_protocol("Drop-Seq"),
     ),
     Operation("pause", "Pause protocol", "Hold the protocol and zero the channels.",
-              requires=("running",), run=_pipeline_control("pause_protocol")),
+              requires=("running",), uses=("pause_protocol",), run=_pipeline_control("pause_protocol")),
     Operation("resume", "Resume protocol", "Carry on from a pause.",
-              requires=("running",), run=_pipeline_control("resume_protocol")),
+              requires=("running",), uses=("resume_protocol",), run=_pipeline_control("resume_protocol")),
     Operation("stop", "Stop protocol", "End the protocol and release the channels.",
-              requires=("running",), run=_pipeline_control("stop_protocol")),
+              requires=("running",), uses=("stop_protocol",), run=_pipeline_control("stop_protocol")),
     Operation("confirm", "Confirm step", "Answer a step that is waiting for the operator.",
-              requires=("running",), run=_pipeline_control("confirm_protocol")),
+              requires=("running",), uses=("confirm_protocol",), run=_pipeline_control("confirm_protocol")),
     Operation("skip", "Skip step", "Abandon the waiting step and move on.",
-              requires=("running",), run=_pipeline_control("skip_protocol")),
+              requires=("running",), uses=("skip_protocol",), run=_pipeline_control("skip_protocol")),
     Operation(
         "start_recording",
         "Start recording",
@@ -381,10 +395,11 @@ OPERATIONS: tuple[Operation, ...] = (
             _number("recording_max_seconds", "Time limit", 0.0, unit="s"),
         ),
         requires=("project", "fluidics", "camera"),
+        uses=("start_recording",),
         run=_start_recording,
     ),
     Operation("stop_recording", "Stop recording", "End the recording and file it in the project.",
-              requires=("project",), run=_stop_recording),
+              requires=("project",), uses=("stop_recording",), run=_stop_recording),
     Operation(
         "add_source",
         "Add something to analyse",

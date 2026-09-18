@@ -37,6 +37,23 @@ ENGINE_GROUPS = {
 }
 
 
+def _describe_param(param: Any) -> dict[str, Any]:
+    return {
+        "name": param.name,
+        "kind": param.kind.value,
+        "default": param.default,
+        "minimum": param.minimum,
+        "maximum": param.maximum,
+        "description": param.description or param.label,
+    }
+
+
+def _requirement_reason(name: str) -> str:
+    from admet.workflows.operations import REQUIREMENTS
+
+    return REQUIREMENTS[name][1]
+
+
 def _fill_defaults(operation: Any, settings: dict[str, Any]) -> dict[str, Any]:
     """Validate what was supplied and fill in the rest from the operation."""
     known = {param.name: param for param in operation.params}
@@ -125,9 +142,88 @@ class Admet:
             self._engines[engine_id] = create_engine_registry(group).create(engine_id)
         return self._engines[engine_id]
 
-    def describe(self, engine_id: str) -> dict[str, Any]:
-        engine = self.engine(engine_id)
+    def describe(self, target: str = "") -> dict[str, Any]:
+        """What exists, at whichever level was asked about.
+
+        With no target, the three layers side by side: the operations and
+        pipelines that are the way in, and the engines underneath them. With one,
+        the detail of that operation, pipeline or engine -- and for an operation,
+        which engine actions it drives, so the layers can be read against each
+        other rather than guessed at.
+        """
+        from admet.workflows.operations import BY_ID as OPERATIONS_BY_ID
+        from admet.workflows.pipelines import BY_ID as PIPELINES_BY_ID
+
+        if not target:
+            return {
+                "operations": [
+                    {"id": op.id, "label": op.label, "requires": list(op.requires)}
+                    for op in OPERATIONS_BY_ID.values()
+                ],
+                "pipelines": [
+                    {"id": line.id, "label": line.label} for line in PIPELINES_BY_ID.values()
+                ],
+                "engines": [
+                    {"id": engine_id, "group": group} for engine_id, group in ENGINE_GROUPS.items()
+                ],
+            }
+
+        if target in OPERATIONS_BY_ID:
+            return self._describe_operation(OPERATIONS_BY_ID[target])
+        if target in PIPELINES_BY_ID:
+            return self._describe_pipeline(PIPELINES_BY_ID[target])
+        if target in ENGINE_GROUPS:
+            return self.describe_engine(target)
+
+        known = ", ".join(
+            sorted({*OPERATIONS_BY_ID, *PIPELINES_BY_ID, *ENGINE_GROUPS})
+        )
+        raise LookupError(f"nothing called {target!r} to describe; there is: {known}")
+
+    def _describe_operation(self, op: Any) -> dict[str, Any]:
         return {
+            "kind": "operation",
+            "id": op.id,
+            "label": op.label,
+            "description": op.description,
+            "requires": [
+                {"name": name, "why": _requirement_reason(name)} for name in op.requires
+            ],
+            "params": [_describe_param(param) for param in op.params],
+            "engine_actions": list(op.uses),
+            "protocol": op.protocol,
+            "starts_protocol": op.starts_protocol,
+        }
+
+    def _describe_pipeline(self, line: Any) -> dict[str, Any]:
+        bound = {param.name: param.default for param in line.params}
+        return {
+            "kind": "pipeline",
+            "id": line.id,
+            "label": line.label,
+            "description": line.description,
+            "params": [_describe_param(param) for param in line.params],
+            "stages": [
+                {"index": index, "operation": stage.operation, "label": stage.described()}
+                for index, stage in enumerate(line.stages(bound))
+            ],
+        }
+
+    def describe_engine(self, engine_id: str) -> dict[str, Any]:
+        """A workhorse and everything it can be told to do.
+
+        Engine actions are not the way in -- operations are -- but reading them
+        is how anyone works out what an operation is actually doing.
+        """
+        engine = self.engine(engine_id)
+        from admet.workflows.operations import OPERATIONS
+
+        driven: dict[str, list[str]] = {}
+        for op in OPERATIONS:
+            for action in op.uses:
+                driven.setdefault(action, []).append(op.id)
+        return {
+            "kind": "engine",
             "engine": {"id": engine.id, "name": engine.name},
             "actions": [
                 {
@@ -137,7 +233,7 @@ class Admet:
                     "params": list(action.params),
                     "outputs": list(action.outputs),
                     "artifact": action.artifact,
-                    "destructive": action.destructive,
+                    "used_by": driven.get(action.id, []),
                 }
                 for action in engine.actions
             ],

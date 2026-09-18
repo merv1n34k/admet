@@ -229,3 +229,68 @@ class ProjectAwareTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DescribeTests(unittest.TestCase):
+    """Reading the layers against each other."""
+
+    def test_every_engine_action_an_operation_claims_to_drive_exists(self):
+        # The link between the layers is declared, so it can go stale. This is
+        # what catches it.
+        admet = Admet()
+        actions = {action.id for action in admet.engine("acquisition").actions}
+
+        for op in OPERATIONS:
+            for name in op.uses:
+                with self.subTest(operation=op.id, action=name):
+                    self.assertIn(name, actions)
+
+    def test_every_protocol_an_operation_claims_to_run_exists(self):
+        from admet.workflows.protocols import PROTOCOLS
+
+        for op in OPERATIONS:
+            if op.protocol:
+                with self.subTest(operation=op.id):
+                    self.assertIn(op.protocol, PROTOCOLS)
+
+    def test_an_operation_that_starts_a_protocol_names_which(self):
+        for op in OPERATIONS:
+            with self.subTest(operation=op.id):
+                self.assertEqual(bool(op.protocol), op.starts_protocol)
+
+    def test_describing_nothing_shows_the_three_layers(self):
+        described = Admet().describe()
+
+        self.assertEqual(len(described["operations"]), len(OPERATIONS))
+        self.assertEqual({line["id"] for line in described["pipelines"]}, {p.id for p in PIPELINES})
+        self.assertIn("acquisition", {engine["id"] for engine in described["engines"]})
+
+    def test_describing_an_operation_says_why_each_guard_is_there(self):
+        described = Admet().describe("prime")
+
+        self.assertEqual(described["kind"], "operation")
+        self.assertEqual(described["protocol"], "Priming")
+        reasons = {entry["name"]: entry["why"] for entry in described["requires"]}
+        self.assertIn("run connect first", reasons["fluidics"])
+
+    def test_describing_a_pipeline_shows_its_stages(self):
+        described = Admet().describe("setup")
+
+        self.assertEqual(described["kind"], "pipeline")
+        self.assertEqual(
+            [stage["operation"] for stage in described["stages"]],
+            ["connect", "apply_corrections", "prime"],
+        )
+
+    def test_describing_an_engine_says_which_operations_drive_each_action(self):
+        described = Admet().describe("acquisition")
+
+        actions = {action["id"]: action for action in described["actions"]}
+        self.assertEqual(described["kind"], "engine")
+        self.assertEqual(actions["connect_fluidics"]["used_by"], ["connect"])
+
+    def test_describing_something_that_is_not_there_says_what_is(self):
+        with self.assertRaises(LookupError) as caught:
+            Admet().describe("nonsense")
+
+        self.assertIn("prime", str(caught.exception))

@@ -36,6 +36,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    describe = sub.add_parser(
+        "describe",
+        help="what exists: the layers together, or one operation, pipeline or engine",
+    )
+    describe.add_argument(
+        "target",
+        nargs="?",
+        default="",
+        help="an operation, pipeline or engine; omit for all three layers",
+    )
+
     sub.add_parser("operations", help="everything that can be asked for, and what it needs first")
 
     do = sub.add_parser("do", help="carry out one operation")
@@ -78,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
 
     admet = _open(args)
 
+    if args.command == "describe":
+        return _attempt(lambda: admet.describe(args.target))
     if args.command == "operations":
         return _print(admet.operations())
     if args.command == "pipelines":

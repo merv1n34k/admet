@@ -21,7 +21,7 @@ import traceback
 from typing import Any, TextIO
 
 from admet.core.service import Admet
-from admet.mcp.tools import operation_tools, pipeline_tools
+from admet.mcp.tools import DESCRIBE_TOOL, operation_tools, pipeline_tools
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER = {"name": "admet", "version": "0.1.0"}
@@ -101,11 +101,13 @@ class AdmetServer:
         self.admet = Admet(project=project)
 
     def tools(self) -> list[dict[str, Any]]:
-        return [*PROJECT_TOOLS, *operation_tools(), *pipeline_tools()]
+        return [DESCRIBE_TOOL, *PROJECT_TOOLS, *operation_tools(), *pipeline_tools()]
 
     # -- calling ------------------------------------------------------------
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         arguments = dict(arguments or {})
+        if name == "describe":
+            return self.admet.describe(str(arguments.get("target") or ""))
         if name in _PROJECT_CALLS:
             return _PROJECT_CALLS[name](self.admet, arguments)
         if name.startswith("plan_"):
