@@ -21,15 +21,10 @@ import traceback
 from typing import Any, TextIO
 
 from admet.core.service import Admet
-from admet.mcp.tools import tools_for
+from admet.mcp.tools import operation_tools, pipeline_tools
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER = {"name": "admet", "version": "0.1.0"}
-
-# Engines offered by default. Analysis engines are heavy to import, so they are
-# loaded only when asked for.
-DEFAULT_ENGINES = ("acquisition",)
-
 
 # Sessions are core's, not an engine's, so they are tools in their own right: a
 # client opens a project first, then everything it does lands inside it.
@@ -101,77 +96,60 @@ class AdmetServer:
     rather than quietly given it.
     """
 
-    def __init__(
-        self,
-        *,
-        engines: tuple[str, ...] = DEFAULT_ENGINES,
-        simulated: bool = False,
-        project: str | None = None,
-    ):
+    def __init__(self, *, simulated: bool = False, project: str | None = None):
         self.simulated = simulated
-        self._engine_ids = engines
         self.admet = Admet(project=project)
 
-    # -- engines ------------------------------------------------------------
     def tools(self) -> list[dict[str, Any]]:
-        tools = list(PROJECT_TOOLS)
-        for engine_id in self._engine_ids:
-            try:
-                tools.extend(tools_for(self.admet.engine(engine_id)))
-            except Exception as exc:  # an engine whose stack is not installed
-                _warn(f"engine {engine_id} unavailable: {exc}")
-        return tools
+        return [*PROJECT_TOOLS, *operation_tools(), *pipeline_tools()]
 
     # -- calling ------------------------------------------------------------
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         arguments = dict(arguments or {})
         if name in _PROJECT_CALLS:
             return _PROJECT_CALLS[name](self.admet, arguments)
+        if name.startswith("plan_"):
+            return {"stages": self.admet.plan(name[len("plan_") :], arguments)}
+        if name.startswith("run_"):
+            return self.admet.run_pipeline(
+                name[len("run_") :], self._simulated(name, arguments)
+            )
+        return self.admet.do(name, self._simulated(name, arguments))
 
-        engine_id, _, action = name.partition("_")
-        if engine_id not in self._engine_ids or not action:
-            raise LookupError(f"no tool named {name!r}")
-
-        settings = self._apply_simulation(action, arguments)
-        result = self.admet.run(engine_id, action, settings, job_id=f"mcp_{action}")
-        return {
-            "status": result.status,
-            "warnings": list(result.warnings),
-            "metadata": result.metadata,
-        }
-
-    def _apply_simulation(self, action: str, settings: dict[str, Any]) -> dict[str, Any]:
+    def _simulated(self, name: str, settings: dict[str, Any]) -> dict[str, Any]:
         """Keep a simulated session simulated.
 
-        What makes a session safe is the connection, not the individual action:
-        once the fluidics are connected simulated, everything downstream acts on
-        the simulation. So the rule is about connecting, not about refusing the
-        actions that follow -- running a protocol against a simulated rig is the
-        point of the mode, not something to block.
+        What makes a session safe is the connection, not each operation: once the
+        fluidics are connected simulated, everything after acts on the simulation.
+        So the rule is about connecting, and running a protocol against a
+        simulated rig is the point of the mode rather than something to refuse.
         """
         if not self.simulated:
             return settings
         if settings.get("simulated") is False:
             raise SimulationRefused(
-                f"{action} was asked for real hardware, but this server is simulated"
+                f"{name} was asked for real hardware, but this server is simulated"
             )
-        if "simulated" in self._params_of(action):
-            settings["simulated"] = True
-        elif action == "connect_camera" and not os.environ.get("PYLON_CAMEMU"):
-            # The camera has no simulated flag; its emulation is switched on by
+        if _takes_simulated(name):
+            return {**settings, "simulated": True}
+        if name == "connect_camera" and not os.environ.get("PYLON_CAMEMU"):
+            # The camera has no simulated flag: its emulation is switched on by
             # the Pylon environment before the process starts.
             raise SimulationRefused(
-                "connect_camera would open a real camera. Set PYLON_CAMEMU=2 "
-                "before starting the server to use emulated cameras instead"
+                "connect_camera would open a real camera. Set PYLON_CAMEMU=2 before "
+                "starting the server to use emulated cameras instead"
             )
         return settings
 
-    def _params_of(self, action: str) -> tuple[str, ...]:
-        for engine_id in self._engine_ids:
-            for spec in self.admet.engine(engine_id).actions:
-                if spec.id == action:
-                    return spec.params
-        return ()
+
+def _takes_simulated(name: str) -> bool:
+    """Whether this operation or pipeline has a simulated switch of its own."""
+    from admet.workflows.operations import BY_ID as OPERATIONS_BY_ID
+    from admet.workflows.pipelines import BY_ID as PIPELINES_BY_ID
+
+    target = PIPELINES_BY_ID.get(name[len("run_") :]) if name.startswith("run_") else None
+    target = target or OPERATIONS_BY_ID.get(name)
+    return bool(target and any(param.name == "simulated" for param in target.params))
 
 
 # -- JSON-RPC ---------------------------------------------------------------
@@ -180,11 +158,12 @@ class AdmetServer:
 def serve(
     *,
     simulated: bool = False,
+    project: str | None = None,
     stdin: TextIO | None = None,
     stdout: TextIO | None = None,
 ) -> int:
     """Read requests until the stream closes. Returns a process exit code."""
-    server = AdmetServer(simulated=simulated)
+    server = AdmetServer(simulated=simulated, project=project)
     source = stdin or sys.stdin
     sink = stdout or sys.stdout
     _warn(f"admet mcp ready ({'simulated' if simulated else 'live hardware'})")

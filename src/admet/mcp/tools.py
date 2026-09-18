@@ -1,36 +1,18 @@
-"""Turning an engine's actions into tools a model can call.
+"""Turning the workflow layer into tools a model can call.
 
-An engine already declares what it can do and what each action takes. That
-declaration is the tool list -- there is no second description to write, and none
-to fall out of step with the code.
+An operation already declares its parameters and what has to be true before it
+runs. That declaration is the tool: there is no second description to write, and
+none to fall out of step with the code.
+
+Engine actions are not offered here. They are primitives with no guards, and the
+whole point of an operation is the guard.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from admet.core.engine import Param, ParamKind, ParamSchema
-
-# Actions that reach the instrument itself. In simulated mode these are the ones
-# that must be proven harmless before they are allowed through.
-HARDWARE_ACTIONS = frozenset(
-    {
-        "connect_fluidics",
-        "verify_fluigent",
-        "connect_camera",
-        "start_camera_live",
-        "apply_camera_settings",
-        "start_recording",
-        "apply_corrections",
-        "set_channel_flow",
-        "set_channel_pressure",
-        "stop_channel",
-        "set_channel_response",
-        "run_protocol",
-        "wash",
-        "calibrate",
-    }
-)
+from admet.core.engine import Param, ParamKind
 
 _JSON_TYPES = {
     ParamKind.BOOLEAN: "boolean",
@@ -40,10 +22,6 @@ _JSON_TYPES = {
     ParamKind.PATH: "string",
     ParamKind.CHOICE: "string",
 }
-
-
-def tool_name(engine_id: str, action_id: str) -> str:
-    return f"{engine_id}_{action_id}"
 
 
 def describe_param(param: Param) -> dict[str, Any]:
@@ -62,41 +40,51 @@ def describe_param(param: Param) -> dict[str, Any]:
     return schema
 
 
-def tools_for(engine: Any) -> list[dict[str, Any]]:
-    """One tool per action, with the parameters the action actually accepts."""
-    schema: ParamSchema = engine.settings
-    by_name = {param.name: param for param in schema.params}
+def _schema(params: tuple[Param, ...]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {param.name: describe_param(param) for param in params},
+        "required": [],
+        "additionalProperties": False,
+    }
+
+
+def operation_tools() -> list[dict[str, Any]]:
+    from admet.workflows.operations import OPERATIONS
+
     tools = []
-    for action in engine.actions:
-        properties = {
-            name: describe_param(by_name[name]) for name in action.params if name in by_name
-        }
-        required = [
-            name
-            for name in action.params
-            if name in by_name and by_name[name].required and by_name[name].default is None
-        ]
+    for op in OPERATIONS:
+        needs = f" Needs: {', '.join(op.requires)}." if op.requires else ""
+        waits = " Returns once started; the protocol runs on." if op.starts_protocol else ""
         tools.append(
             {
-                "name": tool_name(engine.id, action.id),
-                "description": _describe_action(engine, action),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                    "additionalProperties": False,
-                },
+                "name": op.id,
+                "description": f"{op.description}{needs}{waits}",
+                "inputSchema": _schema(op.params),
             }
         )
     return tools
 
 
-def _describe_action(engine: Any, action: Any) -> str:
-    parts = [action.description or f"{action.label} on the {engine.name} engine."]
-    if action.category:
-        parts.append(f"Category: {action.category}.")
-    if action.destructive:
-        parts.append("Destructive.")
-    if action.id in HARDWARE_ACTIONS:
-        parts.append("Reaches the instrument.")
-    return " ".join(parts)
+def pipeline_tools() -> list[dict[str, Any]]:
+    """One tool per pipeline, plus the plan that shows what it would do."""
+    from admet.workflows.pipelines import PIPELINES
+
+    tools = []
+    for line in PIPELINES:
+        tools.append(
+            {
+                "name": f"run_{line.id}",
+                "description": f"{line.description} Runs its stages in order, stopping if one is "
+                "refused or needs the operator.",
+                "inputSchema": _schema(line.params),
+            }
+        )
+        tools.append(
+            {
+                "name": f"plan_{line.id}",
+                "description": f"The stages of: {line.description} Does not run anything.",
+                "inputSchema": _schema(line.params),
+            }
+        )
+    return tools

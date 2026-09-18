@@ -1,11 +1,12 @@
-"""Running a protocol against the hardware.
+"""Running steps against the hardware.
 
-The pipeline takes declared steps, turns each one's trigger into an object that
-can be asked whether it is finished, applies the setpoints, and waits. It emits
-an event on every tick so a caller can follow progress without polling the
-instrument.
+The vocabulary of a step lives here, because this is what executes one. What the
+steps mean -- which experiment they belong to -- is not the engine's business: it
+is handed a list and runs it. Protocols live in the workflow layer.
 
-It knows nothing about which experiment it is running. Steps arrive as data.
+Each step's trigger becomes an object that can be asked whether it is finished.
+The pipeline applies the setpoints, waits, and emits an event on every tick, so
+a caller can follow progress without polling the instrument.
 """
 
 from __future__ import annotations
@@ -17,10 +18,43 @@ from enum import StrEnum
 from queue import Queue
 from typing import Protocol
 
-from admet.engines.acquisition.protocols import ProtocolStep, expand_protocol_steps
 from admet.engines.acquisition.triggers import Trigger, create_trigger
 
 log = logging.getLogger(__name__)
+
+@dataclass(frozen=True)
+class ProtocolStep:
+    name: str
+    sensor_setpoints: dict[int, float]
+    trigger_type: str
+    trigger_params: dict
+    pressure_setpoints: dict[int, float] = field(default_factory=dict)
+    on_complete: str = "hold"
+    confirm_message: str = ""
+    repeat: int = 1
+    group: str = ""
+
+
+def expand_protocol_steps(steps: list[ProtocolStep]) -> list[ProtocolStep]:
+    expanded = []
+    index = 0
+    while index < len(steps):
+        step = steps[index]
+        if step.group:
+            group_steps = []
+            group_repeat = 1
+            while index < len(steps) and steps[index].group == step.group:
+                group_steps.append(steps[index])
+                group_repeat = max(group_repeat, steps[index].repeat)
+                index += 1
+            for _ in range(group_repeat):
+                expanded.extend(group_steps)
+        else:
+            for _ in range(max(1, step.repeat)):
+                expanded.append(step)
+            index += 1
+    return expanded
+
 
 class StepStatus(StrEnum):
     PENDING = "pending"

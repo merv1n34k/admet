@@ -1,90 +1,141 @@
-"""The MCP surface: what a program sees, and what simulated mode refuses."""
+"""The MCP surface: operations and pipelines, their guards, and what simulated mode refuses."""
 
 import io
 import json
 import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from admet.mcp.server import AdmetServer, SimulationRefused, handle, serve
-from admet.mcp.tools import tools_for
 
 
-class ToolTests(unittest.TestCase):
+def _call(server, name, arguments=None, request_id=1):
+    response = handle(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments or {}},
+        },
+    )["result"]
+    return response["content"][0]["text"], response["isError"]
+
+
+class SurfaceTests(unittest.TestCase):
+    def setUp(self):
+        self.server = AdmetServer(simulated=True)
+        self.names = {tool["name"] for tool in self.server.tools()}
+
+    def test_what_is_offered_is_the_workflow_layer(self):
+        self.assertIn("prime", self.names)
+        self.assertIn("run_setup", self.names)
+        self.assertIn("project_create", self.names)
+
+    def test_no_engine_action_is_offered(self):
+        # Primitives have no guards, and the guard is the point of an operation.
+        # They remain reachable from Python; they are not the way in.
+        self.assertFalse({name for name in self.names if name.startswith("acquisition_")})
+        self.assertNotIn("set_channel_pressure", self.names)
+        self.assertNotIn("run_protocol", self.names)
+
+    def test_a_tool_says_what_it_needs_first(self):
+        tools = {tool["name"]: tool for tool in self.server.tools()}
+
+        self.assertIn("Needs: fluidics, corrections, idle", tools["prime"]["description"])
+        self.assertNotIn("Needs:", tools["connect"]["description"])
+
+    def test_a_tool_carries_the_parameters_its_operation_declares(self):
+        tools = {tool["name"]: tool for tool in self.server.tools()}
+
+        schema = tools["prime"]["inputSchema"]
+
+        self.assertEqual(
+            set(schema["properties"]),
+            {"prime_oil_volume_ul", "prime_aqueous_volume_ul", "tick_s"},
+        )
+        self.assertEqual(schema["properties"]["prime_oil_volume_ul"]["type"], "number")
+        self.assertFalse(schema["additionalProperties"])
+
+    def test_every_pipeline_can_be_planned_as_well_as_run(self):
+        for name in ("setup", "checks", "shutdown"):
+            with self.subTest(pipeline=name):
+                self.assertIn(f"run_{name}", self.names)
+                self.assertIn(f"plan_{name}", self.names)
+
+
+class GuardTests(unittest.TestCase):
     def setUp(self):
         self.server = AdmetServer(simulated=True)
 
-    def test_every_action_an_engine_declares_becomes_a_tool(self):
-        # The tool list is generated from the engine, so the two cannot drift.
-        # Project tools are core's and are counted separately.
-        engine = self.server.admet.engine("acquisition")
+    def test_an_operation_out_of_order_is_refused_with_the_reason(self):
+        text, is_error = _call(self.server, "prime")
 
-        names = {tool["name"] for tool in tools_for(engine)}
+        self.assertTrue(is_error)
+        self.assertIn("the fluidics are not connected", text)
 
-        self.assertTrue({name for name in names if name.startswith("acquisition_")})
-        self.assertEqual(
-            len([name for name in names if name.startswith("acquisition_")]),
-            len(engine.actions),
-        )
-        self.assertIn("acquisition_run_protocol", names)
-        self.assertIn("acquisition_connect_fluidics", names)
+    def test_a_protocol_is_refused_until_corrections_are_applied(self):
+        _call(self.server, "connect")
 
-    def test_a_tool_carries_the_parameters_its_action_accepts(self):
-        tools = {tool["name"]: tool for tool in self.server.tools()}
+        text, is_error = _call(self.server, "characterise")
 
-        schema = tools["acquisition_set_channel_flow"]["inputSchema"]
+        self.assertTrue(is_error)
+        self.assertIn("correction factors have not been applied", text)
 
-        self.assertEqual(set(schema["properties"]), {"channel_index", "channel_flow_ul_min"})
-        self.assertEqual(schema["properties"]["channel_flow_ul_min"]["type"], "number")
-        self.assertEqual(schema["properties"]["channel_index"]["type"], "integer")
-        self.assertFalse(schema["additionalProperties"])
+    def test_the_guard_lifts_once_the_condition_is_met(self):
+        _call(self.server, "connect")
+        _call(self.server, "apply_corrections")
 
-    def test_a_choice_becomes_the_choices(self):
-        tools = {tool["name"]: tool for tool in self.server.tools()}
+        text, is_error = _call(self.server, "prime", {"prime_oil_volume_ul": 2.0, "tick_s": 0.1})
 
-        pipeline = tools["acquisition_run_protocol"]["inputSchema"]["properties"]["pipeline_name"]
+        self.assertFalse(is_error, text)
+        _call(self.server, "stop")
+        _call(self.server, "disconnect")
 
-        self.assertIn("Wash", pipeline["enum"])
-        self.assertIn("Priming", pipeline["enum"])
+    def test_a_setting_the_operation_does_not_have_is_refused(self):
+        text, is_error = _call(self.server, "connect", {"nonsense": 1})
 
-    def test_a_tool_says_when_it_reaches_the_instrument(self):
-        tools = {tool["name"]: tool for tool in self.server.tools()}
+        self.assertTrue(is_error)
+        self.assertIn("has no setting", text)
 
-        self.assertIn("Reaches the instrument", tools["acquisition_run_protocol"]["description"])
-        self.assertNotIn("Reaches the instrument", tools["acquisition_camera_status"]["description"])
+    def test_planning_a_pipeline_runs_nothing(self):
+        text, is_error = _call(self.server, "plan_setup")
+
+        self.assertFalse(is_error)
+        stages = json.loads(text)["stages"]
+        self.assertEqual([stage["operation"] for stage in stages], ["connect", "apply_corrections", "prime"])
+        self.assertFalse(self.server.admet.state()["fluidics"])
 
 
 class SimulationTests(unittest.TestCase):
     def test_connecting_is_forced_simulated(self):
         server = AdmetServer(simulated=True)
 
-        settings = server._apply_simulation("connect_fluidics", {"start_polling": True})
+        text, _is_error = _call(server, "connect")
 
-        self.assertIs(settings["simulated"], True)
+        self.assertTrue(json.loads(text)["simulated"])
+        _call(server, "disconnect")
 
     def test_asking_for_real_hardware_is_refused(self):
         server = AdmetServer(simulated=True)
 
-        with self.assertRaises(SimulationRefused) as caught:
-            server._apply_simulation("connect_fluidics", {"simulated": False})
+        with self.assertRaises(SimulationRefused):
+            server._simulated("connect", {"simulated": False})
 
-        self.assertIn("simulated", str(caught.exception))
-
-    def test_running_a_protocol_is_allowed_because_the_rig_is_simulated(self):
-        # What makes the session safe is the connection. Refusing the actions that
-        # follow would leave simulated mode unable to simulate anything.
+    def test_an_operation_without_a_simulated_switch_passes_through(self):
+        # What makes the session safe is the connection, so the operations after
+        # it need no flag of their own.
         server = AdmetServer(simulated=True)
 
-        settings = server._apply_simulation("run_protocol", {"pipeline_name": "Wash"})
-
-        self.assertEqual(settings, {"pipeline_name": "Wash"})
+        self.assertEqual(server._simulated("prime", {"tick_s": 0.1}), {"tick_s": 0.1})
 
     def test_the_camera_is_refused_unless_its_emulator_is_switched_on(self):
         server = AdmetServer(simulated=True)
         previous = os.environ.pop("PYLON_CAMEMU", None)
         try:
             with self.assertRaises(SimulationRefused) as caught:
-                server._apply_simulation("connect_camera", {})
+                server._simulated("connect_camera", {})
             self.assertIn("PYLON_CAMEMU", str(caught.exception))
         finally:
             if previous is not None:
@@ -93,9 +144,7 @@ class SimulationTests(unittest.TestCase):
     def test_live_mode_changes_nothing(self):
         server = AdmetServer(simulated=False)
 
-        settings = server._apply_simulation("connect_fluidics", {"simulated": False})
-
-        self.assertIs(settings["simulated"], False)
+        self.assertEqual(server._simulated("connect", {"simulated": False}), {"simulated": False})
 
 
 class ProtocolTests(unittest.TestCase):
@@ -109,7 +158,6 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("tools", response["result"]["capabilities"])
 
     def test_a_notification_gets_no_reply(self):
-        # Replying to a notification is a protocol violation, not a courtesy.
         self.assertIsNone(
             handle(self.server, {"jsonrpc": "2.0", "method": "notifications/initialized"})
         )
@@ -119,65 +167,28 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertEqual(response["error"]["code"], -32601)
 
-    def test_an_unknown_tool_is_reported_to_the_caller_not_raised(self):
-        response = handle(
-            self.server,
-            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "nope_nope"}},
-        )
+    def test_an_unknown_tool_names_what_there_is(self):
+        text, is_error = _call(self.server, "no_such_operation")
 
-        self.assertTrue(response["result"]["isError"])
-        self.assertIn("no tool named", response["result"]["content"][0]["text"])
+        self.assertTrue(is_error)
+        self.assertIn("unknown operation", text)
 
-    def test_a_failing_action_answers_with_the_reason(self):
-        response = handle(
-            self.server,
-            {
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tools/call",
-                "params": {"name": "acquisition_no_such_action", "arguments": {}},
-            },
-        )
-
-        self.assertTrue(response["result"]["isError"])
-
-    def test_a_client_can_open_a_project_before_it_writes_anything(self):
-        import tempfile
-
+    def test_a_client_opens_a_project_before_it_writes_anything(self):
         with tempfile.TemporaryDirectory() as tmp:
-            created = handle(
-                self.server,
-                {
-                    "jsonrpc": "2.0",
-                    "id": 10,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "project_create",
-                        "arguments": {"path": f"{tmp}/rig.admetp"},
-                    },
-                },
+            text, is_error = _call(
+                self.server, "project_create", {"path": f"{tmp}/rig.admetp"}
             )
 
-            payload = json.loads(created["result"]["content"][0]["text"])
+            self.assertFalse(is_error)
+            payload = json.loads(text)
             self.assertTrue(payload["open"])
             self.assertEqual(payload["project_id"], "rig")
 
-    def test_writing_without_a_project_is_refused_with_the_reason(self):
-        response = handle(
-            self.server,
-            {
-                "jsonrpc": "2.0",
-                "id": 11,
-                "method": "tools/call",
-                "params": {
-                    "name": "acquisition_start_recording",
-                    "arguments": {"recording_label": "x"},
-                },
-            },
-        )
+    def test_recording_without_a_project_is_refused(self):
+        text, is_error = _call(self.server, "start_recording")
 
-        self.assertTrue(response["result"]["isError"])
-        self.assertIn("needs a project open", response["result"]["content"][0]["text"])
+        self.assertTrue(is_error)
+        self.assertIn("no project is open", text)
 
     def test_a_session_runs_from_stdin_to_stdout(self):
         requests = "\n".join(
@@ -190,10 +201,7 @@ class ProtocolTests(unittest.TestCase):
                     "jsonrpc": "2.0",
                     "id": 3,
                     "method": "tools/call",
-                    "params": {
-                        "name": "acquisition_connect_fluidics",
-                        "arguments": {"start_polling": False},
-                    },
+                    "params": {"name": "connect", "arguments": {}},
                 },
             )
         )
@@ -204,12 +212,11 @@ class ProtocolTests(unittest.TestCase):
 
         replies = [json.loads(line) for line in stdout.getvalue().splitlines()]
         self.assertEqual(exit_code, 0)
-        # Three replies for four messages: the notification is not answered.
         self.assertEqual([reply["id"] for reply in replies], [1, 2, 3])
         self.assertGreater(len(replies[1]["result"]["tools"]), 20)
         connected = json.loads(replies[2]["result"]["content"][0]["text"])
-        self.assertTrue(connected["metadata"]["connected"])
-        self.assertTrue(connected["metadata"]["simulated"])
+        self.assertTrue(connected["connected"])
+        self.assertTrue(connected["simulated"])
 
     def test_a_malformed_line_does_not_stop_the_server(self):
         stdout = io.StringIO()

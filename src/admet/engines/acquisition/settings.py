@@ -4,14 +4,9 @@ from admet.core.engine import Param, ParamKind, ParamOption, ParamSchema
 from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNEL_UNITS,
     FLUIDIC_CHANNELS,
-    GRAVIMETRIC_REPLICATES,
     SENSOR_CALIBRATIONS,
-    STABILITY_DURATION_S,
-    STABILITY_TIMEOUT_S,
-    STABILITY_TOLERANCE_UL_MIN,
 )
 from admet.engines.acquisition.fluidics.liquids import default_profile_id, profiles_for_unit
-from admet.engines.acquisition.protocols import protocol_names
 
 CORRECTION_PARAM_NAMES = tuple(
     name
@@ -35,10 +30,6 @@ def merge_schemas(*schemas: ParamSchema) -> ParamSchema:
         for param in schema.params:
             params[param.name] = param
     return ParamSchema(tuple(params.values()))
-
-
-def _pipeline_options() -> tuple[ParamOption, ...]:
-    return tuple(ParamOption(name, name) for name in protocol_names())
 
 
 def _calibration_options() -> tuple[ParamOption, ...]:
@@ -142,95 +133,10 @@ CHANNEL_CONTROL_SETTINGS = ParamSchema(
     )
 )
 
-PROTOCOL_SETTINGS = ParamSchema(
-    (
-        Param("pipeline_name", "Pipeline", ParamKind.CHOICE, default="Priming", options=_pipeline_options()),
-        Param("prime_oil_volume_ul", "Oil L Volume", ParamKind.FLOAT, default=40.0, minimum=0.1),
-        Param("prime_aqueous_volume_ul", "Cells/Beads Volume", ParamKind.FLOAT, default=5.0, minimum=0.1),
-        Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
-    )
-)
-
-RUN_SETTINGS = ParamSchema(
-    (
-        Param("pipeline_name", "Pipeline", ParamKind.CHOICE, default="Drop-Seq", options=_pipeline_options()),
-        Param("set_count", "Sets", ParamKind.INTEGER, default=1, minimum=1),
-        Param("replicate_count", "Replicates", ParamKind.INTEGER, default=1, minimum=1),
-        Param("run_volume_ul", "Oil L Volume", ParamKind.FLOAT, default=150.0, minimum=0.1),
-        Param("run_oil_flow_ul_min", "Oil L Flow", ParamKind.FLOAT, default=300.0, minimum=0.0),
-        Param("run_aqueous_total_flow_ul_min", "Total Aqueous Flow", ParamKind.FLOAT, default=80.0, minimum=0.0),
-        Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
-    )
-)
-
-CHARACTERISE_SETTINGS = ParamSchema(
-    (
-        Param("pipeline_name", "Pipeline", ParamKind.CHOICE, default="Characterise", options=_pipeline_options()),
-        Param("run_oil_flow_ul_min", "Oil L Flow", ParamKind.FLOAT, default=300.0, minimum=0.0),
-        Param("run_aqueous_total_flow_ul_min", "Total Aqueous Flow", ParamKind.FLOAT, default=80.0, minimum=0.0),
-        # What the sweep accepts as settled, and how long it waits for it.
-        Param(
-            "sweep_tolerance_ul_min",
-            "Settle Tolerance",
-            ParamKind.FLOAT,
-            default=STABILITY_TOLERANCE_UL_MIN,
-            minimum=0.1,
-        ),
-        Param(
-            "sweep_window_s",
-            "Settle Window",
-            ParamKind.FLOAT,
-            default=STABILITY_DURATION_S,
-            minimum=0.5,
-        ),
-        Param(
-            "sweep_timeout_s",
-            "Settle Timeout",
-            ParamKind.FLOAT,
-            default=STABILITY_TIMEOUT_S,
-            minimum=1.0,
-        ),
-        Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
-    )
-)
-
-GRAVIMETRY_SETTINGS = ParamSchema(
-    (
-        Param("pipeline_name", "Pipeline", ParamKind.CHOICE, default="Gravimetry", options=_pipeline_options()),
-        Param("gravimetric_target_ul", "Target Volume", ParamKind.FLOAT, default=100.0, minimum=0.1),
-        Param("gravimetric_flow_ul_min", "Dispense Flow", ParamKind.FLOAT, default=250.0, minimum=0.1),
-        Param(
-            "gravimetric_replicates",
-            "Replicates",
-            ParamKind.INTEGER,
-            default=GRAVIMETRIC_REPLICATES,
-            minimum=1,
-            maximum=GRAVIMETRIC_REPLICATES,
-        ),
-        Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
-    )
-)
-
-WASH_SETTINGS = ParamSchema(
-    (
-        Param("wash_oil_flow_ul_min", "Oil L Flow", ParamKind.FLOAT, default=250.0, minimum=0.0),
-        Param("wash_aqueous_total_flow_ul_min", "Total Aqueous Flow", ParamKind.FLOAT, default=160.0, minimum=0.0),
-        Param("wash_oil_volume_ul", "Oil L Volume", ParamKind.FLOAT, default=500.0, minimum=0.1),
-        Param("wash_pressure_mbar", "Pressure", ParamKind.FLOAT, default=2000.0, minimum=0.0),
-        Param("wash_pressure_duration_s", "Pressure Duration", ParamKind.FLOAT, default=120.0, minimum=0.0),
-        Param("tick_s", "Pipeline Tick", ParamKind.FLOAT, default=0.2, minimum=0.001),
-    )
-)
-
 CONTROL_ENGINE_SETTINGS = merge_schemas(
     FLUIGENT_SETTINGS,
     CORRECTION_SETTINGS,
     CHANNEL_CONTROL_SETTINGS,
     RECORDING_SETTINGS,
-    RUN_SETTINGS,
-    CHARACTERISE_SETTINGS,
-    GRAVIMETRY_SETTINGS,
-    WASH_SETTINGS,
-    PROTOCOL_SETTINGS,
     CAMERA_SETTINGS,
 )

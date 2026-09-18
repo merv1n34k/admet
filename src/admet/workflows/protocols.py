@@ -1,20 +1,19 @@
-"""The experiments this instrument knows how to run.
+"""The experiments this system can run.
 
-This is the file to edit to add an experiment. A protocol is a list of steps,
-each naming the flows or pressures to apply, what to wait for, and what to leave
-the channel doing afterwards. Nothing here drives hardware: these are
-declarations, and the pipeline runs them.
+This is the file to edit to add an experiment. A protocol is a list of declared
+steps: what to set, what to wait for, and what to leave the channel doing. It
+lives here rather than in the engine because an experiment is not a property of a
+pressure controller -- the engine is handed steps and runs them, and has no idea
+which experiment they belong to.
 
-To add one: write a function taking the settings dict and returning the steps,
-then add it to PROTOCOLS. Any setting it reads must also be declared in
-settings.py and listed on the run_protocol action in engine.py, or it will not
-reach you.
+To add one, write a builder taking the operation's settings and returning steps,
+then add it to PROTOCOLS. Nothing else needs changing: the operation that runs it
+declares its own parameters.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
 
 from admet.engines.acquisition.fluidics.config import (
     BEADS_M_SENSOR,
@@ -27,18 +26,8 @@ from admet.engines.acquisition.fluidics.config import (
     STABILITY_TIMEOUT_S,
     STABILITY_TOLERANCE_UL_MIN,
 )
+from admet.engines.acquisition.pipeline import ProtocolStep
 
-@dataclass(frozen=True)
-class ProtocolStep:
-    name: str
-    sensor_setpoints: dict[int, float]
-    trigger_type: str
-    trigger_params: dict
-    pressure_setpoints: dict[int, float] = field(default_factory=dict)
-    on_complete: str = "hold"
-    confirm_message: str = ""
-    repeat: int = 1
-    group: str = ""
 
 def build_protocol(name: str, settings: dict | None = None) -> list[ProtocolStep]:
     """The steps of one protocol, built from the settings it was given.
@@ -86,6 +75,7 @@ def build_priming_protocol(settings: dict) -> list[ProtocolStep]:
         ),
     ]
 
+
 def build_dropseq_protocol(settings: dict) -> list[ProtocolStep]:
     steps: list[ProtocolStep] = []
     set_count = int(settings["set_count"])
@@ -128,6 +118,7 @@ def build_dropseq_protocol(settings: dict) -> list[ProtocolStep]:
             )
     return steps
 
+
 def build_wash_protocol(settings: dict) -> list[ProtocolStep]:
     oil_flow = float(settings["wash_oil_flow_ul_min"])
     aqueous_channel = float(settings["wash_aqueous_total_flow_ul_min"]) / 2.0
@@ -168,27 +159,9 @@ def build_wash_protocol(settings: dict) -> list[ProtocolStep]:
         ),
     ]
 
-def expand_protocol_steps(steps: list[ProtocolStep]) -> list[ProtocolStep]:
-    expanded = []
-    index = 0
-    while index < len(steps):
-        step = steps[index]
-        if step.group:
-            group_steps = []
-            group_repeat = 1
-            while index < len(steps) and steps[index].group == step.group:
-                group_steps.append(steps[index])
-                group_repeat = max(group_repeat, steps[index].repeat)
-                index += 1
-            for _ in range(group_repeat):
-                expanded.extend(group_steps)
-        else:
-            for _ in range(max(1, step.repeat)):
-                expanded.append(step)
-            index += 1
-    return expanded
 
 CHARACTERISE_FRACTIONS = (0.2, 0.4, 0.6, 0.8, 1.0)
+
 
 GRAVIMETRY_CHANNELS = (
     (OIL_L_SENSOR, "Oil L"),
@@ -196,9 +169,11 @@ GRAVIMETRY_CHANNELS = (
     (BEADS_M_SENSOR, "Beads M"),
 )
 
+
 def protocol_names() -> tuple[str, ...]:
     """Every name build_protocol accepts."""
     return tuple(sorted(PROTOCOLS))
+
 
 def build_gravimetry_protocol(settings: dict) -> list[ProtocolStep]:
     """Dispense a weighed volume from every channel, one replicate at a time.
@@ -246,6 +221,7 @@ def build_gravimetry_protocol(settings: dict) -> list[ProtocolStep]:
                 )
             )
     return steps
+
 
 def build_characterise_protocol(settings: dict) -> list[ProtocolStep]:
     """Sweep the setup to measure what the plumbing and chip cost.
@@ -300,7 +276,6 @@ def build_characterise_protocol(settings: dict) -> list[ProtocolStep]:
     return steps
 
 
-# Every protocol this build can run, by the name the operator selects.
 PROTOCOLS: dict[str, Callable[[dict], list[ProtocolStep]]] = {
     "Priming": build_priming_protocol,
     "Drop-Seq": build_dropseq_protocol,
@@ -308,3 +283,4 @@ PROTOCOLS: dict[str, Callable[[dict], list[ProtocolStep]]] = {
     "Characterise": build_characterise_protocol,
     "Gravimetry": build_gravimetry_protocol,
 }
+

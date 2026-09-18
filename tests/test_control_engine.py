@@ -9,14 +9,13 @@ from admet.engines.acquisition.camera import Camera, CameraAvailability
 from admet.engines.acquisition import AcquisitionEngine
 from admet.engines.acquisition.fluidics import PressureChannelInfo, SensorChannelInfo
 from admet.engines.acquisition.pipeline import (
+    ProtocolStep,
     PipelineEngine,
     build_pipeline_steps,
 )
-from admet.engines.acquisition.protocols import (
-    ProtocolStep,
+from admet.workflows.protocols import (
     build_dropseq_protocol,
     build_priming_protocol,
-    build_protocol,
     build_wash_protocol,
 )
 from admet.engines.acquisition.settings import CONTROL_ENGINE_SETTINGS
@@ -45,7 +44,6 @@ def run_engine(
 def make_engine(sdk=None, **kwargs) -> AcquisitionEngine:
     return AcquisitionEngine(
         CONTROL_ENGINE_SETTINGS,
-        protocol_builder=build_protocol,
         pipeline_step_builder=build_pipeline_steps,
         pipeline_engine_factory=PipelineEngine,
         sdk=sdk,

@@ -9,7 +9,7 @@ from admet.engines.acquisition.fluidics.config import (
     STABILITY_TIMEOUT_S,
     STABILITY_TOLERANCE_UL_MIN,
 )
-from admet.engines.acquisition.protocols import (
+from admet.workflows.protocols import (
     PROTOCOLS,
     build_characterise_protocol,
     build_gravimetry_protocol,

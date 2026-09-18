@@ -24,14 +24,12 @@ from admet.engines.acquisition.recording import (
     RecordingCoordinator,
     WriterFactory,
 )
-from admet.engines.acquisition.pipeline import PipelineEngine, build_pipeline_steps
-from admet.engines.acquisition.protocols import build_protocol
+from admet.engines.acquisition.pipeline import PipelineEngine, ProtocolStep, build_pipeline_steps
 from admet.engines.acquisition.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES
 
 ActionHandler = Callable[[dict[str, Any]], dict[str, Any]]
 ActionSettingsPreparer = Callable[[RunJob, dict[str, Any]], dict[str, Any]]
 ActionPrivateSettings = Callable[[RunJob], dict[str, Any]]
-ProtocolBuilder = Callable[[str, dict[str, Any] | None], list[Any]]
 PipelineStepBuilder = Callable[[list[Any]], list[Any]]
 PipelineEngineFactory = Callable[..., Any]
 
@@ -103,33 +101,6 @@ ACQUISITION_ACTIONS = (
         outputs=("video", "fluidics_csv"),
     ),
     ActionSpec("stop_recording", "Stop Recording", "recording", artifact="control_recording"),
-    ActionSpec(
-        "run_protocol",
-        "Run Protocol",
-        "protocol",
-        params=(
-            "pipeline_name",
-            "prime_oil_volume_ul",
-            "prime_aqueous_volume_ul",
-            "set_count",
-            "replicate_count",
-            "run_volume_ul",
-            "run_oil_flow_ul_min",
-            "run_aqueous_total_flow_ul_min",
-            "sweep_tolerance_ul_min",
-            "sweep_window_s",
-            "sweep_timeout_s",
-            "gravimetric_target_ul",
-            "gravimetric_flow_ul_min",
-            "gravimetric_replicates",
-            "wash_oil_flow_ul_min",
-            "wash_aqueous_total_flow_ul_min",
-            "wash_oil_volume_ul",
-            "wash_pressure_mbar",
-            "wash_pressure_duration_s",
-            "tick_s",
-        ),
-    ),
     ActionSpec("pause_protocol", "Pause Protocol", "protocol"),
     ActionSpec("resume_protocol", "Resume Protocol", "protocol"),
     ActionSpec("stop_protocol", "Stop Protocol", "protocol"),
@@ -137,19 +108,6 @@ ACQUISITION_ACTIONS = (
     ActionSpec("skip_protocol", "Skip Protocol Step", "protocol"),
     ActionSpec("calibrate", "Calibrate", "calibration"),
     ActionSpec("cleanup_shutdown", "Cleanup Shutdown", "connection"),
-    ActionSpec(
-        "wash",
-        "Wash",
-        "protocol",
-        params=(
-            "wash_oil_flow_ul_min",
-            "wash_aqueous_total_flow_ul_min",
-            "wash_oil_volume_ul",
-            "wash_pressure_mbar",
-            "wash_pressure_duration_s",
-            "tick_s",
-        ),
-    ),
 )
 
 
@@ -162,14 +120,12 @@ class AcquisitionEngine:
         self,
         settings: ParamSchema,
         *,
-        protocol_builder: ProtocolBuilder,
         pipeline_step_builder: PipelineStepBuilder,
         pipeline_engine_factory: PipelineEngineFactory,
         sdk: FluigentSDK | None = None,
         video_writer_factory: WriterFactory | None = None,
     ):
         self.settings = settings
-        self._build_protocol = protocol_builder
         self._build_pipeline_steps = pipeline_step_builder
         self._pipeline_engine_factory = pipeline_engine_factory
         self.sdk = sdk or FluigentSDK()
@@ -258,11 +214,6 @@ class AcquisitionEngine:
                 "stop_recording",
                 extra_metadata=self.stop_recording(),
             ),
-            "run_protocol": lambda settings: self._start_protocol_action(
-                "run_protocol",
-                settings["pipeline_name"],
-                settings,
-            ),
             "pause_protocol": lambda _settings: self._status_after("pause_protocol", self.pause_pipeline),
             "resume_protocol": lambda _settings: self._status_after("resume_protocol", self.resume_pipeline),
             "stop_protocol": lambda _settings: self._status_after("stop_protocol", self.stop_pipeline),
@@ -273,7 +224,6 @@ class AcquisitionEngine:
             "skip_protocol": lambda _settings: self._status_after("skip_protocol", self.skip_pipeline_step),
             "calibrate": lambda _settings: self._status_after("calibrate", self.hardware.calibrate_all),
             "cleanup_shutdown": lambda _settings: self._cleanup_shutdown(),
-            "wash": lambda settings: self._start_protocol_action("wash", "Wash", settings),
         }
 
     def _build_action_preparers(self) -> dict[str, ActionSettingsPreparer]:
@@ -350,15 +300,6 @@ class AcquisitionEngine:
 
     def _disconnect_camera(self) -> dict[str, Any]:
         return self._status_result("disconnect_camera", extra_metadata=self._camera.disconnect())
-
-    def _start_protocol_action(
-        self,
-        action: str,
-        name: str,
-        settings: dict[str, Any],
-    ) -> dict[str, Any]:
-        self.start_pipeline(name, settings=settings, tick_s=settings["tick_s"])
-        return self._status_result(action)
 
     @property
     def polling_active(self) -> bool:
@@ -460,16 +401,17 @@ class AcquisitionEngine:
     def stop_recording(self) -> dict[str, Any]:
         return self._recordings.stop_recording()
 
-    def start_pipeline(
-        self,
-        name: str,
-        *,
-        settings: dict[str, Any] | None = None,
-        tick_s: float = 0.2,
-    ) -> None:
+    def start_pipeline(self, steps: list[ProtocolStep], *, tick_s: float = 0.2) -> None:
+        """Run the steps handed to it.
+
+        The engine is not told which experiment this is and does not ask. What
+        the steps mean belongs to the workflow that built them.
+        """
         if self._pipeline and self._pipeline.is_alive():
             return
-        steps = self.build_pipeline_from_steps(self._build_protocol(name, settings))
+        if not self.hardware.state.connected:
+            raise RuntimeError("Fluidics hardware is not connected")
+        steps = self.build_pipeline_from_steps(steps)
         sensor_to_channel = {
             channel.sensor_index: channel_index
             for channel_index, channel in enumerate(self.channel_manager.channels)
@@ -733,14 +675,12 @@ class AcquisitionEngine:
 def create_engine(
     settings: ParamSchema | None = None,
     *,
-    protocol_builder: ProtocolBuilder = build_protocol,
     pipeline_step_builder: PipelineStepBuilder = build_pipeline_steps,
     pipeline_engine_factory: PipelineEngineFactory = PipelineEngine,
     **kwargs: Any,
 ) -> AcquisitionEngine:
     return AcquisitionEngine(
         settings or CONTROL_ENGINE_SETTINGS,
-        protocol_builder=protocol_builder,
         pipeline_step_builder=pipeline_step_builder,
         pipeline_engine_factory=pipeline_engine_factory,
         **kwargs,

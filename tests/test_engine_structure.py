@@ -32,11 +32,11 @@ class EngineStructureTests(unittest.TestCase):
         self.assertTrue((ENGINE_ROOT / "opencv" / "settings.py").is_file())
         self.assertTrue((ENGINE_ROOT / "cellpose" / "settings.py").is_file())
         self.assertTrue((ENGINE_ROOT / "acquisition" / "settings.py").is_file())
-        # Declarations, the wait vocabulary and the runtime are separate files:
-        # the first is the one an experimenter edits.
-        self.assertTrue((ENGINE_ROOT / "acquisition" / "protocols.py").is_file())
+        # The wait vocabulary and the runtime; the experiments themselves live in
+        # the workflow layer, because an experiment is not a property of a pump.
         self.assertTrue((ENGINE_ROOT / "acquisition" / "triggers.py").is_file())
         self.assertTrue((ENGINE_ROOT / "acquisition" / "pipeline.py").is_file())
+        self.assertFalse((ENGINE_ROOT / "acquisition" / "protocols.py").exists())
 
 
 if __name__ == "__main__":
