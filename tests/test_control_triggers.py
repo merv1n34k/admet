@@ -78,7 +78,7 @@ class TriggerBehaviorTests(unittest.TestCase):
             create_trigger("invalid", {})
 
     def test_pipeline_step_defaults_match_engine_contract(self):
-        step = PipelineStep("prime", {0: 10.0}, TimeTrigger(0.0))
+        step = PipelineStep("run_priming", {0: 10.0}, TimeTrigger(0.0))
 
         self.assertEqual(step.status, StepStatus.PENDING)
         self.assertEqual(step.on_complete, "hold")

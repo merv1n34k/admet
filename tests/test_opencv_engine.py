@@ -41,7 +41,7 @@ class OpenCVEngineTests(unittest.TestCase):
                 RunJob(
                     id="job-opencv",
                     engine="opencv",
-                    action="analyze",
+                    action="run_analysis",
                     inputs={"mask": Path("wrong.tif")},
                     settings={
                         "microns_per_pixel": 1.0,
@@ -91,7 +91,7 @@ class OpenCVEngineTests(unittest.TestCase):
                     RunJob(
                         id="job-opencv",
                         engine="opencv",
-                        action="analyze",
+                        action="run_analysis",
                         inputs={"video": video_path},
                         cache_dir=cache_dir,
                         sink=sink,

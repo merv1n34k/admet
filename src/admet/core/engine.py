@@ -88,6 +88,17 @@ class ParamSchema:
         return {name: by_name[name].validate(value) for name, value in normalized.items()}
 
 
+# What calling something does to the rig, which the name alone cannot say.
+#   read  -- answers a question and changes nothing
+#   write -- has an effect, and has finished having it when the call returns
+#   start -- sets something running and returns while it is still running; the
+#            caller must wait for it or ask again later
+READ = "read"
+WRITE = "write"
+START = "start"
+KINDS = (READ, WRITE, START)
+
+
 @dataclass(frozen=True)
 class ActionSpec:
     """What an engine can be asked to do.
@@ -101,6 +112,7 @@ class ActionSpec:
     id: str
     label: str
     category: str
+    kind: str = WRITE
     params: tuple[str, ...] = ()
     destructive: bool = False
     description: str = ""

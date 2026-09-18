@@ -178,7 +178,7 @@ class CellposeHelperTests(unittest.TestCase):
                 RunJob(
                     id="job-cellpose",
                     engine="cellpose",
-                    action="analyze",
+                    action="run_analysis",
                     inputs={"mask": Path("wrong.tif")},
                 )
             )
@@ -195,7 +195,7 @@ class CellposeHelperTests(unittest.TestCase):
                     RunJob(
                         id="job-cellpose",
                         engine="cellpose",
-                        action="analyze",
+                        action="run_analysis",
                         inputs={"input_dir": input_dir},
                         cache_dir=cache_dir,
                         sink=sink,

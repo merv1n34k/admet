@@ -54,7 +54,7 @@ class PipelineEngineTests(unittest.TestCase):
         manager = FakeChannelManager()
         events: Queue[PipelineEvent] = Queue()
         step = PipelineStep(
-            "prime",
+            "run_priming",
             {0: 5.0},
             TimeTrigger(0.0),
             on_complete="zero",

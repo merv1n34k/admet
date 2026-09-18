@@ -19,15 +19,15 @@ class CellposeAnalysisEngine:
         self.settings = settings
         self.actions = (
             ActionSpec(
-                "analyze",
-                "Analyze",
+                "run_analysis",
+                "Run Analysis",
                 "analysis",
                 params=tuple(param.name for param in settings.params),
             ),
         )
 
     def run(self, job: RunJob) -> RunResult:
-        if job.action != "analyze":
+        if job.action != "run_analysis":
             raise ValueError(f"unsupported action for {self.id}: {job.action}")
         input_dir = _job_input(job, "input_dir", "input_dir")
         settings = dict(job.settings)

@@ -40,7 +40,7 @@ ENGINE_GROUPS = {
 def _describe_param(param: Any) -> dict[str, Any]:
     return {
         "name": param.name,
-        "kind": param.kind.value,
+        "type": param.kind.value,
         "default": param.default,
         "minimum": param.minimum,
         "maximum": param.maximum,
@@ -57,15 +57,17 @@ def _requirement_reason(name: str) -> str:
 def _fill_defaults(operation: Any, settings: dict[str, Any]) -> dict[str, Any]:
     """Validate what was supplied and fill in the rest from the operation."""
     known = {param.name: param for param in operation.params}
-    unknown = set(settings) - set(known)
+    raw = getattr(operation, "raw", {}) or {}
+    unknown = set(settings) - set(known) - set(raw)
     if unknown:
-        offered = ", ".join(sorted(known)) or "nothing"
+        offered = ", ".join(sorted({*known, *raw})) or "nothing"
         raise LookupError(
             f"{operation.id} has no setting {', '.join(sorted(unknown))}; it takes: {offered}"
         )
-    return {
+    filled = {
         name: param.validate(settings.get(name, param.default)) for name, param in known.items()
     }
+    return {**filled, **{name: settings[name] for name in raw if name in settings}}
 
 
 class NoProject(Exception):
@@ -130,6 +132,10 @@ class Admet:
         ]
 
     # -- engines ------------------------------------------------------------
+    def engine_ids(self) -> list[str]:
+        """Every engine this build has, whether or not it has been created yet."""
+        return list(ENGINE_GROUPS)
+
     def engine(self, engine_id: str) -> Any:
         """The engine, created on first use. Analysis stacks are slow to import."""
         if engine_id not in self._engines:
@@ -161,6 +167,7 @@ class Admet:
                         "id": op.id,
                         "label": op.label,
                         "target": op.target,
+                        "kind": op.kind,
                         "requires": list(op.requires),
                     }
                     for op in OPERATIONS_BY_ID.values()
@@ -187,10 +194,11 @@ class Admet:
 
     def _describe_operation(self, op: Any) -> dict[str, Any]:
         return {
-            "kind": "operation",
+            "layer": "operation",
             "id": op.id,
             "label": op.label,
             "target": op.target,
+            "kind": op.kind,
             "description": op.description,
             "requires": [
                 {"name": name, "why": _requirement_reason(name)} for name in op.requires
@@ -204,7 +212,7 @@ class Admet:
     def _describe_pipeline(self, line: Any) -> dict[str, Any]:
         bound = {param.name: param.default for param in line.params}
         return {
-            "kind": "pipeline",
+            "layer": "pipeline",
             "id": line.id,
             "label": line.label,
             "description": line.description,
@@ -218,8 +226,9 @@ class Admet:
     def describe_engine(self, engine_id: str) -> dict[str, Any]:
         """A workhorse and everything it can be told to do.
 
-        Engine actions are not the way in -- operations are -- but reading them
-        is how anyone works out what an operation is actually doing.
+        Engine actions are the low level: no guards, one call, everything the
+        device can be told. Operations are the same calls with the conditions
+        under which using them is not a mistake.
         """
         engine = self.engine(engine_id)
         from admet.workflows.operations import OPERATIONS
@@ -229,13 +238,14 @@ class Admet:
             for action in op.uses:
                 driven.setdefault(action, []).append(op.id)
         return {
-            "kind": "engine",
+            "layer": "engine",
             "engine": {"id": engine.id, "name": engine.name},
             "actions": [
                 {
                     "id": action.id,
                     "label": action.label,
                     "category": action.category,
+                    "kind": action.kind,
                     "params": list(action.params),
                     "outputs": list(action.outputs),
                     "artifact": action.artifact,
@@ -260,12 +270,13 @@ class Admet:
                 "id": op.id,
                 "label": op.label,
                 "target": op.target,
+                "kind": op.kind,
                 "description": op.description,
                 "requires": list(op.requires),
                 "params": [
                     {
                         "name": param.name,
-                        "kind": param.kind.value,
+                        "type": param.kind.value,
                         "default": param.default,
                         "minimum": param.minimum,
                         "maximum": param.maximum,
@@ -302,7 +313,7 @@ class Admet:
                 "label": line.label,
                 "description": line.description,
                 "params": [
-                    {"name": p.name, "kind": p.kind.value, "default": p.default} for p in line.params
+                    {"name": p.name, "type": p.kind.value, "default": p.default} for p in line.params
                 ],
             }
             for line in PIPELINES

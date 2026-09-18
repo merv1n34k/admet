@@ -22,6 +22,11 @@ from admet.engines.acquisition.triggers import Trigger, create_trigger
 
 log = logging.getLogger(__name__)
 
+# What to do with a step's setpoints once it ends: leave them, take them to
+# zero, or put back whatever was there before.
+ON_COMPLETE = ("hold", "zero", "revert")
+
+
 @dataclass(frozen=True)
 class ProtocolStep:
     name: str

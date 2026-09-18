@@ -186,7 +186,7 @@ class AnalyzeBatchRunner:
                     continue
 
                 engine = self.registry.create(engine_id)
-                action = action_spec(engine.actions, "analyze")
+                action = action_spec(engine.actions, "run_analysis")
                 action_settings = {
                     key: value
                     for key, value in settings.items()
@@ -209,7 +209,7 @@ class AnalyzeBatchRunner:
                     result = RunResult(
                         job_id=job_id,
                         engine=engine_id,
-                        action="analyze",
+                        action="run_analysis",
                         status="cached",
                         metadata=metadata,
                     )
@@ -220,7 +220,7 @@ class AnalyzeBatchRunner:
                             RunJob(
                                 id=job_id,
                                 engine=engine_id,
-                                action="analyze",
+                                action="run_analysis",
                                 settings=action_settings,
                                 inputs=_job_inputs(engine_id, target.source_path),
                                 cache_dir=cache_dir,

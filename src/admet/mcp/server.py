@@ -21,10 +21,34 @@ import traceback
 from typing import Any, TextIO
 
 from admet.core.service import Admet
-from admet.mcp.tools import DESCRIBE_TOOL, operation_tools, pipeline_tools
+from admet.mcp.tools import DESCRIBE_TOOL, action_tools, operation_tools, pipeline_tools
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER = {"name": "admet", "version": "0.1.0"}
+
+def _pipeline_id(name: str, prefix: str) -> str:
+    """The pipeline a tool name refers to, or empty if it names something else.
+
+    Routing is by what exists, not by what the name starts with: an operation
+    called run_priming must not be read as a pipeline called priming.
+    """
+    from admet.workflows.pipelines import BY_ID
+
+    candidate = name[len(prefix) :] if name.startswith(prefix) else ""
+    return candidate if candidate in BY_ID else ""
+
+
+def _engine_action(admet: Any, name: str) -> tuple[str, str]:
+    """The engine and action a low-level tool name refers to, or two empties."""
+    for engine_id in admet.engine_ids():
+        prefix = f"{engine_id}_"
+        if not name.startswith(prefix):
+            continue
+        action = name[len(prefix) :]
+        if any(spec.id == action for spec in admet.engine(engine_id).actions):
+            return engine_id, action
+    return "", ""
+
 
 class SimulationRefused(Exception):
     """An action would have reached the instrument while in simulated mode."""
@@ -43,19 +67,30 @@ class AdmetServer:
         self.admet = Admet(project=project)
 
     def tools(self) -> list[dict[str, Any]]:
-        return [DESCRIBE_TOOL, *operation_tools(), *pipeline_tools()]
+        """All three levels: engine actions, operations, pipelines."""
+        return [
+            DESCRIBE_TOOL,
+            *operation_tools(),
+            *pipeline_tools(),
+            *action_tools(self.admet),
+        ]
 
     # -- calling ------------------------------------------------------------
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         arguments = dict(arguments or {})
         if name == "describe":
             return self.admet.describe(str(arguments.get("target") or ""))
-        if name.startswith("plan_"):
-            return {"stages": self.admet.plan(name[len("plan_") :], arguments)}
-        if name.startswith("run_"):
-            return self.admet.run_pipeline(
-                name[len("run_") :], self._simulated(name, arguments)
-            )
+        pipeline_id = _pipeline_id(name, "pipeline_")
+        if pipeline_id:
+            return self.admet.run_pipeline(pipeline_id, self._simulated(name, arguments))
+        pipeline_id = _pipeline_id(name, "plan_")
+        if pipeline_id:
+            return {"stages": self.admet.plan(pipeline_id, arguments)}
+        engine_id, action = _engine_action(self.admet, name)
+        if engine_id:
+            return self.admet.engine_action(
+                engine_id, action, self._simulated(name, arguments)
+            ).metadata
         return self.admet.do(name, self._simulated(name, arguments))
 
     def _simulated(self, name: str, settings: dict[str, Any]) -> dict[str, Any]:

@@ -22,21 +22,21 @@ class SurfaceTests(unittest.TestCase):
 
         operations = {op["id"]: op for op in json.loads(out)}
         self.assertEqual(exit_code, 0)
-        self.assertEqual(operations["prime"]["requires"], ["fluidics", "corrections", "idle"])
-        self.assertIn("prime_oil_volume_ul", [p["name"] for p in operations["prime"]["params"]])
+        self.assertEqual(operations["run_priming"]["requires"], ["fluidics", "corrections", "idle"])
+        self.assertIn("prime_oil_volume_ul", [p["name"] for p in operations["run_priming"]["params"]])
 
     def test_one_half_of_the_system_can_be_listed_on_its_own(self):
         _exit_code, out, _err = _run(["operations", "--target", "control"])
 
         listed = json.loads(out)
         self.assertTrue(all(op["target"] == "control" for op in listed))
-        self.assertIn("prime", {op["id"] for op in listed})
-        self.assertNotIn("analyze", {op["id"] for op in listed})
+        self.assertIn("run_priming", {op["id"] for op in listed})
+        self.assertNotIn("run_analysis", {op["id"] for op in listed})
 
     def test_a_project_is_opened_by_an_operation_like_anything_else(self):
         with tempfile.TemporaryDirectory() as tmp:
             exit_code, out, _err = _run(
-                ["do", "project_create", "--set", f"path={tmp}/rig.admetp"]
+                ["do", "create_project", "--set", f"path={tmp}/rig.admetp"]
             )
 
             self.assertEqual(exit_code, 0)
@@ -65,8 +65,8 @@ class SurfaceTests(unittest.TestCase):
 
         described = json.loads(out)
         self.assertEqual(exit_code, 0)
-        self.assertEqual(described["kind"], "engine")
-        self.assertIn("connect", described["actions"][0]["used_by"])
+        self.assertEqual(described["layer"], "engine")
+        self.assertIn("connect_fluidics", described["actions"][0]["used_by"])
 
     def test_describe_shows_the_three_layers_together(self):
         _exit_code, out, _err = _run(["describe"])
@@ -81,7 +81,7 @@ class SurfaceTests(unittest.TestCase):
 
         stages = json.loads(out)
         self.assertEqual(exit_code, 0)
-        self.assertEqual([stage["operation"] for stage in stages], ["connect", "apply_corrections", "prime"])
+        self.assertEqual([stage["operation"] for stage in stages], ["connect_fluidics", "apply_corrections", "run_priming"])
 
     def test_status_reports_the_session_and_the_instrument(self):
         _exit_code, out, _err = _run(["status"])
@@ -93,7 +93,7 @@ class SurfaceTests(unittest.TestCase):
 
 class GuardTests(unittest.TestCase):
     def test_an_operation_out_of_order_fails_with_the_reason(self):
-        exit_code, _out, err = _run(["do", "prime"])
+        exit_code, _out, err = _run(["do", "run_priming"])
 
         self.assertEqual(exit_code, 1)
         self.assertIn("the fluidics are not connected", json.loads(err)["message"])
@@ -105,11 +105,11 @@ class GuardTests(unittest.TestCase):
         self.assertIn("unknown operation", json.loads(err)["message"])
 
     def test_a_connection_works_and_can_be_released(self):
-        exit_code, out, _err = _run(["do", "connect", "--set", "simulated=true"])
+        exit_code, out, _err = _run(["do", "connect_fluidics", "--set", "simulated=true"])
 
         self.assertEqual(exit_code, 0)
         self.assertTrue(json.loads(out)["connected"])
-        _run(["do", "disconnect"])
+        _run(["do", "disconnect_fluidics"])
 
 
 class ProjectTests(unittest.TestCase):

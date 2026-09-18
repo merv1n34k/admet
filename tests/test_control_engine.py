@@ -494,7 +494,7 @@ class AcquisitionEngineTests(unittest.TestCase):
         engine = make_engine(sdk)
         run_engine(engine, "connect_fluidics", {"simulated": False, "start_polling": False})
 
-        calibrate = run_engine(engine, "calibrate", {})
+        calibrate = run_engine(engine, "calibrate_channels", {})
         corrections = run_engine(engine,
             "apply_corrections",
             {
@@ -517,7 +517,7 @@ class AcquisitionEngineTests(unittest.TestCase):
         run_engine(engine, "set_channel_response", {"channel_index": 1, "channel_response_s": 4})
         run_engine(engine, "stop_channel", {"channel_index": 1})
 
-        self.assertEqual(calibrate.metadata["action"], "calibrate")
+        self.assertEqual(calibrate.metadata["action"], "calibrate_channels")
         self.assertEqual(corrections.metadata["action"], "apply_corrections")
         self.assertIn(("calibrate", 0), sdk.calls)
         self.assertIn(("calibrate", 1), sdk.calls)
@@ -534,7 +534,7 @@ class AcquisitionEngineTests(unittest.TestCase):
         engine = make_engine(FakeControlSDK())
         engine.camera = Camera(EmptyPylon)
 
-        refresh = run_engine(engine, "refresh_cameras", {})
+        refresh = run_engine(engine, "list_cameras", {})
         connect = run_engine(engine, "connect_camera", {})
 
         self.assertTrue(refresh.metadata["pypylon_available"])
@@ -548,7 +548,7 @@ class AcquisitionEngineTests(unittest.TestCase):
         engine.camera = camera
 
         result = run_engine(engine,
-            "apply_camera_settings",
+            "set_camera_settings",
             {
                 "camera_width": 512,
                 "camera_height": 256,

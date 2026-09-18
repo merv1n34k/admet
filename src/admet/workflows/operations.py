@@ -22,13 +22,15 @@ from typing import Any, Protocol
 
 from pathlib import Path
 
-from admet.core.engine import Param, ParamKind, ParamOption
+from admet.core.engine import READ, START, WRITE, Param, ParamKind, ParamOption
 from admet.engines.acquisition.fluidics.config import (
     GRAVIMETRIC_REPLICATES,
     STABILITY_DURATION_S,
     STABILITY_TIMEOUT_S,
     STABILITY_TOLERANCE_UL_MIN,
 )
+from admet.engines.acquisition.pipeline import ON_COMPLETE, ProtocolStep
+from admet.engines.acquisition.triggers import TRIGGER_TYPES, trigger_params
 from admet.workflows import protocols
 
 
@@ -69,11 +71,11 @@ class Runner(Protocol):
 REQUIREMENTS: dict[str, tuple[Callable[[dict[str, Any]], bool], str]] = {
     "project": (
         lambda state: state["project"],
-        "no project is open; create or open one first",
+        "no project is open; run create_project or open_project first",
     ),
     "fluidics": (
         lambda state: state["fluidics"],
-        "the fluidics are not connected; run connect first",
+        "the fluidics are not connected; run connect_fluidics first",
     ),
     "camera": (
         lambda state: state["camera"],
@@ -113,6 +115,10 @@ class Operation:
     label: str
     description: str
     target: str = CONTROL
+    kind: str = WRITE
+    # Settings too structured for a Param -- a step list, say. The JSON schema is
+    # declared here so every surface can describe them without a special case.
+    raw: dict[str, Any] = field(default_factory=dict)
     params: tuple[Param, ...] = ()
     requires: tuple[str, ...] = ()
     # True when this hands a step list to the pipeline and returns before it has
@@ -180,7 +186,7 @@ def _apply_corrections(runner: Runner, settings: dict[str, Any]) -> dict[str, An
 
 
 def _status(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
-    return {**runner.engine_action("acquisition", "camera_status", {}).metadata, **runner.state()}
+    return {**runner.engine_action("acquisition", "read_status", {}).metadata, **runner.state()}
 
 
 # ---- channels --------------------------------------------------------------
@@ -271,9 +277,114 @@ def _sources(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
     return {"sources": runner.analysis_sources()}
 
 
+def _trigger_help() -> str:
+    """What to pass each trigger, read from the triggers themselves."""
+    lines = []
+    for name in TRIGGER_TYPES:
+        taken = trigger_params(name)
+        required = ", ".join(n for n, needed in taken.items() if needed) or "nothing"
+        optional = ", ".join(n for n, needed in taken.items() if not needed)
+        lines.append(f"{name}: {required}" + (f" (optional: {optional})" if optional else ""))
+    return "; ".join(lines)
+
+
+_TRIGGER_HELP = _trigger_help()
+
+
+# The step vocabulary, declared once. A step holds channels at setpoints until
+# its trigger fires; this is the whole of what a protocol is made of.
+STEP_LIST_SCHEMA = {
+    "type": "array",
+    "description": "The steps, in order.",
+    "items": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "What this step is called"},
+            "sensor_setpoints": {
+                "type": "object",
+                "description": "Channel index -> flow in uL/min",
+            },
+            "pressure_setpoints": {
+                "type": "object",
+                "description": "Channel index -> pressure in mbar, for open-loop steps",
+            },
+            "trigger_type": {
+                "type": "string",
+                "enum": list(TRIGGER_TYPES),
+                "description": "What ends the step",
+            },
+            "trigger_params": {
+                "type": "object",
+                "description": "The trigger's own settings. " + _TRIGGER_HELP,
+            },
+            "on_complete": {
+                "type": "string",
+                "enum": list(ON_COMPLETE),
+                "description": "What to do with the setpoints when the step ends",
+            },
+            "confirm_message": {
+                "type": "string",
+                "description": "What to ask the operator, for a confirmation trigger",
+            },
+            "repeat": {"type": "integer", "minimum": 1},
+            "group": {"type": "string", "description": "Steps sharing a group repeat together"},
+        },
+        "required": ["name", "trigger_type"],
+        "additionalProperties": False,
+    },
+}
+
+
+def _run_steps(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
+    """Run a protocol the caller wrote, rather than one this build ships."""
+    declared = settings.get("steps") or []
+    if not declared:
+        raise Refused("run_steps needs at least one step")
+    steps = [_step_from(entry, index) for index, entry in enumerate(declared)]
+    result = runner.run_steps(steps, tick_s=float(settings.get("tick_s", 0.2)))
+    return {**result.metadata, "protocol": "custom", "steps": len(steps)}
+
+
+def _step_from(entry: dict[str, Any], index: int) -> ProtocolStep:
+    trigger = str(entry.get("trigger_type") or "")
+    if trigger not in TRIGGER_TYPES:
+        raise Refused(
+            f"step {index} has trigger {trigger!r}; the triggers are: {', '.join(TRIGGER_TYPES)}"
+        )
+    on_complete = str(entry.get("on_complete") or "hold")
+    if on_complete not in ON_COMPLETE:
+        raise Refused(
+            f"step {index} ends with {on_complete!r}; it must be one of: {', '.join(ON_COMPLETE)}"
+        )
+    given = dict(entry.get("trigger_params") or {})
+    taken = trigger_params(trigger)
+    unknown = set(given) - set(taken)
+    if unknown:
+        raise Refused(
+            f"step {index}: the {trigger} trigger has no setting "
+            f"{', '.join(sorted(unknown))}; it takes: {', '.join(taken) or 'nothing'}"
+        )
+    missing = {name for name, needed in taken.items() if needed} - set(given)
+    if missing:
+        raise Refused(f"step {index}: the {trigger} trigger needs {', '.join(sorted(missing))}")
+    return ProtocolStep(
+        name=str(entry.get("name") or f"step {index}"),
+        sensor_setpoints={int(k): float(v) for k, v in (entry.get("sensor_setpoints") or {}).items()},
+        pressure_setpoints={
+            int(k): float(v) for k, v in (entry.get("pressure_setpoints") or {}).items()
+        },
+        trigger_type=trigger,
+        trigger_params=given,
+        on_complete=on_complete,
+        confirm_message=str(entry.get("confirm_message") or ""),
+        repeat=int(entry.get("repeat") or 1),
+        group=str(entry.get("group") or ""),
+    )
+
+
 OPERATIONS: tuple[Operation, ...] = (
     Operation(
-        "project_create",
+        "create_project",
         "Create a project",
         "Start a project and make it the one this session writes into.",
         target=GENERAL,
@@ -286,7 +397,7 @@ OPERATIONS: tuple[Operation, ...] = (
         run=_project_create,
     ),
     Operation(
-        "project_open",
+        "open_project",
         "Open a project",
         "Work in an existing project.",
         target=GENERAL,
@@ -294,22 +405,24 @@ OPERATIONS: tuple[Operation, ...] = (
         run=_project_open,
     ),
     Operation(
-        "project_status",
+        "read_project",
         "Which project is open",
         "The open project and what it holds.",
+        kind=READ,
         target=GENERAL,
         run=_project_status,
     ),
     Operation(
-        "project_list",
+        "list_projects",
         "Projects on disk",
         "Projects found under a directory.",
+        kind=READ,
         target=GENERAL,
         params=(Param("root", "Directory", ParamKind.PATH, default="", required=True),),
         run=_project_list,
     ),
     Operation(
-        "connect",
+        "connect_fluidics",
         "Connect fluidics",
         "Connect the pressure controller and start reading from it.",
         params=(
@@ -324,7 +437,7 @@ OPERATIONS: tuple[Operation, ...] = (
         uses=("connect_fluidics",),
         run=_connect,
     ),
-    Operation("disconnect", "Disconnect fluidics", "Release the instrument.",
+    Operation("disconnect_fluidics", "Disconnect fluidics", "Release the instrument.",
               requires=("fluidics",), uses=("disconnect_fluidics",), run=_disconnect),
     Operation("connect_camera", "Connect camera", "Open the camera.", uses=("connect_camera",), run=_connect_camera),
     Operation(
@@ -345,10 +458,10 @@ OPERATIONS: tuple[Operation, ...] = (
         uses=("apply_corrections",),
         run=_apply_corrections,
     ),
-    Operation("status", "Status", "What the instrument and the session are doing.",
-              target=GENERAL, uses=("camera_status",), run=_status),
+    Operation("read_status", "Status", "What the instrument and the session are doing.", kind=READ,
+              target=GENERAL, uses=("read_status",), run=_status),
     Operation(
-        "set_flow",
+        "set_channel_flow",
         "Set a channel's flow",
         "Hold one channel at a flow rate.",
         params=(
@@ -369,9 +482,10 @@ OPERATIONS: tuple[Operation, ...] = (
         run=_stop_channel,
     ),
     Operation(
-        "prime",
+        "run_priming",
         "Priming protocol",
         "Wet every line, confirming each channel in turn.",
+        kind=START,
         params=(
             _number("prime_oil_volume_ul", "Oil volume", 40.0, minimum=0.1, unit="uL"),
             _number("prime_aqueous_volume_ul", "Aqueous volume", 5.0, minimum=0.1, unit="uL"),
@@ -383,9 +497,10 @@ OPERATIONS: tuple[Operation, ...] = (
         run=_protocol("Priming"),
     ),
     Operation(
-        "wash",
+        "run_wash",
         "Wash protocol",
         "Flush the chip with IPA, then hold pressure.",
+        kind=START,
         params=(
             _number("wash_oil_flow_ul_min", "Oil flow", 250.0, unit="uL/min"),
             _number("wash_aqueous_total_flow_ul_min", "Total aqueous flow", 160.0, unit="uL/min"),
@@ -400,9 +515,10 @@ OPERATIONS: tuple[Operation, ...] = (
         run=_protocol("Wash"),
     ),
     Operation(
-        "characterise",
+        "run_characterisation",
         "Flow check",
         "Sweep the working flows to measure what the plumbing and chip cost.",
+        kind=START,
         params=(
             _number("run_oil_flow_ul_min", "Oil flow", 300.0, unit="uL/min"),
             _number("run_aqueous_total_flow_ul_min", "Total aqueous flow", 80.0, unit="uL/min"),
@@ -418,9 +534,10 @@ OPERATIONS: tuple[Operation, ...] = (
         run=_protocol("Characterise"),
     ),
     Operation(
-        "gravimetry",
+        "run_gravimetry",
         "Dispense check",
         "Dispense a weighed volume from every channel, gated on the operator.",
+        kind=START,
         params=(
             _number("gravimetric_target_ul", "Target volume", 100.0, minimum=0.1, unit="uL"),
             _number("gravimetric_flow_ul_min", "Dispense flow", 250.0, minimum=0.1, unit="uL/min"),
@@ -434,9 +551,10 @@ OPERATIONS: tuple[Operation, ...] = (
         run=_protocol("Gravimetry"),
     ),
     Operation(
-        "dropseq",
+        "run_dropseq",
         "Drop-Seq run",
         "Generate droplets for each set and replicate.",
+        kind=START,
         params=(
             _whole("set_count", "Sets", 1),
             _whole("replicate_count", "Replicates", 1),
@@ -450,15 +568,26 @@ OPERATIONS: tuple[Operation, ...] = (
         starts_protocol=True,
         run=_protocol("Drop-Seq"),
     ),
-    Operation("pause", "Pause protocol", "Hold the protocol and zero the channels.",
+    Operation(
+        "run_steps",
+        "Run steps you wrote",
+        "Run a protocol given as a list of steps, without adding it to this build.",
+        kind=START,
+        params=(TICK,),
+        raw={"steps": STEP_LIST_SCHEMA},
+        requires=("fluidics", "corrections", "idle"),
+        starts_protocol=True,
+        run=_run_steps,
+    ),
+    Operation("pause_protocol", "Pause protocol", "Hold the protocol and zero the channels.",
               requires=("running",), uses=("pause_protocol",), run=_pipeline_control("pause_protocol")),
-    Operation("resume", "Resume protocol", "Carry on from a pause.",
+    Operation("resume_protocol", "Resume protocol", "Carry on from a pause.",
               requires=("running",), uses=("resume_protocol",), run=_pipeline_control("resume_protocol")),
-    Operation("stop", "Stop protocol", "End the protocol and release the channels.",
+    Operation("stop_protocol", "Stop protocol", "End the protocol and release the channels.",
               requires=("running",), uses=("stop_protocol",), run=_pipeline_control("stop_protocol")),
-    Operation("confirm", "Confirm step", "Answer a step that is waiting for the operator.",
+    Operation("confirm_protocol", "Confirm step", "Answer a step that is waiting for the operator.",
               requires=("running",), uses=("confirm_protocol",), run=_pipeline_control("confirm_protocol")),
-    Operation("skip", "Skip step", "Abandon the waiting step and move on.",
+    Operation("skip_protocol", "Skip step", "Abandon the waiting step and move on.",
               requires=("running",), uses=("skip_protocol",), run=_pipeline_control("skip_protocol")),
     Operation(
         "start_recording",
@@ -495,15 +624,16 @@ OPERATIONS: tuple[Operation, ...] = (
         run=_add_source,
     ),
     Operation(
-        "sources",
+        "list_sources",
         "What is there to analyse",
         "Everything the project holds that analysis can be run over.",
+        kind=READ,
         target=ANALYZE,
         requires=("project",),
         run=_sources,
     ),
     Operation(
-        "analyze",
+        "run_analysis",
         "Analyse the project",
         "Run analysis over everything registered, writing results into the project.",
         params=(

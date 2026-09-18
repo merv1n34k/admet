@@ -193,7 +193,7 @@ class FakeAnalyzeEngine:
     )
     actions = (
         ActionSpec(
-            "analyze",
+            "run_analysis",
             "Analyze",
             "analysis",
             params=("video_path", "microns_per_pixel", "fps", "start_frame", "end_frame"),

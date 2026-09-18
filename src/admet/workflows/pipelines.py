@@ -6,9 +6,9 @@ after it -- written in Python, because a list of function calls is a better
 language for this than anything that would have to be invented.
 
     def morning(settings):
-        yield step("connect", simulated=settings["simulated"])
+        yield step("connect_fluidics", simulated=settings["simulated"])
         yield step("apply_corrections")
-        yield step("prime", prime_oil_volume_ul=settings["prime_volume_ul"])
+        yield step("run_priming", prime_oil_volume_ul=settings["prime_volume_ul"])
 
 Each stage is checked by the operation's own guards as it is reached, so a
 pipeline cannot do anything the operation would have refused on its own. A stage
@@ -63,10 +63,10 @@ class Pipeline:
 
 def _setup(settings: dict[str, Any]) -> Iterator[Stage]:
     """Everything between a cold instrument and a rig ready to run."""
-    yield step("connect", simulated=settings["simulated"])
+    yield step("connect_fluidics", simulated=settings["simulated"])
     yield step("apply_corrections")
     yield step(
-        "prime",
+        "run_priming",
         prime_oil_volume_ul=settings["prime_oil_volume_ul"],
         prime_aqueous_volume_ul=settings["prime_aqueous_volume_ul"],
         tick_s=settings["tick_s"],
@@ -80,14 +80,14 @@ def _checks(settings: dict[str, Any]) -> Iterator[Stage]:
     wrong reports flows that are not flows, and the flow check would then be
     measuring the wrong thing.
     """
-    yield step("gravimetry", tick_s=settings["tick_s"])
-    yield step("characterise", tick_s=settings["tick_s"])
+    yield step("run_gravimetry", tick_s=settings["tick_s"])
+    yield step("run_characterisation", tick_s=settings["tick_s"])
 
 
 def _shutdown(_settings: dict[str, Any]) -> Iterator[Stage]:
     """Leave the rig safe and the instrument released."""
-    yield step("wash", tick_s=0.2)
-    yield step("disconnect")
+    yield step("run_wash", tick_s=0.2)
+    yield step("disconnect_fluidics")
 
 
 PIPELINES: tuple[Pipeline, ...] = (

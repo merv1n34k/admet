@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from admet.core.service import Admet
+from admet.core.engine import KINDS, READ, START
 from admet.workflows.operations import (
     ANALYZE,
     BY_ID,
@@ -38,7 +39,7 @@ class DeclarationTests(unittest.TestCase):
                     self.assertIn(name, REQUIREMENTS)
 
     def test_a_protocol_operation_needs_hardware_corrections_and_an_idle_rig(self):
-        for name in ("prime", "characterise", "gravimetry", "dropseq"):
+        for name in ("run_priming", "run_characterisation", "run_gravimetry", "run_dropseq"):
             with self.subTest(operation=name):
                 requires = set(operation(name).requires)
                 self.assertIn("fluidics", requires)
@@ -46,7 +47,7 @@ class DeclarationTests(unittest.TestCase):
                 self.assertIn("idle", requires)
 
     def test_anything_that_writes_needs_a_project(self):
-        for name in ("dropseq", "start_recording", "stop_recording"):
+        for name in ("run_dropseq", "start_recording", "stop_recording"):
             with self.subTest(operation=name):
                 self.assertIn("project", operation(name).requires)
 
@@ -61,7 +62,7 @@ class DeclarationTests(unittest.TestCase):
         with self.assertRaises(LookupError) as caught:
             operation("teleport")
 
-        self.assertIn("prime", str(caught.exception))
+        self.assertIn("run_priming", str(caught.exception))
 
 
 class TargetTests(unittest.TestCase):
@@ -73,15 +74,15 @@ class TargetTests(unittest.TestCase):
                 self.assertIn(op.target, TARGETS)
 
     def test_the_instrument_and_the_analysis_are_told_apart(self):
-        self.assertEqual(operation("prime").target, CONTROL)
+        self.assertEqual(operation("run_priming").target, CONTROL)
         self.assertEqual(operation("start_recording").target, CONTROL)
-        self.assertEqual(operation("analyze").target, ANALYZE)
+        self.assertEqual(operation("run_analysis").target, ANALYZE)
         self.assertEqual(operation("add_source").target, ANALYZE)
 
     def test_the_session_belongs_to_neither(self):
         # A project is where the instrument writes and where the analysis reads,
         # so opening one is not an instrument operation.
-        for name in ("project_create", "project_open", "project_status", "project_list"):
+        for name in ("create_project", "open_project", "read_project", "list_projects"):
             with self.subTest(operation=name):
                 self.assertEqual(operation(name).target, GENERAL)
 
@@ -105,7 +106,129 @@ class TargetTests(unittest.TestCase):
 
         listed = Admet().operations(ANALYZE)
 
-        self.assertEqual({op["id"] for op in listed}, {"add_source", "sources", "analyze"})
+        self.assertEqual({op["id"] for op in listed}, {"add_source", "list_sources", "run_analysis"})
+
+
+class NamingTests(unittest.TestCase):
+    """One law for ids, so a name can be trusted to mean the same thing twice."""
+
+    def test_every_id_is_a_verb_then_its_subject(self):
+        verbs = (
+            "connect", "disconnect", "apply", "set", "stop", "start", "pause",
+            "resume", "confirm", "skip", "run", "read", "list", "create", "open",
+            "add", "verify", "calibrate", "shutdown",
+        )
+        for op in OPERATIONS:
+            with self.subTest(operation=op.id):
+                self.assertTrue(
+                    op.id.split("_")[0] in verbs,
+                    f"{op.id} does not start with a verb",
+                )
+
+    def test_an_operation_and_the_action_it_drives_share_a_name(self):
+        # The same call should not be called two things at two levels.
+        for op in OPERATIONS:
+            if len(op.uses) == 1:
+                with self.subTest(operation=op.id):
+                    self.assertEqual(op.id, op.uses[0])
+
+    def test_every_operation_says_what_calling_it_does(self):
+        for op in OPERATIONS:
+            with self.subTest(operation=op.id):
+                self.assertIn(op.kind, KINDS)
+
+    def test_the_operations_that_leave_something_running_are_the_protocols(self):
+        # This is the distinction a caller cannot otherwise see: `start` returns
+        # while the rig is still moving.
+        starting = {op.id for op in OPERATIONS if op.kind == START}
+
+        self.assertEqual(starting, {op.id for op in OPERATIONS if op.starts_protocol})
+
+    def test_a_read_never_changes_anything(self):
+        for op in OPERATIONS:
+            if op.kind == READ:
+                with self.subTest(operation=op.id):
+                    self.assertFalse(op.starts_protocol)
+
+    def test_every_engine_action_says_what_calling_it_does(self):
+        admet = Admet()
+        for engine_id in admet.engine_ids():
+            for action in admet.engine(engine_id).actions:
+                with self.subTest(engine=engine_id, action=action.id):
+                    self.assertIn(action.kind, KINDS)
+
+
+class StepTests(unittest.TestCase):
+    """The middle level: a protocol the caller wrote, not one this build ships."""
+
+    def test_the_step_level_is_an_operation_like_any_other(self):
+        op = operation("run_steps")
+
+        self.assertEqual(op.kind, START)
+        self.assertEqual(set(op.requires), {"fluidics", "corrections", "idle"})
+        self.assertIn("steps", op.raw)
+
+    def test_the_declared_triggers_are_the_ones_that_exist(self):
+        from admet.engines.acquisition.triggers import TRIGGER_TYPES, create_trigger
+
+        declared = operation("run_steps").raw["steps"]["items"]["properties"]
+
+        self.assertEqual(tuple(declared["trigger_type"]["enum"]), TRIGGER_TYPES)
+        for name in TRIGGER_TYPES:
+            with self.subTest(trigger=name):
+                with self.assertRaises(TypeError):  # exists, but needs its settings
+                    create_trigger(name, {})
+
+    def test_a_trigger_setting_that_does_not_exist_is_refused_by_name(self):
+        admet = Admet()
+        admet.do("connect_fluidics", {"simulated": True})
+        admet.do("apply_corrections")
+        try:
+            with self.assertRaises(Refused) as caught:
+                admet.do("run_steps", {"steps": [
+                    {"name": "x", "trigger_type": "volume",
+                     "trigger_params": {"volume_ul": 2.0}}]})
+            self.assertIn("it takes: sensor_index, target_volume_ul", str(caught.exception))
+        finally:
+            admet.do("disconnect_fluidics")
+
+    def test_a_trigger_missing_what_it_needs_is_refused(self):
+        admet = Admet()
+        admet.do("connect_fluidics", {"simulated": True})
+        admet.do("apply_corrections")
+        try:
+            with self.assertRaises(Refused) as caught:
+                admet.do("run_steps", {"steps": [{"name": "x", "trigger_type": "time"}]})
+            self.assertIn("needs duration_s", str(caught.exception))
+        finally:
+            admet.do("disconnect_fluidics")
+
+    def test_steps_the_caller_wrote_really_run(self):
+        admet = Admet()
+        admet.do("connect_fluidics", {"simulated": True})
+        admet.do("apply_corrections")
+        try:
+            report = admet.do("run_steps", {"steps": [
+                {"name": "wet the line", "sensor_setpoints": {"0": 5.0},
+                 "trigger_type": "volume",
+                 "trigger_params": {"sensor_index": 0, "target_volume_ul": 2.0}},
+                {"name": "settle", "sensor_setpoints": {"0": 2.0},
+                 "trigger_type": "time", "trigger_params": {"duration_s": 1.0},
+                 "on_complete": "zero"},
+            ], "tick_s": 0.1})
+
+            self.assertEqual(report["steps"], 2)
+            self.assertEqual(report["protocol"], "custom")
+            self.assertTrue(admet.state()["running"])
+        finally:
+            admet.do("stop_protocol")
+            admet.do("disconnect_fluidics")
+
+    def test_the_step_level_is_guarded_like_the_rest(self):
+        with self.assertRaises(Refused) as caught:
+            Admet().do("run_steps", {"steps": [{"name": "x", "trigger_type": "time"}]})
+
+        self.assertIn("not connected", str(caught.exception))
 
 
 class GuardTests(unittest.TestCase):
@@ -119,32 +242,32 @@ class GuardTests(unittest.TestCase):
 
     def test_a_guard_refuses_and_says_what_to_do(self):
         with self.assertRaises(Refused) as caught:
-            operation("prime").check(self.COLD)
+            operation("run_priming").check(self.COLD)
 
-        self.assertIn("run connect first", str(caught.exception))
+        self.assertIn("run connect_fluidics first", str(caught.exception))
 
     def test_the_first_unmet_requirement_is_the_one_reported(self):
         with self.assertRaises(Refused) as caught:
-            operation("dropseq").check(self.COLD)
+            operation("run_dropseq").check(self.COLD)
 
         self.assertIn("no project is open", str(caught.exception))
 
     def test_a_met_requirement_passes(self):
         ready = {**self.COLD, "fluidics": True, "corrections": True}
 
-        operation("prime").check(ready)
+        operation("run_priming").check(ready)
 
     def test_a_protocol_already_running_stops_another_starting(self):
         busy = {**self.COLD, "fluidics": True, "corrections": True, "running": True}
 
         with self.assertRaises(Refused) as caught:
-            operation("prime").check(busy)
+            operation("run_priming").check(busy)
 
         self.assertIn("already running", str(caught.exception))
 
     def test_answering_a_step_needs_something_to_answer(self):
         with self.assertRaises(Refused):
-            operation("confirm").check(self.COLD)
+            operation("confirm_protocol").check(self.COLD)
 
 
 class PipelineDeclarationTests(unittest.TestCase):
@@ -172,11 +295,11 @@ class PipelineDeclarationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [stage.operation for stage in stages], ["connect", "apply_corrections", "prime"]
+            [stage.operation for stage in stages], ["connect_fluidics", "apply_corrections", "run_priming"]
         )
 
     def test_a_stage_carries_the_settings_it_was_written_with(self):
-        made = step("prime", prime_oil_volume_ul=12.0)
+        made = step("run_priming", prime_oil_volume_ul=12.0)
 
         self.assertEqual(made.settings["prime_oil_volume_ul"], 12.0)
 
@@ -217,9 +340,9 @@ class PipelineRunTests(unittest.TestCase):
         self.assertEqual(report["reason"], "waiting")
         self.assertEqual(report["stages"][0]["outcome"], "completed")
         self.assertEqual(report["stages"][1]["outcome"], "completed")
-        self.assertEqual(report["stages"][2]["operation"], "prime")
-        admet.do("stop")
-        admet.do("disconnect")
+        self.assertEqual(report["stages"][2]["operation"], "run_priming")
+        admet.do("stop_protocol")
+        admet.do("disconnect_fluidics")
 
     def test_the_stages_before_a_stop_really_happened(self):
         admet = Admet()
@@ -233,12 +356,12 @@ class PipelineRunTests(unittest.TestCase):
         state = admet.state()
         self.assertTrue(state["fluidics"])
         self.assertTrue(state["corrections"])
-        admet.do("stop")
-        admet.do("disconnect")
+        admet.do("stop_protocol")
+        admet.do("disconnect_fluidics")
 
     def test_a_run_can_be_picked_up_from_a_later_stage(self):
         admet = Admet()
-        admet.do("connect", {"simulated": True})
+        admet.do("connect_fluidics", {"simulated": True})
         admet.do("apply_corrections")
 
         report = admet.run_pipeline(
@@ -250,35 +373,35 @@ class PipelineRunTests(unittest.TestCase):
 
         self.assertEqual(report["stages"][0]["outcome"], "skipped")
         self.assertEqual(report["stages"][1]["outcome"], "skipped")
-        self.assertEqual(report["stages"][2]["operation"], "prime")
-        admet.do("stop")
-        admet.do("disconnect")
+        self.assertEqual(report["stages"][2]["operation"], "run_priming")
+        admet.do("stop_protocol")
+        admet.do("disconnect_fluidics")
 
 
 class ProjectAwareTests(unittest.TestCase):
     def test_a_run_that_records_is_refused_without_a_session(self):
         admet = Admet()
-        admet.do("connect", {"simulated": True})
+        admet.do("connect_fluidics", {"simulated": True})
         admet.do("apply_corrections")
         try:
             with self.assertRaises(Refused) as caught:
-                admet.do("dropseq", {"tick_s": 0.1})
+                admet.do("run_dropseq", {"tick_s": 0.1})
             self.assertIn("no project is open", str(caught.exception))
         finally:
-            admet.do("disconnect")
+            admet.do("disconnect_fluidics")
 
     def test_with_a_project_open_the_same_run_is_allowed(self):
         with tempfile.TemporaryDirectory() as tmp:
             admet = Admet()
             admet.create_project(Path(tmp) / "rig.admetp")
-            admet.do("connect", {"simulated": True})
+            admet.do("connect_fluidics", {"simulated": True})
             admet.do("apply_corrections")
             try:
-                admet.do("dropseq", {"set_count": 1, "replicate_count": 1, "tick_s": 0.1})
+                admet.do("run_dropseq", {"set_count": 1, "replicate_count": 1, "tick_s": 0.1})
                 self.assertTrue(admet.state()["running"])
             finally:
-                admet.do("stop")
-                admet.do("disconnect")
+                admet.do("stop_protocol")
+                admet.do("disconnect_fluidics")
 
 
 if __name__ == "__main__":
@@ -307,8 +430,12 @@ class DescribeTests(unittest.TestCase):
                 with self.subTest(operation=op.id):
                     self.assertIn(op.protocol, PROTOCOLS)
 
-    def test_an_operation_that_starts_a_protocol_names_which(self):
+    def test_an_operation_that_starts_a_shipped_protocol_names_which(self):
+        # run_steps is the exception: it starts a protocol the caller wrote, so
+        # there is no name in this build to give.
         for op in OPERATIONS:
+            if op.id == "run_steps":
+                continue
             with self.subTest(operation=op.id):
                 self.assertEqual(bool(op.protocol), op.starts_protocol)
 
@@ -320,32 +447,32 @@ class DescribeTests(unittest.TestCase):
         self.assertIn("acquisition", {engine["id"] for engine in described["engines"]})
 
     def test_describing_an_operation_says_why_each_guard_is_there(self):
-        described = Admet().describe("prime")
+        described = Admet().describe("run_priming")
 
-        self.assertEqual(described["kind"], "operation")
+        self.assertEqual(described["layer"], "operation")
         self.assertEqual(described["target"], "control")
         self.assertEqual(described["protocol"], "Priming")
         reasons = {entry["name"]: entry["why"] for entry in described["requires"]}
-        self.assertIn("run connect first", reasons["fluidics"])
+        self.assertIn("run connect_fluidics first", reasons["fluidics"])
 
     def test_describing_a_pipeline_shows_its_stages(self):
         described = Admet().describe("setup")
 
-        self.assertEqual(described["kind"], "pipeline")
+        self.assertEqual(described["layer"], "pipeline")
         self.assertEqual(
             [stage["operation"] for stage in described["stages"]],
-            ["connect", "apply_corrections", "prime"],
+            ["connect_fluidics", "apply_corrections", "run_priming"],
         )
 
     def test_describing_an_engine_says_which_operations_drive_each_action(self):
         described = Admet().describe("acquisition")
 
         actions = {action["id"]: action for action in described["actions"]}
-        self.assertEqual(described["kind"], "engine")
-        self.assertEqual(actions["connect_fluidics"]["used_by"], ["connect"])
+        self.assertEqual(described["layer"], "engine")
+        self.assertEqual(actions["connect_fluidics"]["used_by"], ["connect_fluidics"])
 
     def test_describing_something_that_is_not_there_says_what_is(self):
         with self.assertRaises(LookupError) as caught:
             Admet().describe("nonsense")
 
-        self.assertIn("prime", str(caught.exception))
+        self.assertIn("run_priming", str(caught.exception))

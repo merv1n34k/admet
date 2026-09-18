@@ -266,17 +266,33 @@ class ConfirmationTrigger(Trigger):
     def description(self) -> str:
         return f"Confirm: {self._message}"
 
+# What can end a step, and what each one needs. Read from the triggers
+# themselves so a caller can be told what to pass instead of finding out from a
+# TypeError, and so this cannot drift from the constructors it describes.
+_TRIGGERS: dict[str, type] = {
+    "time": TimeTrigger,
+    "volume": VolumeTrigger,
+    "stability": StabilityTrigger,
+    "threshold": ThresholdTrigger,
+    "condition": ConditionTrigger,
+    "confirmation": ConfirmationTrigger,
+}
+TRIGGER_TYPES = tuple(_TRIGGERS)
+
+
+def trigger_params(trigger_type: str) -> dict[str, bool]:
+    """The settings a trigger takes, and whether each one is required."""
+    import inspect
+
+    signature = inspect.signature(_TRIGGERS[trigger_type].__init__)
+    return {
+        name: parameter.default is inspect.Parameter.empty
+        for name, parameter in signature.parameters.items()
+        if name != "self"
+    }
+
+
 def create_trigger(trigger_type: str, params: dict) -> Trigger:
-    if trigger_type == "time":
-        return TimeTrigger(**params)
-    if trigger_type == "stability":
-        return StabilityTrigger(**params)
-    if trigger_type == "volume":
-        return VolumeTrigger(**params)
-    if trigger_type == "threshold":
-        return ThresholdTrigger(**params)
-    if trigger_type == "condition":
-        return ConditionTrigger(**params)
-    if trigger_type == "confirmation":
-        return ConfirmationTrigger(**params)
-    raise ValueError(f"Unknown trigger type: {trigger_type}")
+    if trigger_type not in _TRIGGERS:
+        raise ValueError(f"Unknown trigger type: {trigger_type}")
+    return _TRIGGERS[trigger_type](**params)

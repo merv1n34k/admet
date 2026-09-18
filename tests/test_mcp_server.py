@@ -29,34 +29,42 @@ class SurfaceTests(unittest.TestCase):
         self.names = {tool["name"] for tool in self.server.tools()}
 
     def test_what_is_offered_is_the_workflow_layer(self):
-        self.assertIn("prime", self.names)
-        self.assertIn("run_setup", self.names)
-        self.assertIn("project_create", self.names)
+        self.assertIn("run_priming", self.names)
+        self.assertIn("pipeline_setup", self.names)
+        self.assertIn("create_project", self.names)
 
-    def test_no_engine_action_is_offered(self):
-        # Primitives have no guards, and the guard is the point of an operation.
-        # They remain reachable from Python; they are not the way in.
-        self.assertFalse({name for name in self.names if name.startswith("acquisition_")})
-        self.assertNotIn("set_channel_pressure", self.names)
-        self.assertNotIn("run_protocol", self.names)
+    def test_all_three_levels_are_offered(self):
+        # Low: every device action, engine-prefixed, so a model can configure the
+        # camera and the channels in full. Med: a protocol written as steps.
+        # High: the pipelines.
+        self.assertIn("acquisition_set_camera_settings", self.names)
+        self.assertIn("acquisition_set_channel_pressure", self.names)
+        self.assertIn("run_steps", self.names)
+        self.assertIn("pipeline_setup", self.names)
+
+    def test_a_name_says_which_level_it_belongs_to(self):
+        # Engine-prefixed is the unguarded low level; bare is the guarded
+        # operation. Both exist for the same call and must not be confused.
+        self.assertIn("acquisition_connect_fluidics", self.names)
+        self.assertIn("connect_fluidics", self.names)
 
     def test_a_tool_says_what_it_needs_first(self):
         tools = {tool["name"]: tool for tool in self.server.tools()}
 
-        self.assertIn("Needs: fluidics, corrections, idle", tools["prime"]["description"])
-        self.assertNotIn("Needs:", tools["connect"]["description"])
+        self.assertIn("Needs: fluidics, corrections, idle", tools["run_priming"]["description"])
+        self.assertNotIn("Needs:", tools["connect_fluidics"]["description"])
 
     def test_a_tool_says_which_half_of_the_system_it_belongs_to(self):
         tools = {tool["name"]: tool for tool in self.server.tools()}
 
-        self.assertTrue(tools["prime"]["description"].startswith("[control]"))
-        self.assertTrue(tools["analyze"]["description"].startswith("[analyze]"))
-        self.assertTrue(tools["project_open"]["description"].startswith("[general]"))
+        self.assertTrue(tools["run_priming"]["description"].startswith("[control]"))
+        self.assertTrue(tools["run_analysis"]["description"].startswith("[analyze]"))
+        self.assertTrue(tools["open_project"]["description"].startswith("[general]"))
 
     def test_a_tool_carries_the_parameters_its_operation_declares(self):
         tools = {tool["name"]: tool for tool in self.server.tools()}
 
-        schema = tools["prime"]["inputSchema"]
+        schema = tools["run_priming"]["inputSchema"]
 
         self.assertEqual(
             set(schema["properties"]),
@@ -68,7 +76,7 @@ class SurfaceTests(unittest.TestCase):
     def test_every_pipeline_can_be_planned_as_well_as_run(self):
         for name in ("setup", "checks", "shutdown"):
             with self.subTest(pipeline=name):
-                self.assertIn(f"run_{name}", self.names)
+                self.assertIn(f"pipeline_{name}", self.names)
                 self.assertIn(f"plan_{name}", self.names)
 
 
@@ -77,31 +85,31 @@ class GuardTests(unittest.TestCase):
         self.server = AdmetServer(simulated=True)
 
     def test_an_operation_out_of_order_is_refused_with_the_reason(self):
-        text, is_error = _call(self.server, "prime")
+        text, is_error = _call(self.server, "run_priming")
 
         self.assertTrue(is_error)
         self.assertIn("the fluidics are not connected", text)
 
     def test_a_protocol_is_refused_until_corrections_are_applied(self):
-        _call(self.server, "connect")
+        _call(self.server, "connect_fluidics")
 
-        text, is_error = _call(self.server, "characterise")
+        text, is_error = _call(self.server, "run_characterisation")
 
         self.assertTrue(is_error)
         self.assertIn("correction factors have not been applied", text)
 
     def test_the_guard_lifts_once_the_condition_is_met(self):
-        _call(self.server, "connect")
+        _call(self.server, "connect_fluidics")
         _call(self.server, "apply_corrections")
 
-        text, is_error = _call(self.server, "prime", {"prime_oil_volume_ul": 2.0, "tick_s": 0.1})
+        text, is_error = _call(self.server, "run_priming", {"prime_oil_volume_ul": 2.0, "tick_s": 0.1})
 
         self.assertFalse(is_error, text)
-        _call(self.server, "stop")
-        _call(self.server, "disconnect")
+        _call(self.server, "stop_protocol")
+        _call(self.server, "disconnect_fluidics")
 
     def test_a_setting_the_operation_does_not_have_is_refused(self):
-        text, is_error = _call(self.server, "connect", {"nonsense": 1})
+        text, is_error = _call(self.server, "connect_fluidics", {"nonsense": 1})
 
         self.assertTrue(is_error)
         self.assertIn("has no setting", text)
@@ -111,7 +119,7 @@ class GuardTests(unittest.TestCase):
 
         self.assertFalse(is_error)
         stages = json.loads(text)["stages"]
-        self.assertEqual([stage["operation"] for stage in stages], ["connect", "apply_corrections", "prime"])
+        self.assertEqual([stage["operation"] for stage in stages], ["connect_fluidics", "apply_corrections", "run_priming"])
         self.assertFalse(self.server.admet.state()["fluidics"])
 
 
@@ -119,10 +127,10 @@ class SimulationTests(unittest.TestCase):
     def test_connecting_is_forced_simulated(self):
         server = AdmetServer(simulated=True)
 
-        text, _is_error = _call(server, "connect")
+        text, _is_error = _call(server, "connect_fluidics")
 
         self.assertTrue(json.loads(text)["simulated"])
-        _call(server, "disconnect")
+        _call(server, "disconnect_fluidics")
 
     def test_asking_for_real_hardware_is_refused(self):
         server = AdmetServer(simulated=True)
@@ -135,7 +143,7 @@ class SimulationTests(unittest.TestCase):
         # it need no flag of their own.
         server = AdmetServer(simulated=True)
 
-        self.assertEqual(server._simulated("prime", {"tick_s": 0.1}), {"tick_s": 0.1})
+        self.assertEqual(server._simulated("run_priming", {"tick_s": 0.1}), {"tick_s": 0.1})
 
     def test_the_camera_is_refused_unless_its_emulator_is_switched_on(self):
         server = AdmetServer(simulated=True)
@@ -183,7 +191,7 @@ class ProtocolTests(unittest.TestCase):
     def test_a_client_opens_a_project_before_it_writes_anything(self):
         with tempfile.TemporaryDirectory() as tmp:
             text, is_error = _call(
-                self.server, "project_create", {"path": f"{tmp}/rig.admetp"}
+                self.server, "create_project", {"path": f"{tmp}/rig.admetp"}
             )
 
             self.assertFalse(is_error)
@@ -208,7 +216,7 @@ class ProtocolTests(unittest.TestCase):
                     "jsonrpc": "2.0",
                     "id": 3,
                     "method": "tools/call",
-                    "params": {"name": "connect", "arguments": {}},
+                    "params": {"name": "connect_fluidics", "arguments": {}},
                 },
             )
         )
@@ -220,7 +228,7 @@ class ProtocolTests(unittest.TestCase):
         replies = [json.loads(line) for line in stdout.getvalue().splitlines()]
         self.assertEqual(exit_code, 0)
         self.assertEqual([reply["id"] for reply in replies], [1, 2, 3])
-        self.assertGreater(len(replies[1]["result"]["tools"]), 20)
+        self.assertGreater(len(replies[1]["result"]["tools"]), 50)
         connected = json.loads(replies[2]["result"]["content"][0]["text"])
         self.assertTrue(connected["connected"])
         self.assertTrue(connected["simulated"])

@@ -4,7 +4,7 @@ from dataclasses import asdict
 from queue import Queue
 from typing import Any, Callable
 
-from admet.core.engine import ActionSpec, ParamSchema, validate_action_settings
+from admet.core.engine import READ, ActionSpec, ParamSchema, validate_action_settings
 from admet.core.run import RunJob, RunResult
 from admet.engines.acquisition.camera import CameraController
 from admet.engines.acquisition.fluidics import (
@@ -53,9 +53,9 @@ CAMERA_CONFIGURATION_PARAMS = (
 ACQUISITION_ACTIONS = (
     ActionSpec("connect_fluidics", "Connect Fluidics", "connection", params=("simulated", "start_polling")),
     ActionSpec("disconnect_fluidics", "Disconnect Fluidics", "connection"),
-    ActionSpec("verify_backend", "Verify Backend", "diagnostics"),
-    ActionSpec("verify_fluigent", "Verify Fluigent", "diagnostics", params=("simulated",)),
-    ActionSpec("refresh_cameras", "Refresh Cameras", "diagnostics"),
+    ActionSpec("verify_backend", "Verify Backend", "diagnostics", kind=READ),
+    ActionSpec("verify_fluigent", "Verify Fluigent", "diagnostics", kind=READ, params=("simulated",)),
+    ActionSpec("list_cameras", "List Cameras", "diagnostics", kind=READ),
     ActionSpec(
         "connect_camera",
         "Connect Camera",
@@ -63,10 +63,10 @@ ACQUISITION_ACTIONS = (
         params=("camera_index", *CAMERA_CONFIGURATION_PARAMS),
     ),
     ActionSpec("disconnect_camera", "Disconnect Camera", "connection"),
-    ActionSpec("apply_camera_settings", "Apply Camera Settings", "diagnostics", params=CAMERA_CONFIGURATION_PARAMS),
+    ActionSpec("set_camera_settings", "Set Camera Settings", "diagnostics", params=CAMERA_CONFIGURATION_PARAMS),
     ActionSpec("start_camera_live", "Start Camera Live", "diagnostics"),
     ActionSpec("stop_camera_live", "Stop Camera Live", "diagnostics"),
-    ActionSpec("camera_status", "Camera Status", "diagnostics"),
+    ActionSpec("read_status", "Read Status", "diagnostics", kind=READ),
     ActionSpec("start_polling", "Start Polling", "diagnostics"),
     ActionSpec("stop_polling", "Stop Polling", "diagnostics"),
     ActionSpec("apply_corrections", "Apply Corrections", "fluidics", params=CORRECTION_PARAM_NAMES),
@@ -106,8 +106,8 @@ ACQUISITION_ACTIONS = (
     ActionSpec("stop_protocol", "Stop Protocol", "protocol"),
     ActionSpec("confirm_protocol", "Confirm Protocol Step", "protocol"),
     ActionSpec("skip_protocol", "Skip Protocol Step", "protocol"),
-    ActionSpec("calibrate", "Calibrate", "calibration"),
-    ActionSpec("cleanup_shutdown", "Cleanup Shutdown", "connection"),
+    ActionSpec("calibrate_channels", "Calibrate Channels", "calibration"),
+    ActionSpec("shutdown_instrument", "Shut Down Instrument", "connection"),
 )
 
 
@@ -165,13 +165,13 @@ class AcquisitionEngine:
                 extra_metadata=self._backend_preflight(),
             ),
             "verify_fluigent": lambda settings: self._verify_fluigent(settings),
-            "refresh_cameras": lambda _settings: self._status_result(
-                "refresh_cameras",
+            "list_cameras": lambda _settings: self._status_result(
+                "list_cameras",
                 extra_metadata=self._camera_preflight(),
             ),
             "connect_camera": lambda settings: self._connect_camera(settings),
             "disconnect_camera": lambda _settings: self._disconnect_camera(),
-            "apply_camera_settings": lambda settings: self._apply_camera_settings(settings),
+            "set_camera_settings": lambda settings: self._apply_camera_settings(settings),
             "start_camera_live": lambda _settings: self._camera_live_status_action(
                 "start_camera_live",
                 self.start_camera_live,
@@ -180,8 +180,8 @@ class AcquisitionEngine:
                 "stop_camera_live",
                 self.stop_camera_live,
             ),
-            "camera_status": lambda _settings: self._status_result(
-                "camera_status",
+            "read_status": lambda _settings: self._status_result(
+                "read_status",
                 extra_metadata=self._camera_status_metadata(),
             ),
             "start_polling": lambda _settings: self._status_after("start_polling", self.start_polling),
@@ -222,8 +222,8 @@ class AcquisitionEngine:
                 self.confirm_pipeline_step,
             ),
             "skip_protocol": lambda _settings: self._status_after("skip_protocol", self.skip_pipeline_step),
-            "calibrate": lambda _settings: self._status_after("calibrate", self.hardware.calibrate_all),
-            "cleanup_shutdown": lambda _settings: self._cleanup_shutdown(),
+            "calibrate_channels": lambda _settings: self._status_after("calibrate_channels", self.hardware.calibrate_all),
+            "shutdown_instrument": lambda _settings: self._cleanup_shutdown(),
         }
 
     def _build_action_preparers(self) -> dict[str, ActionSettingsPreparer]:
@@ -516,7 +516,7 @@ class AcquisitionEngine:
                 errors.append(f"{getattr(operation, '__name__', 'operation')}: {exc}")
         self.channel_manager.configure_channels([])
         return self._status_result(
-            "cleanup_shutdown",
+            "shutdown_instrument",
             extra_metadata={
                 "cleanup_ok": not errors,
                 "cleanup_errors": errors,
@@ -532,7 +532,7 @@ class AcquisitionEngine:
         return self._status_result("connect_camera", extra_metadata=self._camera.connect(settings))
 
     def _apply_camera_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
-        return self._status_result("apply_camera_settings", extra_metadata=self._camera.apply_settings(settings))
+        return self._status_result("set_camera_settings", extra_metadata=self._camera.apply_settings(settings))
 
     @property
     def camera_live(self) -> bool:

@@ -289,13 +289,13 @@ class AnalysisTests(unittest.TestCase):
             admet.create_project(Path(tmp) / "rig.admetp")
 
             with self.assertRaises(Exception) as caught:
-                admet.do("analyze", {})
+                admet.do("run_analysis", {})
 
             self.assertIn("nothing to analyse", str(caught.exception))
 
     def test_analysing_without_a_project_is_refused(self):
         with self.assertRaises(Exception) as caught:
-            Admet().do("analyze", {})
+            Admet().do("run_analysis", {})
 
         self.assertIn("no project is open", str(caught.exception))
 
@@ -305,7 +305,7 @@ class AnalysisTests(unittest.TestCase):
             admet.create_project(Path(tmp) / "rig.admetp")
             admet.do("add_source", {"path": str(self._video(Path(tmp))), "sample_id": "run01"})
 
-            listed = admet.do("sources", {})["sources"]
+            listed = admet.do("list_sources", {})["sources"]
 
             self.assertEqual(len(listed), 1)
             self.assertEqual(listed[0]["sample_id"], "run01")

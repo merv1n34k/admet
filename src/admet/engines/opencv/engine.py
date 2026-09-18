@@ -18,15 +18,15 @@ class OpenCVAnalysisEngine:
         self.settings = settings
         self.actions = (
             ActionSpec(
-                "analyze",
-                "Analyze",
+                "run_analysis",
+                "Run Analysis",
                 "analysis",
                 params=tuple(param.name for param in settings.params),
             ),
         )
 
     def run(self, job: RunJob) -> RunResult:
-        if job.action != "analyze":
+        if job.action != "run_analysis":
             raise ValueError(f"unsupported action for {self.id}: {job.action}")
         video_path = _job_input(job, "video", "video_path")
         settings = dict(job.settings)
