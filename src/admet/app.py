@@ -75,7 +75,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--from-stage", type=int, default=0, help="pick up from this stage")
     run.add_argument("--wait", type=float, default=600.0, help="seconds to wait per protocol")
 
-    sub.add_parser("status", help="what the instrument and the session are doing")
+    call = sub.add_parser(
+        "call", help="one engine action, unguarded: the low level, in full"
+    )
+    call.add_argument("engine", help="which engine, as listed by describe")
+    call.add_argument("action", help="which of its actions")
+    call.add_argument("--set", action="append", default=[], metavar="NAME=VALUE")
+    call.add_argument("--json", dest="settings_json", default="", metavar="JSON")
 
     serve = sub.add_parser("serve", help="expose the workflow layer over MCP on stdio")
     serve.add_argument(
@@ -103,8 +109,10 @@ def main(argv: list[str] | None = None) -> int:
         return _print(admet.operations(args.target))
     if args.command == "pipelines":
         return _print(admet.pipelines())
-    if args.command == "status":
-        return _print({**admet.state(), "session": admet.describe_project()})
+    if args.command == "call":
+        return _attempt(
+            lambda: admet.engine_action(args.engine, args.action, _settings(args)).metadata
+        )
     if args.command == "plan":
         return _attempt(lambda: admet.plan(args.pipeline, _settings(args)))
     if args.command == "do":

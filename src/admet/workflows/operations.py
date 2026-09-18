@@ -186,7 +186,12 @@ def _apply_corrections(runner: Runner, settings: dict[str, Any]) -> dict[str, An
 
 
 def _status(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
-    return {**runner.engine_action("acquisition", "read_status", {}).metadata, **runner.state()}
+    """The instrument, the guards, and the session, in one answer."""
+    return {
+        **runner.engine_action("acquisition", "read_status", {}).metadata,
+        **runner.state(),
+        "session": runner.describe_project(),
+    }
 
 
 # ---- channels --------------------------------------------------------------

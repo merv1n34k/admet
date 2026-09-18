@@ -42,20 +42,39 @@ class SurfaceTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual(json.loads(out)["project_id"], "rig")
 
+    def test_the_low_level_is_reachable_from_the_command_line(self):
+        exit_code, out, _err = _run(["call", "acquisition", "verify_backend"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(out)["action"], "verify_backend")
+
+    def test_an_unknown_engine_names_the_ones_there_are(self):
+        exit_code, _out, err = _run(["call", "nonsense", "verify_backend"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("unknown engine", json.loads(err)["message"])
+
+    def test_one_word_gives_one_answer(self):
+        # `status` used to be a command as well as an operation, and the two
+        # returned different payloads.
+        _exit_code, out, _err = _run(["do", "read_status"])
+
+        payload = json.loads(out)
+        self.assertIn("fluidics", payload)
+        self.assertIn("session", payload)
+
     def test_pipelines_are_listed(self):
         _exit_code, out, _err = _run(["pipelines"])
 
         self.assertIn("setup", {line["id"] for line in json.loads(out)})
 
-    def test_nothing_on_the_command_line_runs_an_engine_action(self):
-        # Reading them is useful and describe does that. Running one is the low
-        # level, and the command line is the workflow layer -- engine actions stay
-        # reachable from Python instead.
+    def test_the_command_line_reaches_every_level(self):
+        # call is the low level, do is an operation, run is a pipeline.
         commands = build_parser()._subparsers._group_actions[0].choices  # type: ignore[attr-defined]
 
         self.assertEqual(
             set(commands),
-            {"describe", "operations", "do", "pipelines", "plan", "run", "status", "serve"},
+            {"describe", "operations", "do", "call", "pipelines", "plan", "run", "serve"},
         )
         self.assertEqual(commands["do"]._actions[1].dest, "operation")
         self.assertEqual(commands["run"]._actions[1].dest, "pipeline")
@@ -84,7 +103,7 @@ class SurfaceTests(unittest.TestCase):
         self.assertEqual([stage["operation"] for stage in stages], ["connect_fluidics", "apply_corrections", "run_priming"])
 
     def test_status_reports_the_session_and_the_instrument(self):
-        _exit_code, out, _err = _run(["status"])
+        _exit_code, out, _err = _run(["do", "read_status"])
 
         payload = json.loads(out)
         self.assertIn("fluidics", payload)
@@ -116,7 +135,7 @@ class ProjectTests(unittest.TestCase):
     def test_a_project_can_be_created_for_the_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             exit_code, out, _err = _run(
-                ["--project", f"{tmp}/rig.admetp", "--create-project", "status"]
+                ["--project", f"{tmp}/rig.admetp", "--create-project", "do", "read_status"]
             )
 
             self.assertEqual(exit_code, 0)
