@@ -168,6 +168,14 @@ class StepTests(unittest.TestCase):
         self.assertEqual(set(op.requires), {"fluidics", "corrections", "idle"})
         self.assertIn("steps", op.raw)
 
+    def test_describe_says_what_each_trigger_takes(self):
+        # Otherwise the only way to learn it is to be refused.
+        described = Admet().describe("run_steps")
+
+        trigger = described["structured_params"]["steps"]["items"]["properties"]
+        self.assertIn("target_volume_ul", trigger["trigger_params"]["description"])
+        self.assertIn("duration_s", trigger["trigger_params"]["description"])
+
     def test_the_declared_triggers_are_the_ones_that_exist(self):
         from admet.engines.acquisition.triggers import TRIGGER_TYPES, create_trigger
 

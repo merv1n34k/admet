@@ -204,6 +204,8 @@ class Admet:
                 {"name": name, "why": _requirement_reason(name)} for name in op.requires
             ],
             "params": [_describe_param(param) for param in op.params],
+            # Settings too structured for a Param carry their own JSON schema.
+            "structured_params": op.raw,
             "engine_actions": list(op.uses),
             "protocol": op.protocol,
             "starts_protocol": op.starts_protocol,

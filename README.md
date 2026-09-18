@@ -1,184 +1,213 @@
 # admet
 
-Microfluidics acquisition and analysis, without an interface.
+Microfluidics acquisition and analysis, with no interface of its own. A terminal,
+an MCP client, or a program drives it; each reaches the same three levels.
 
-This is the engine layer: it drives a Fluigent pressure controller and a Basler
-camera, runs experiment protocols against them, records synchronised video and
-fluidics data into a project, and analyses the result. You talk to it from a
-terminal, from Python, or over MCP — there is no window.
-
-An interface used to live here and was removed; see [What is not here](#what-is-not-here).
-
-## Start
-
-```bash
-make setup                 # uv sync --all-extras
-make test                  # 218 tests, all simulated, ~4s
+```
+  low    an engine action        one call to a device, no guards
+  med    an operation            the same call, plus the conditions under which
+                                 using it is not a mistake
+  high   a pipeline              several operations in order
 ```
 
-Nothing above touches hardware. Every test runs against the simulated backend,
-and that is enforced rather than assumed.
+It drives a Fluigent pressure controller and a Basler camera, runs protocols
+against them, records synchronised video and fluidics data into a project, and
+analyses the result.
 
-Prove it works end to end without a rig attached:
-
-```bash
-uv run admet describe acquisition
-uv run admet run acquisition connect_fluidics --set simulated=true
+```sh
+make setup      # uv sync --all-extras
+make test       # all simulated, no hardware touched
 ```
 
-## Where things are
+Nothing has to be read to start. Ask the system what it is:
 
-11,700 lines. Read them in this order:
-
-| Path | Lines | What it is |
-| --- | --- | --- |
-| `engines/acquisition/protocols.py` | 310 | **The experiments.** Edit this to add one. |
-| `engines/acquisition/triggers.py` | 281 | What a step can wait for: time, volume, stability, a threshold. |
-| `engines/acquisition/pipeline.py` | 323 | Runs declared steps against the hardware. Knows no experiment by name. |
-| `engines/acquisition/engine.py` | 752 | The action surface: 29 actions, 62 settings. Everything outside talks to this. |
-| `engines/acquisition/fluidics/` | ~900 | The Fluigent SDK, channels, polling, CSV logging. |
-| `engines/acquisition/camera/` | ~700 | Basler camera, live frames, video writing. |
-| `engines/{opencv,cellpose}/` | ~4,000 | Droplet detection and segmentation. |
-| `core/` | 1,142 | Engine contract, parameter validation, project store. |
-| `workflows/` | ~1,400 | Planning arithmetic, batch analysis, stored check history. |
-| `mcp/` | ~290 | Engine actions as tools a program can call. |
-
-An engine declares what it can do (`ActionSpec`) and what each action takes
-(`Param`). Everything else — the CLI, the MCP tool list — is generated from that
-declaration, so there is no second description to keep in step.
-
-## Driving it
-
-### From a terminal
-
-```bash
-uv run admet describe acquisition          # actions and settings, as JSON
-uv run admet run acquisition connect_fluidics --set simulated=true
-uv run admet run acquisition run_protocol \
-    --set pipeline_name=Wash --set wash_oil_volume_ul=500 --set tick_s=0.2
+```sh
+admet describe                 # the three levels, and what is in each
+admet describe run_priming     # one operation: its settings and its guards
+admet describe acquisition     # one engine: its actions, and what drives them
 ```
 
-`--set NAME=VALUE` reads the value as what it looks like: `true` is a boolean,
-`42` an integer, `2.5` a number, anything else text. For values a shell would
-mangle, use `--settings-json '{"pipeline_name": "Wash"}'`.
+## Running something
 
-### From Python
+```sh
+admet do connect_fluidics --set simulated=true
+admet do apply_corrections
+admet do run_priming --set prime_oil_volume_ul=40
+
+admet run setup --set simulated=true      # a pipeline: several of the above
+admet plan setup                          # what it would do, without doing it
+
+admet call acquisition set_camera_settings --set camera_exposure_us=3000
+```
+
+`do` is an operation, `run` is a pipeline, `call` is one engine action with no
+guards. `--set name=value` for scalars, `--json '{...}'` for anything structured.
+
+Each invocation is its own process, so a connection does not outlive it. For a
+sequence, use MCP or Python.
+
+## Reading a name
+
+Every id is a verb then its subject, and the same call is called the same thing
+at every level: the operation `connect_fluidics` drives the action
+`connect_fluidics`.
+
+Each one also declares what calling it does, which the name alone cannot say:
+
+| kind | meaning |
+| --- | --- |
+| `read` | answers a question and changes nothing |
+| `write` | has finished having its effect when it returns |
+| `start` | leaves something running after it returns — wait for it, or ask again |
+
+`run_priming` is a `start`: it reports success while liquid is still moving.
+
+And which half of the system it belongs to — `control` for the instrument,
+`analyze` for what it produced, `general` for the session both work in:
+
+```sh
+admet operations --target analyze
+```
+
+## MCP
+
+```sh
+admet serve --simulated
+```
+
+63 tools over stdio, generated from the same declarations `describe` reads, so
+there is no second description to fall out of step. The name says the level:
+
+```
+  acquisition_set_camera_settings   low    every camera setting, typed
+  run_priming                       med    guarded, and it says what it needs
+  pipeline_setup                    high   connect, correct, prime
+```
+
+`--simulated` keeps a session simulated: asking for real hardware is refused
+rather than quietly given.
+
+## Writing a protocol
+
+A protocol is a list of steps. A step holds channels at setpoints until its
+trigger fires.
+
+Run one you wrote, without adding it to the build — over MCP, or with
+`admet do run_steps --json`:
+
+```json
+{
+  "steps": [
+    {"name": "wet the oil line",
+     "sensor_setpoints": {"0": 5.0},
+     "trigger_type": "volume",
+     "trigger_params": {"sensor_index": 0, "target_volume_ul": 2.0},
+     "on_complete": "hold"},
+    {"name": "settle",
+     "sensor_setpoints": {"0": 2.0},
+     "trigger_type": "time",
+     "trigger_params": {"duration_s": 30.0},
+     "on_complete": "zero"}
+  ]
+}
+```
+
+Triggers: `time`, `volume`, `stability`, `threshold`, `condition`,
+`confirmation`. What each one needs is read from the trigger itself and reported
+by `describe run_steps`, so it cannot drift. On completion: `hold`, `zero`,
+`revert`.
+
+To ship a protocol with the build, write a builder in
+`src/admet/workflows/protocols.py` and add an `Operation` naming it in
+`operations.py`. It then appears in the CLI, in MCP and in `describe` with no
+other change.
+
+A pipeline is plain Python — operations in order:
 
 ```python
-from admet.app import create_engine_api
-from admet.core.run import RunJob
-
-api = create_engine_api("acquisition")
-api.run(RunJob(id="connect", engine=api.id, action="connect_fluidics",
-               settings={"simulated": True, "start_polling": True}))
-api.run(RunJob(id="run", engine=api.id, action="run_protocol",
-               settings={"pipeline_name": "Priming", "prime_oil_volume_ul": 40.0,
-                         "prime_aqueous_volume_ul": 5.0, "tick_s": 0.2}))
-
-while api.engine.pipeline_state == "running":
-    if ...:                                    # a step is waiting for the operator
-        api.run(RunJob(id="ok", engine=api.id, action="confirm_protocol"))
+def _setup(settings):
+    yield step("connect_fluidics", simulated=settings["simulated"])
+    yield step("apply_corrections")
+    yield step("run_priming", prime_oil_volume_ul=settings["prime_oil_volume_ul"])
 ```
 
-Progress arrives as `PipelineEvent` objects on `api.engine.pipeline_queue`.
+Each stage is checked by the operation's own guards as it is reached, so a
+pipeline cannot do what the operation would have refused. A stage that starts a
+protocol is waited on. A protocol that stops for the operator stops the
+pipeline: it reports which stage it reached, the operator answers with
+`confirm_protocol`, and the run resumes with `--from-stage`. Nothing is
+auto-confirmed — a confirmation exists because somebody has to look at the rig.
 
-### Over MCP
+## Guards
 
-```bash
-uv run admet serve --simulated      # JSON-RPC on stdio
+An operation refuses rather than warning, and says what to do:
+
+```
+run_priming: correction factors have not been applied, so flows would not be
+true flows; run apply_corrections first
 ```
 
-Each engine action becomes a tool named `<engine>_<action>` — for example
-`acquisition_run_protocol` — carrying the parameter types, ranges and choices the
-action accepts. Point any MCP client at the command above.
+The guards are `project`, `fluidics`, `camera`, `corrections`, `idle`,
+`running`, `sources`. `describe <operation>` lists the ones it needs and why.
 
-**Simulated mode guards the connection, not each action.** Connecting is forced
-simulated; asking for real hardware is refused with the reason. Once connected
-simulated, everything downstream acts on the simulation, so protocols run
-normally. The camera has no simulated flag, so it is refused unless
-`PYLON_CAMEMU=2` is set before the server starts.
-
-Use `uv run admet serve` without the flag to drive real hardware.
-
-## Adding an experiment
-
-Protocols are Python, declared as data. A step says what to set, what to wait
-for, and what to leave the channel doing.
-
-**1.** Write the builder in `engines/acquisition/protocols.py`:
-
-```python
-def build_rinse_protocol(settings: dict) -> list[ProtocolStep]:
-    volume_ul = float(settings["rinse_volume_ul"])
-    return [
-        ProtocolStep(
-            name="Rinse Oil L",
-            sensor_setpoints={OIL_L_SENSOR: 250.0},
-            trigger_type="volume",
-            trigger_params={"sensor_index": OIL_L_SENSOR, "target_volume_ul": volume_ul},
-            on_complete="zero",
-            confirm_message=f"Rinse with {volume_ul:g} uL. Proceed?",
-        ),
-    ]
-```
-
-**2.** Add it to `PROTOCOLS` in the same file:
-
-```python
-PROTOCOLS = {..., "Rinse": build_rinse_protocol}
-```
-
-**3.** Declare each new setting in `engines/acquisition/settings.py`, and list it
-on the `run_protocol` action in `engines/acquisition/engine.py`. A setting that
-is not in both places never reaches your builder — validation rejects unknown
-settings before the action runs.
-
-It is then selectable everywhere at once: `--set pipeline_name=Rinse`, the
-`pipeline_name` enum in the MCP tool schema, and `build_protocol("Rinse", ...)`.
-
-### Triggers
-
-| `trigger_type` | Waits for | Bounded by |
-| --- | --- | --- |
-| `time` | a duration | itself |
-| `volume` | a channel to deliver a volume | nothing — pair it with a plausible flow |
-| `stability` | flow to hold steady within a tolerance | `timeout_s`, and it reports timing out |
-| `threshold` | a reading to sit near a target | `stable_duration_s` |
-| `condition` | a reading to cross a bound | latching |
-
-A step with `confirm_message` waits for the operator before it runs. Nothing else
-in the system is keyed off that text.
-
-`on_complete` is `hold` (leave it running), `zero` (setpoint to nothing) or
-`revert` (release the channel).
+Engine actions have no guards. That is what they are for, and `call` reaches
+them deliberately.
 
 ## Projects
 
-A project is a directory ending in `.admetp`, holding `manifest.json` and a
-`records/` tree: `camera/*.avi`, `fluidics/*.csv`, and `checks/*.json` for stored
-system checks. `core/project.py` is the only writer. Existing projects are
-readable unchanged.
+A project is a `.admetp` directory holding a manifest, recordings and results.
+Core decides where every file goes — an engine is handed paths and writes to
+them, never choosing its own, so nothing is written outside the open session.
 
-## What is not here
-
-A Qt control window and a NiceGUI analysis interface were removed — 10,483 lines,
-42% of the codebase — to leave something a new maintainer can read. They are in
-git history on the `admet2` branch and can be reattached against this engine API.
-
-A YAML protocol system was written and removed in the same pass: it parsed and
-compiled documents but had no runtime, and with the same person writing both the
-protocols and the code, a markup language earned nothing that thirty lines of
-Python did not. Also on `admet2`.
-
-## Testing
-
-```bash
-make test          # everything, simulated
-make lint          # ruff
+```sh
+admet do create_project --set path=runs/today.admetp
+admet do open_project --set path=runs/today.admetp
+admet do list_projects --set root=runs
 ```
 
-Hardware is never touched by tests. The Fluigent simulator is driven through the
-real SDK path, and the camera through Basler's emulator (`PYLON_CAMEMU`), so the
-code under test is the code that runs on the rig — but **simulation is not bench
-validation**: nothing here proves a pressure or a flow is correct on real
-hardware.
+Or for a single invocation:
+`admet --project runs/today.admetp --create-project do read_status`
+
+## From Python
+
+```python
+from admet.core.service import Admet
+
+admet = Admet()
+admet.create_project("runs/today.admetp")
+admet.do("connect_fluidics", {"simulated": True})
+admet.do("apply_corrections")
+admet.do("run_priming", {"prime_oil_volume_ul": 40.0})
+admet.wait_for_protocol()
+```
+
+`Admet` is the way in. It owns the session, decides where files go, and routes
+to whichever engine is wanted. Engines stay reachable — `admet.engine_action(...)`
+and `admet.engine(...)` — but they hold no protocols and no paths.
+
+## Layout
+
+```
+  src/admet/core/        the Admet service: sessions, paths, routing
+                         (core/engine.py is the contract engines implement)
+  src/admet/workflows/   protocols, operations, guards, pipelines
+  src/admet/engines/     the workhorses: acquisition, opencv, cellpose
+  src/admet/mcp/         the stdio server, generated from the declarations
+  src/admet/app.py       the command line
+```
+
+An interface used to live here and was removed. It is on the `admet2` branch and
+can be merged back; nothing outside `app.py` imported it.
+
+## Tests
+
+```sh
+make test        # unit tests
+make test-all    # everything
+make lint
+```
+
+Every test runs against the Fluigent simulator and the Pylon camera emulator,
+and that is enforced rather than assumed. Nothing here has been validated on a
+bench: simulation shows the software is consistent, not that a measurement is
+right.
