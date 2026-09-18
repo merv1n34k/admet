@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from queue import Queue
 from typing import Protocol
@@ -65,7 +68,25 @@ class StepStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
+    TIMED_OUT = "timed_out"
     SKIPPED = "skipped"
+    CANCELLED = "cancelled"
+    ERROR = "error"
+
+
+class StepOutcome(StrEnum):
+    """How a step ended, which "the trigger fired" does not say.
+
+    A stability trigger fires when the flow holds still and also when it gives
+    up waiting. Both used to be recorded as completed, so a settle that never
+    happened read exactly like one that did.
+    """
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    TIMED_OUT = "timed_out"
+    SKIPPED = "skipped"
+    CANCELLED = "cancelled"
     ERROR = "error"
 
 @dataclass
@@ -120,6 +141,12 @@ class PipelineEvent:
     error_msg: str = ""
     step_volumes: dict[int, float] = field(default_factory=dict)
     confirmation_message: str = ""
+    # Set by the engine as it emits. The sequence is what lets a reader ask for
+    # what it has not seen without removing anything.
+    sequence: int = 0
+    at: str = ""
+    monotonic: float = 0.0
+    outcome: StepOutcome = StepOutcome.RUNNING
 
 class PipelineEngine(threading.Thread):
     def __init__(
@@ -131,6 +158,7 @@ class PipelineEngine(threading.Thread):
         sensor_to_channel: dict[int, int],
         *,
         tick_s: float = 0.1,
+        recent_events: int = 500,
     ):
         super().__init__(daemon=True, name="PipelineEngine")
         self._steps = steps
@@ -141,6 +169,13 @@ class PipelineEngine(threading.Thread):
         self._tick_s = tick_s
 
         self._state = PipelineState.IDLE
+
+        # Observation, kept apart from the queue for the same reason as the
+        # acquisition snapshots: a full queue must not cost a reader an event.
+        self._sequence = 0
+        self._latest_event: PipelineEvent | None = None
+        self._recent_events: deque[PipelineEvent] = deque(maxlen=recent_events)
+        self._observation_lock = threading.Lock()
         self._current_step_idx = 0
         self._step_start_volumes: dict[int, float] = {}
 
@@ -212,7 +247,7 @@ class PipelineEngine(threading.Thread):
         except Exception as exc:
             self._state = PipelineState.ERROR
             log.exception("Pipeline error")
-            self._emit_event(error_msg=str(exc))
+            self._emit_event(error_msg=str(exc), outcome=StepOutcome.ERROR)
         finally:
             self._channel_manager.pipeline_release_all()
             if self._state is PipelineState.STOPPING:
@@ -221,7 +256,14 @@ class PipelineEngine(threading.Thread):
                 # going, and everything gated on that stays shut for good.
                 self._state = PipelineState.IDLE
                 log.info("Pipeline stopped")
-            self._emit_event()
+                self._emit_event(outcome=StepOutcome.CANCELLED, about_the_run=True)
+                return
+            self._emit_event(
+                outcome=StepOutcome.ERROR
+                if self._state is PipelineState.ERROR
+                else StepOutcome.COMPLETED,
+                about_the_run=True,
+            )
 
     def _execute_step(self, step: PipelineStep) -> None:
         step.status = StepStatus.RUNNING
@@ -233,13 +275,13 @@ class PipelineEngine(threading.Thread):
                 if self._confirm_event.wait(timeout=self._tick_s):
                     break
             if self._stop_event.is_set():
-                step.status = StepStatus.SKIPPED
-                self._emit_event()
+                step.status = StepStatus.CANCELLED
+                self._emit_event(outcome=StepOutcome.CANCELLED)
                 return
             if self._skip_event.is_set():
                 self._skip_event.clear()
                 step.status = StepStatus.SKIPPED
-                self._emit_event()
+                self._emit_event(outcome=StepOutcome.SKIPPED)
                 return
 
         self._step_start_volumes.clear()
@@ -269,17 +311,27 @@ class PipelineEngine(threading.Thread):
             self._emit_event(progress=step.trigger.progress(), step_volumes=step_volumes)
 
             if triggered:
-                step.status = StepStatus.COMPLETED
+                # A trigger that gave up waiting also fires. Asking it which of
+                # the two happened is the difference between a settle and a
+                # timeout wearing a settle's clothes.
+                timed_out = bool(getattr(step.trigger, "timed_out", False))
+                step.status = StepStatus.TIMED_OUT if timed_out else StepStatus.COMPLETED
                 self._apply_on_complete(step)
-                self._emit_event(step_volumes=step_volumes)
+                self._emit_event(
+                    step_volumes=step_volumes,
+                    outcome=StepOutcome.TIMED_OUT if timed_out else StepOutcome.COMPLETED,
+                )
                 return
 
             self._stop_event.wait(self._tick_s)
 
         if self._skip_event.is_set():
             self._skip_event.clear()
-        step.status = StepStatus.SKIPPED
-        self._emit_event()
+            step.status = StepStatus.SKIPPED
+            self._emit_event(outcome=StepOutcome.SKIPPED)
+            return
+        step.status = StepStatus.CANCELLED
+        self._emit_event(outcome=StepOutcome.CANCELLED)
 
     def _apply_on_complete(self, step: PipelineStep) -> None:
         if step.on_complete == "hold":
@@ -322,29 +374,62 @@ class PipelineEngine(threading.Thread):
             for sensor_index, start_volume in self._step_start_volumes.items()
         }
 
+    def latest_event(self) -> PipelineEvent | None:
+        """The newest event, without removing it. None before the first."""
+        with self._observation_lock:
+            return self._latest_event
+
+    def events_after(self, sequence: int = 0, limit: int = 100) -> list[PipelineEvent]:
+        """Events newer than a sequence, oldest first, without removing any.
+
+        Bounded at both ends: the ring holds only so much history, so a reader
+        that falls far enough behind sees a gap rather than a stall. The
+        sequence it gets back tells it where it now is.
+        """
+        with self._observation_lock:
+            events = list(self._recent_events)
+        newer = [event for event in events if event.sequence > sequence]
+        return newer[: max(0, limit)] if limit else newer
+
     def _emit_event(
         self,
         progress: float = 0.0,
         error_msg: str = "",
         step_volumes: dict[int, float] | None = None,
         confirmation_message: str = "",
+        outcome: StepOutcome = StepOutcome.RUNNING,
+        about_the_run: bool = False,
     ) -> None:
+        # A terminal event is about the run, so it carries no step name. Left
+        # with the last step's name, a run that completed after that step timed
+        # out would read as the step having completed.
         step_name = ""
-        if 0 <= self._current_step_idx < len(self._steps):
+        if not about_the_run and 0 <= self._current_step_idx < len(self._steps):
             step_name = self._steps[self._current_step_idx].name
             if progress == 0.0:
                 progress = self._steps[self._current_step_idx].trigger.progress()
 
-        event = PipelineEvent(
-            state=self._state,
-            current_step=self._current_step_idx,
-            total_steps=len(self._steps),
-            step_name=step_name,
-            progress=progress,
-            error_msg=error_msg,
-            step_volumes=step_volumes or {},
-            confirmation_message=confirmation_message,
-        )
+        with self._observation_lock:
+            self._sequence += 1
+            event = PipelineEvent(
+                state=self._state,
+                current_step=self._current_step_idx,
+                total_steps=len(self._steps),
+                step_name=step_name,
+                progress=progress,
+                error_msg=error_msg,
+                step_volumes=step_volumes or {},
+                confirmation_message=confirmation_message,
+                sequence=self._sequence,
+                at=datetime.now().astimezone().isoformat(timespec="milliseconds"),
+                monotonic=time.monotonic(),
+                outcome=outcome,
+            )
+            self._latest_event = event
+            self._recent_events.append(event)
+
+        # Best effort, and after the observation state: a full queue must not
+        # cost a reader the confirmation prompt or the outcome.
         if not self._event_queue.full():
             self._event_queue.put(event)
 

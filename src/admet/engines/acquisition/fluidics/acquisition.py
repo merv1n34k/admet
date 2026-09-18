@@ -55,6 +55,7 @@ class AcquisitionThread(threading.Thread):
         stats_window_samples: int = STATS_WINDOW_SAMPLES,
         stability_window_samples: int = STABILITY_WINDOW_SAMPLES,
         stability_tolerance_ul_min: float = STABILITY_TOLERANCE_UL_MIN,
+        recent_samples: int = 600,
     ):
         super().__init__(daemon=True, name="AcquisitionThread")
         self._sdk = sdk
@@ -79,6 +80,13 @@ class AcquisitionThread(threading.Thread):
         ]
         self._volumes_ul: list[float] = [0.0] * sensor_count
         self._lock = threading.Lock()
+
+        # Observation, kept apart from the queue. The queue is bounded and has
+        # one consumer at most; anyone asking what the rig is doing right now
+        # must not have to drain it, and must not be starved when it is full.
+        self._latest: DataSnapshot | None = None
+        self._recent: deque[DataSnapshot] = deque(maxlen=recent_samples)
+        self._observation_lock = threading.Lock()
 
     def set_csv_logger(self, logger: CsvLogger | None) -> None:
         with self._csv_lock:
@@ -157,9 +165,26 @@ class AcquisitionThread(threading.Thread):
                     stability=stability,
                 )
 
+        with self._observation_lock:
+            self._latest = snapshot
+            self._recent.append(snapshot)
+
+        # Best effort, and deliberately after the observation state: a full
+        # queue must not cost anyone the current reading.
         if not self._data_queue.full():
             self._data_queue.put(snapshot)
         return snapshot
+
+    def latest_snapshot(self) -> DataSnapshot | None:
+        """The newest reading, without removing it. None before the first poll."""
+        with self._observation_lock:
+            return self._latest
+
+    def recent_snapshots(self, limit: int = 0) -> list[DataSnapshot]:
+        """The newest readings, oldest first, for a short sampling window."""
+        with self._observation_lock:
+            snapshots = list(self._recent)
+        return snapshots[-limit:] if limit > 0 else snapshots
 
     def _is_stable(self, history: deque) -> bool:
         if len(history) < history.maxlen:
