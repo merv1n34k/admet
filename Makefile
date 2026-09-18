@@ -1,17 +1,18 @@
-ANALYZE_PORT ?= 8080
-
-.PHONY: setup dev control analyze build test test-all test-core test-analyze test-control lint fmt clean
+.PHONY: setup serve serve-live describe build test test-all test-core test-analyze test-control lint fmt clean
 
 setup:
 	uv sync --all-extras
 
-dev: analyze
+# MCP on stdio. Simulated by default: connecting is forced simulated and a
+# request for real hardware is refused.
+serve: setup
+	PYLON_CAMEMU=2 uv run admet serve --simulated
 
-control: setup
-	PYLON_CAMEMU=2 uv run admet control
+serve-live: setup
+	uv run admet serve
 
-analyze: setup
-	uv run admet analyze --port $(ANALYZE_PORT)
+describe: setup
+	uv run admet describe acquisition
 
 build:
 	uv build
