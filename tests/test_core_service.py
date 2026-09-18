@@ -170,6 +170,32 @@ class RegistrationTests(unittest.TestCase):
             self.assertEqual(load_session(admet.project.path).files, ())
 
 
+class PhantomFileTests(unittest.TestCase):
+    def test_a_recording_without_a_camera_claims_no_video(self):
+        # Both paths are allocated whether or not a camera is attached. A manifest
+        # that lists a file which was never written is worse than one that omits
+        # it, because everything downstream believes it.
+        with tempfile.TemporaryDirectory() as tmp:
+            admet = Admet()
+            store = admet.create_project(Path(tmp) / "rig.admetp")
+            admet.run("acquisition", "connect_fluidics", {"simulated": True, "start_polling": True})
+            admet.run("acquisition", "start_recording", {"recording_label": "csvonly"})
+            time.sleep(0.6)
+            admet.run("acquisition", "stop_recording")
+            time.sleep(0.3)
+            admet.run("acquisition", "disconnect_fluidics")
+
+            session = load_session(store.path)
+
+            roles = {file.role for file in session.files}
+            self.assertIn("control_fluidics_csv", roles)
+            self.assertNotIn("control_video", roles)
+            for file in session.files:
+                self.assertTrue(
+                    (store.path / file.path).is_file(), f"{file.path} is in the manifest"
+                )
+
+
 class RoutingTests(unittest.TestCase):
     def test_an_unknown_engine_names_the_ones_there_are(self):
         with self.assertRaises(LookupError) as caught:

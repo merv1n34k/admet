@@ -304,32 +304,42 @@ class ProjectStore:
         return normalized
 
     def _register_control_recording(self, recording: dict[str, Any]) -> None:
+        """List what the recording actually produced.
+
+        A recording without a camera writes a fluidics log and no video. Both
+        paths are allocated either way, so registering both unconditionally puts
+        a file in the manifest that was never written -- and a manifest that
+        claims a file exists is worse than one that omits it, because everything
+        downstream believes it.
+        """
         files = list(self.session.files)
-        video_id = "video-" + _safe_id(str(recording["recording_id"]))
-        csv_id = "fluidics-" + _safe_id(str(recording["recording_id"]))
-        files = _upsert_file(
-            files,
-            SessionFile(
-                id=video_id,
-                path=str(recording["video_path"]),
-                role="control_video",
-                media_type="video/avi",
-                metadata=_video_metadata(recording),
-            ),
-        )
-        files = _upsert_file(
-            files,
-            SessionFile(
-                id=csv_id,
-                path=str(recording["fluidics_csv"]),
-                role="control_fluidics_csv",
-                media_type="text/csv",
-                metadata=_csv_metadata(recording),
-            ),
-        )
+        recording_id = _safe_id(str(recording["recording_id"]))
+        written: list[str] = []
+        for key, prefix, role, media_type, describe in (
+            ("video_path", "video-", "control_video", "video/avi", _video_metadata),
+            ("fluidics_csv", "fluidics-", "control_fluidics_csv", "text/csv", _csv_metadata),
+        ):
+            stored = str(recording.get(key) or "")
+            if not stored or not self.resolve_file_path(SessionFile("probe", stored, role)).is_file():
+                continue
+            file_id = prefix + recording_id
+            written.append(file_id)
+            files = _upsert_file(
+                files,
+                SessionFile(
+                    id=file_id,
+                    path=stored,
+                    role=role,
+                    media_type=media_type,
+                    metadata=describe(recording),
+                ),
+            )
+        if not written:
+            return
+
         existing = _find_item(self.session.items, "acq-records")
         item_files = list(existing.files if existing else ())
-        for file_id in (video_id, csv_id):
+        for file_id in written:
             if file_id not in item_files:
                 item_files.append(file_id)
         item = SessionItem(
@@ -337,7 +347,10 @@ class ProjectStore:
             project_type="control_acquisition",
             engine="acquisition",
             files=tuple(item_files),
-            metadata={"recording_count": len(item_files) // 2, "report_dir": "records"},
+            metadata={
+                "recording_count": len({name.split("-", 1)[1] for name in item_files}),
+                "report_dir": "records",
+            },
         )
         items = _upsert_item(list(self.session.items), item)
         self.session = replace(self.session, files=tuple(files), items=tuple(items))
