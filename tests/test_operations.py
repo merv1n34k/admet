@@ -13,7 +13,6 @@ from admet.core.service import Admet
 from admet.core.engine import KINDS, READ, START
 from admet.workflows.operations import (
     ANALYZE,
-    BY_ID,
     CONTROL,
     GENERAL,
     OPERATIONS,
@@ -22,7 +21,6 @@ from admet.workflows.operations import (
     Refused,
     operation,
 )
-from admet.workflows.pipelines import PIPELINES, pipeline, step
 
 
 class DeclarationTests(unittest.TestCase):
@@ -278,112 +276,6 @@ class GuardTests(unittest.TestCase):
             operation("confirm_protocol").check(self.COLD)
 
 
-class PipelineDeclarationTests(unittest.TestCase):
-    def test_every_stage_names_an_operation_that_exists(self):
-        settings = {
-            "simulated": True,
-            "prime_oil_volume_ul": 1.0,
-            "prime_aqueous_volume_ul": 1.0,
-            "tick_s": 0.1,
-        }
-        for line in PIPELINES:
-            bound = {param.name: settings.get(param.name, param.default) for param in line.params}
-            for stage in line.stages(bound):
-                with self.subTest(pipeline=line.id, stage=stage.operation):
-                    self.assertIn(stage.operation, BY_ID)
-
-    def test_a_pipeline_is_written_as_operations_in_order(self):
-        stages = pipeline("setup").stages(
-            {
-                "simulated": True,
-                "prime_oil_volume_ul": 40.0,
-                "prime_aqueous_volume_ul": 5.0,
-                "tick_s": 0.2,
-            }
-        )
-
-        self.assertEqual(
-            [stage.operation for stage in stages], ["connect_fluidics", "apply_corrections", "run_priming"]
-        )
-
-    def test_a_stage_carries_the_settings_it_was_written_with(self):
-        made = step("run_priming", prime_oil_volume_ul=12.0)
-
-        self.assertEqual(made.settings["prime_oil_volume_ul"], 12.0)
-
-    def test_an_unknown_pipeline_names_the_ones_there_are(self):
-        with self.assertRaises(LookupError) as caught:
-            pipeline("nonsense")
-
-        self.assertIn("setup", str(caught.exception))
-
-
-class PipelineRunTests(unittest.TestCase):
-    def test_a_pipeline_stops_where_a_guard_refuses(self):
-        # checks needs fluidics, which nothing has connected.
-        report = Admet().run_pipeline("checks", {"tick_s": 0.1}, wait_s=5)
-
-        self.assertFalse(report["completed"])
-        self.assertEqual(report["stopped_at"], 0)
-        self.assertEqual(report["stages"][0]["outcome"], "refused")
-        self.assertIn("not connected", report["stages"][0]["reason"])
-
-    def test_a_pipeline_stops_where_a_protocol_wants_the_operator(self):
-        # Nothing is auto-confirmed: a confirmation exists because somebody has
-        # to look at the rig.
-        admet = Admet()
-
-        report = admet.run_pipeline(
-            "setup",
-            {
-                "simulated": True,
-                "prime_oil_volume_ul": 2.0,
-                "prime_aqueous_volume_ul": 1.0,
-                "tick_s": 0.1,
-            },
-            wait_s=15,
-        )
-
-        self.assertFalse(report["completed"])
-        self.assertEqual(report["reason"], "waiting")
-        self.assertEqual(report["stages"][0]["outcome"], "completed")
-        self.assertEqual(report["stages"][1]["outcome"], "completed")
-        self.assertEqual(report["stages"][2]["operation"], "run_priming")
-        admet.do("stop_protocol")
-        admet.do("disconnect_fluidics")
-
-    def test_the_stages_before_a_stop_really_happened(self):
-        admet = Admet()
-
-        admet.run_pipeline(
-            "setup",
-            {"simulated": True, "prime_oil_volume_ul": 2.0, "tick_s": 0.1},
-            wait_s=15,
-        )
-
-        state = admet.state()
-        self.assertTrue(state["fluidics"])
-        self.assertTrue(state["corrections"])
-        admet.do("stop_protocol")
-        admet.do("disconnect_fluidics")
-
-    def test_a_run_can_be_picked_up_from_a_later_stage(self):
-        admet = Admet()
-        admet.do("connect_fluidics", {"simulated": True})
-        admet.do("apply_corrections")
-
-        report = admet.run_pipeline(
-            "setup",
-            {"simulated": True, "prime_oil_volume_ul": 2.0, "tick_s": 0.1},
-            from_stage=2,
-            wait_s=15,
-        )
-
-        self.assertEqual(report["stages"][0]["outcome"], "skipped")
-        self.assertEqual(report["stages"][1]["outcome"], "skipped")
-        self.assertEqual(report["stages"][2]["operation"], "run_priming")
-        admet.do("stop_protocol")
-        admet.do("disconnect_fluidics")
 
 
 class ProjectAwareTests(unittest.TestCase):
@@ -451,7 +343,6 @@ class DescribeTests(unittest.TestCase):
         described = Admet().describe()
 
         self.assertEqual(len(described["operations"]), len(OPERATIONS))
-        self.assertEqual({line["id"] for line in described["pipelines"]}, {p.id for p in PIPELINES})
         self.assertIn("acquisition", {engine["id"] for engine in described["engines"]})
 
     def test_describing_an_operation_says_why_each_guard_is_there(self):
@@ -463,14 +354,6 @@ class DescribeTests(unittest.TestCase):
         reasons = {entry["name"]: entry["why"] for entry in described["requires"]}
         self.assertIn("run connect_fluidics first", reasons["fluidics"])
 
-    def test_describing_a_pipeline_shows_its_stages(self):
-        described = Admet().describe("setup")
-
-        self.assertEqual(described["layer"], "pipeline")
-        self.assertEqual(
-            [stage["operation"] for stage in described["stages"]],
-            ["connect_fluidics", "apply_corrections", "run_priming"],
-        )
 
     def test_describing_an_engine_says_which_operations_drive_each_action(self):
         described = Admet().describe("acquisition")

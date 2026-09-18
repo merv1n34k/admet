@@ -151,14 +151,12 @@ class Admet:
     def describe(self, target: str = "") -> dict[str, Any]:
         """What exists, at whichever level was asked about.
 
-        With no target, the three layers side by side: the operations and
-        pipelines that are the way in, and the engines underneath them. With one,
-        the detail of that operation, pipeline or engine -- and for an operation,
-        which engine actions it drives, so the layers can be read against each
-        other rather than guessed at.
+        With no target, the operations that are the way in and the engines
+        underneath them. With one, the detail of that operation or engine -- and
+        for an operation, which engine actions it drives, so the two can be read
+        against each other rather than guessed at.
         """
         from admet.workflows.operations import BY_ID as OPERATIONS_BY_ID
-        from admet.workflows.pipelines import BY_ID as PIPELINES_BY_ID
 
         if not target:
             return {
@@ -172,9 +170,6 @@ class Admet:
                     }
                     for op in OPERATIONS_BY_ID.values()
                 ],
-                "pipelines": [
-                    {"id": line.id, "label": line.label} for line in PIPELINES_BY_ID.values()
-                ],
                 "engines": [
                     {"id": engine_id, "group": group} for engine_id, group in ENGINE_GROUPS.items()
                 ],
@@ -182,14 +177,10 @@ class Admet:
 
         if target in OPERATIONS_BY_ID:
             return self._describe_operation(OPERATIONS_BY_ID[target])
-        if target in PIPELINES_BY_ID:
-            return self._describe_pipeline(PIPELINES_BY_ID[target])
         if target in ENGINE_GROUPS:
             return self.describe_engine(target)
 
-        known = ", ".join(
-            sorted({*OPERATIONS_BY_ID, *PIPELINES_BY_ID, *ENGINE_GROUPS})
-        )
+        known = ", ".join(sorted({*OPERATIONS_BY_ID, *ENGINE_GROUPS}))
         raise LookupError(f"nothing called {target!r} to describe; there is: {known}")
 
     def _describe_operation(self, op: Any) -> dict[str, Any]:
@@ -211,19 +202,6 @@ class Admet:
             "starts_protocol": op.starts_protocol,
         }
 
-    def _describe_pipeline(self, line: Any) -> dict[str, Any]:
-        bound = {param.name: param.default for param in line.params}
-        return {
-            "layer": "pipeline",
-            "id": line.id,
-            "label": line.label,
-            "description": line.description,
-            "params": [_describe_param(param) for param in line.params],
-            "stages": [
-                {"index": index, "operation": stage.operation, "label": stage.described()}
-                for index, stage in enumerate(line.stages(bound))
-            ],
-        }
 
     def describe_engine(self, engine_id: str) -> dict[str, Any]:
         """A workhorse and everything it can be told to do.
@@ -298,91 +276,14 @@ class Admet:
         reachable from outside: an operation is the same primitive plus the
         conditions under which using it is not a mistake.
         """
-        from admet.workflows.operations import operation as find_operation
 
         op = find_operation(operation_id)
         op.check(self.state())
         settings = _fill_defaults(op, dict(settings or {}))
         return op.run(self, settings)
 
-    # -- pipelines -----------------------------------------------------------
-    def pipelines(self) -> list[dict[str, Any]]:
-        from admet.workflows.pipelines import PIPELINES
 
-        return [
-            {
-                "id": line.id,
-                "label": line.label,
-                "description": line.description,
-                "params": [
-                    {"name": p.name, "type": p.kind.value, "default": p.default} for p in line.params
-                ],
-            }
-            for line in PIPELINES
-        ]
 
-    def plan(self, pipeline_id: str, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        """The stages a pipeline would run, without running any of them."""
-        from admet.workflows.pipelines import pipeline as find_pipeline
-
-        line = find_pipeline(pipeline_id)
-        bound = _fill_defaults(line, dict(settings or {}))
-        return [
-            {"index": index, "operation": stage.operation, "label": stage.described()}
-            for index, stage in enumerate(line.stages(bound))
-        ]
-
-    def run_pipeline(
-        self,
-        pipeline_id: str,
-        settings: dict[str, Any] | None = None,
-        *,
-        from_stage: int = 0,
-        wait_s: float = 600.0,
-    ) -> dict[str, Any]:
-        """Run the stages in order, waiting for each protocol to finish.
-
-        Stops at the first stage that is refused, that fails, or that reaches a
-        step needing the operator -- and says which, so the run can be picked up
-        from there once it has been dealt with.
-        """
-        from admet.workflows.pipelines import pipeline as find_pipeline
-
-        line = find_pipeline(pipeline_id)
-        bound = _fill_defaults(line, dict(settings or {}))
-        stages = line.stages(bound)
-        report: list[dict[str, Any]] = []
-
-        for index, stage in enumerate(stages):
-            if index < from_stage:
-                report.append({"index": index, "operation": stage.operation, "outcome": "skipped"})
-                continue
-            entry: dict[str, Any] = {"index": index, "operation": stage.operation}
-            try:
-                entry["result"] = self.do(stage.operation, stage.settings)
-            except Exception as exc:
-                entry.update(outcome="refused", reason=f"{type(exc).__name__}: {exc}")
-                report.append(entry)
-                return {"pipeline": line.id, "completed": False, "stopped_at": index, "stages": report}
-
-            if find_operation(stage.operation).starts_protocol:
-                outcome = self.wait_for_protocol(timeout_s=wait_s)
-                entry["outcome"] = outcome
-                report.append(entry)
-                if outcome != "completed":
-                    return {
-                        "pipeline": line.id,
-                        "completed": False,
-                        "stopped_at": index,
-                        "reason": outcome,
-                        "stages": report,
-                    }
-                continue
-
-            entry["outcome"] = "completed"
-            report.append(entry)
-
-        return {"pipeline": line.id, "completed": True, "stages": report}
 
     def wait_for_protocol(self, *, timeout_s: float = 600.0, poll_s: float = 0.1) -> str:
         """Wait for the running protocol to end, or to want the operator.

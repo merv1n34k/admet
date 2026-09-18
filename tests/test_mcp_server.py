@@ -28,25 +28,23 @@ class SurfaceTests(unittest.TestCase):
         self.server = AdmetServer(simulated=True)
         self.names = {tool["name"] for tool in self.server.tools()}
 
-    def test_what_is_offered_is_the_workflow_layer(self):
+    def test_what_is_offered_is_the_guarded_operations(self):
         self.assertIn("run_priming", self.names)
-        self.assertIn("pipeline_setup", self.names)
         self.assertIn("create_project", self.names)
-
-    def test_all_three_levels_are_offered(self):
-        # Low: every device action, engine-prefixed, so a model can configure the
-        # camera and the channels in full. Med: a protocol written as steps.
-        # High: the pipelines.
-        self.assertIn("acquisition_set_camera_settings", self.names)
-        self.assertIn("acquisition_set_channel_pressure", self.names)
         self.assertIn("run_steps", self.names)
-        self.assertIn("pipeline_setup", self.names)
 
-    def test_a_name_says_which_level_it_belongs_to(self):
-        # Engine-prefixed is the unguarded low level; bare is the guarded
-        # operation. Both exist for the same call and must not be confused.
-        self.assertIn("acquisition_connect_fluidics", self.names)
-        self.assertIn("connect_fluidics", self.names)
+    def test_no_unguarded_engine_action_is_offered(self):
+        # A guard is the whole point of an operation, and over a wire to a model
+        # an unguarded primitive is the wrong default. They stay reachable from
+        # the Python binding, which is not this.
+        self.assertFalse({name for name in self.names if name.startswith("acquisition_")})
+        self.assertNotIn("set_channel_pressure", self.names)
+        self.assertNotIn("calibrate_channels", self.names)
+
+    def test_every_tool_is_an_operation_or_describe(self):
+        from admet.workflows.operations import BY_ID
+
+        self.assertEqual(self.names - {"describe"}, set(BY_ID))
 
     def test_a_tool_says_what_it_needs_first(self):
         tools = {tool["name"]: tool for tool in self.server.tools()}
@@ -73,11 +71,6 @@ class SurfaceTests(unittest.TestCase):
         self.assertEqual(schema["properties"]["prime_oil_volume_ul"]["type"], "number")
         self.assertFalse(schema["additionalProperties"])
 
-    def test_every_pipeline_can_be_planned_as_well_as_run(self):
-        for name in ("setup", "checks", "shutdown"):
-            with self.subTest(pipeline=name):
-                self.assertIn(f"pipeline_{name}", self.names)
-                self.assertIn(f"plan_{name}", self.names)
 
 
 class GuardTests(unittest.TestCase):
@@ -114,13 +107,6 @@ class GuardTests(unittest.TestCase):
         self.assertTrue(is_error)
         self.assertIn("has no setting", text)
 
-    def test_planning_a_pipeline_runs_nothing(self):
-        text, is_error = _call(self.server, "plan_setup")
-
-        self.assertFalse(is_error)
-        stages = json.loads(text)["stages"]
-        self.assertEqual([stage["operation"] for stage in stages], ["connect_fluidics", "apply_corrections", "run_priming"])
-        self.assertFalse(self.server.admet.state()["fluidics"])
 
 
 class SimulationTests(unittest.TestCase):
@@ -136,7 +122,7 @@ class SimulationTests(unittest.TestCase):
         server = AdmetServer(simulated=True)
 
         with self.assertRaises(SimulationRefused):
-            server._simulated("connect", {"simulated": False})
+            server._simulated("connect_fluidics", {"simulated": False})
 
     def test_an_operation_without_a_simulated_switch_passes_through(self):
         # What makes the session safe is the connection, so the operations after
@@ -159,7 +145,7 @@ class SimulationTests(unittest.TestCase):
     def test_live_mode_changes_nothing(self):
         server = AdmetServer(simulated=False)
 
-        self.assertEqual(server._simulated("connect", {"simulated": False}), {"simulated": False})
+        self.assertEqual(server._simulated("connect_fluidics", {"simulated": False}), {"simulated": False})
 
 
 class ProtocolTests(unittest.TestCase):
@@ -228,7 +214,7 @@ class ProtocolTests(unittest.TestCase):
         replies = [json.loads(line) for line in stdout.getvalue().splitlines()]
         self.assertEqual(exit_code, 0)
         self.assertEqual([reply["id"] for reply in replies], [1, 2, 3])
-        self.assertGreater(len(replies[1]["result"]["tools"]), 50)
+        self.assertGreater(len(replies[1]["result"]["tools"]), 20)
         connected = json.loads(replies[2]["result"]["content"][0]["text"])
         self.assertTrue(connected["connected"])
         self.assertTrue(connected["simulated"])

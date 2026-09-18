@@ -4,12 +4,8 @@ An operation already declares its parameters and what has to be true before it
 runs. That declaration is the tool: there is no second description to write, and
 none to fall out of step with the code.
 
-Three levels are offered, and the name says which:
-
-    <engine>_<action>   low   -- one call to a device, no guards
-    <operation>         med   -- the same call with the conditions under which
-                                 using it is not a mistake
-    pipeline_<id>       high  -- several operations in order
+Guarded operations only. An engine action has no guards -- that is what it is
+for -- and the Python binding is where it stays reachable.
 
 Each tool's description opens with its target and what calling it does: [read]
 answers a question, [write] has finished having its effect when it returns, and
@@ -68,10 +64,10 @@ def _schema(params: tuple[Param, ...], raw: dict[str, Any] | None = None) -> dic
 DESCRIBE_TOOL = {
     "name": "describe",
     "description": (
-        "What exists and how the layers fit together. With no target: the operations "
-        "and pipelines that are the way in, and the engines underneath. With one: that "
-        "operation's parameters and what must be true before it runs, that pipeline's "
-        "stages, or that engine's actions and which operations drive them."
+        "What exists and how the layers fit together. With no target: every operation "
+        "that is the way in, and the engines underneath. With one: that operation's "
+        "parameters and what must be true before it runs, or that engine's actions and "
+        "which operations drive them."
     ),
     "inputSchema": {
         "type": "object",
@@ -104,66 +100,4 @@ def operation_tools() -> list[dict[str, Any]]:
         )
     return tools
 
-
-def pipeline_tools() -> list[dict[str, Any]]:
-    """One tool per pipeline, plus the plan that shows what it would do."""
-    from admet.workflows.pipelines import PIPELINES
-
-    tools = []
-    for line in PIPELINES:
-        tools.append(
-            {
-                "name": f"pipeline_{line.id}",
-                "description": f"{line.description} Runs its stages in order, stopping if one is "
-                "refused or needs the operator.",
-                "inputSchema": _schema(line.params),
-            }
-        )
-        tools.append(
-            {
-                "name": f"plan_{line.id}",
-                "description": f"The stages of: {line.description} Does not run anything.",
-                "inputSchema": _schema(line.params),
-            }
-        )
-    return tools
-
-
-def action_tools(admet: Any) -> list[dict[str, Any]]:
-    """One typed tool per engine action: the low level, in full.
-
-    These are the device's own vocabulary -- every camera setting, every channel
-    knob -- with no guards on them. An operation is the guarded way to do the
-    same thing; this is the way to configure what no operation covers.
-    """
-    from admet.workflows.operations import OPERATIONS
-
-    driven: dict[str, list[str]] = {}
-    for op in OPERATIONS:
-        for action in op.uses:
-            driven.setdefault(action, []).append(op.id)
-
-    tools = []
-    for engine_id in admet.engine_ids():
-        engine = admet.engine(engine_id)
-        by_name = {param.name: param for param in engine.settings.params}
-        for action in engine.actions:
-            guarded = driven.get(action.id)
-            instead = (
-                f" Unguarded; the operation {guarded[0]} does this with its guards."
-                if guarded
-                else ""
-            )
-            params = tuple(by_name[name] for name in action.params if name in by_name)
-            tools.append(
-                {
-                    "name": f"{engine_id}_{action.id}",
-                    "description": (
-                        f"[{engine_id}][{action.kind}] {action.description or action.label}."
-                        f"{instead}"
-                    ),
-                    "inputSchema": _schema(params),
-                }
-            )
-    return tools
 
