@@ -17,6 +17,7 @@ from admet.engines.acquisition.fluidics import (
     SDKAvailability,
 )
 from admet.engines.acquisition.fluidics.config import (
+    FLUIDIC_CHANNEL_LABELS,
     FLUIDIC_CHANNELS,
     SENSOR_CALIBRATIONS,
 )
@@ -67,6 +68,7 @@ ACQUISITION_ACTIONS = (
     ActionSpec("start_camera_live", "Start Camera Live", "diagnostics"),
     ActionSpec("stop_camera_live", "Stop Camera Live", "diagnostics"),
     ActionSpec("read_status", "Read Status", "diagnostics", kind=READ),
+    ActionSpec("read_observation", "Read Observation", "diagnostics", kind=READ),
     ActionSpec("start_polling", "Start Polling", "diagnostics"),
     ActionSpec("stop_polling", "Stop Polling", "diagnostics"),
     ActionSpec("apply_corrections", "Apply Corrections", "fluidics", params=CORRECTION_PARAM_NAMES),
@@ -184,6 +186,7 @@ class AcquisitionEngine:
                 "read_status",
                 extra_metadata=self._camera_status_metadata(),
             ),
+            "read_observation": lambda _settings: self.observation(),
             "start_polling": lambda _settings: self._status_after("start_polling", self.start_polling),
             "stop_polling": lambda _settings: self._status_after("stop_polling", self.stop_polling),
             "apply_corrections": lambda settings: self._status_after(
@@ -648,6 +651,86 @@ class AcquisitionEngine:
             message="Fluigent SDK object is injected.",
         )
 
+    def observation(self) -> dict[str, Any]:
+        """What the instrument is doing, measured rather than assumed.
+
+        Nothing here is invented. A channel that has never been read reports
+        null for its measurements, because a fabricated zero is a reading
+        somebody will believe.
+        """
+        state = self.hardware.state
+        snapshot = self._acquisition.latest_snapshot() if self._acquisition else None
+        return {
+            "connection": {
+                "fluidics": bool(state.connected),
+                "simulated": bool(state.simulated),
+            },
+            "polling": self.polling_active,
+            "recording": self._recording_observation(),
+            "channels": self._channel_observations(snapshot),
+            "protocol": self._protocol_observation(),
+        }
+
+    def _recording_observation(self) -> dict[str, Any]:
+        metadata = self._recordings.status_metadata()
+        current = metadata.get("current_recording") or {}
+        return {
+            "active": self.recording_active,
+            "id": current.get("recording_id"),
+            "fluidics_csv": current.get("fluidics_csv_path") or current.get("csv_path"),
+            "video": current.get("video_path"),
+        }
+
+    def _channel_observations(self, snapshot: Any) -> list[dict[str, Any]]:
+        state = self.hardware.state
+        channels = self.channel_manager.channels
+        observations = []
+        for index, channel in enumerate(channels):
+            label = FLUIDIC_CHANNEL_LABELS[index] if index < len(FLUIDIC_CHANNEL_LABELS) else ""
+            sensor = channel.sensor_index
+            observations.append(
+                {
+                    "index": index,
+                    "label": label,
+                    "detected": _detected_channel(state, channel),
+                    "mode": channel.mode,
+                    "requested_flow_ul_min": channel.active_setpoint
+                    if channel.mode == "flow"
+                    else None,
+                    "requested_pressure_mbar": channel.pressure_setpoint
+                    if channel.mode != "flow"
+                    else None,
+                    **_measured(snapshot, sensor, channel.pressure_index),
+                }
+            )
+        return observations
+
+    def _protocol_observation(self) -> dict[str, Any]:
+        event = self._pipeline.latest_event() if self._pipeline else None
+        return {
+            "state": self.pipeline_state,
+            "event_sequence": event.sequence if event else 0,
+            "step_index": event.current_step if event else None,
+            "total_steps": event.total_steps if event else None,
+            "step_name": event.step_name if event else "",
+            "progress": event.progress if event else None,
+            "outcome": str(event.outcome) if event else "",
+            "confirmation_message": event.confirmation_message if event else "",
+            "error": event.error_msg if event else "",
+        }
+
+    def latest_event(self) -> Any:
+        return self._pipeline.latest_event() if self._pipeline else None
+
+    def events_after(self, sequence: int = 0, limit: int = 100) -> list[Any]:
+        return self._pipeline.events_after(sequence, limit) if self._pipeline else []
+
+    def latest_snapshot(self) -> Any:
+        return self._acquisition.latest_snapshot() if self._acquisition else None
+
+    def recent_snapshots(self, limit: int = 0) -> list[Any]:
+        return self._acquisition.recent_snapshots(limit) if self._acquisition else []
+
     def _status_result(
         self,
         action: str,
@@ -685,6 +768,62 @@ def create_engine(
         pipeline_engine_factory=pipeline_engine_factory,
         **kwargs,
     )
+
+
+def _detected_channel(state: Any, channel: Any) -> dict[str, Any]:
+    """What the instrument says this channel physically is.
+
+    The operator confirms the mapping against this, so it is reported as the
+    instrument reports it rather than assumed from the configured order.
+    """
+    pressure = next(
+        (info for info in state.pressure_channels if info.index == channel.pressure_index), None
+    )
+    sensor = next(
+        (info for info in state.sensor_channels if info.index == channel.sensor_index), None
+    )
+    return {
+        "pressure_index": channel.pressure_index,
+        "sensor_index": channel.sensor_index,
+        "controller_sn": getattr(pressure, "controller_sn", None),
+        "pressure_device_sn": getattr(pressure, "device_sn", None),
+        "pressure_max_mbar": getattr(pressure, "pmax", None),
+        "sensor_device_sn": getattr(sensor, "device_sn", None),
+        "sensor_type": getattr(sensor, "sensor_type", None),
+        "sensor_max_ul_min": getattr(sensor, "smax", None),
+    }
+
+
+def _measured(snapshot: Any, sensor_index: int, pressure_index: int) -> dict[str, Any]:
+    """The readings for one channel, or nulls where there has been no reading."""
+    empty = {
+        "pressure_mbar": None,
+        "flow_ul_min": None,
+        "volume_ul": None,
+        "stable": None,
+        "pressure_mean_mbar": None,
+        "pressure_std_mbar": None,
+        "flow_mean_ul_min": None,
+        "flow_std_ul_min": None,
+    }
+    if snapshot is None:
+        return empty
+
+    def at(values: Any, index: int) -> Any:
+        return values[index] if 0 <= index < len(values) else None
+
+    pressure_stats = at(snapshot.pressure_stats, pressure_index)
+    flow_stats = at(snapshot.flow_stats, sensor_index)
+    return {
+        "pressure_mbar": at(snapshot.pressures, pressure_index),
+        "flow_ul_min": at(snapshot.flows, sensor_index),
+        "volume_ul": at(snapshot.volumes_ul, sensor_index),
+        "stable": at(snapshot.stability, sensor_index),
+        "pressure_mean_mbar": getattr(pressure_stats, "mean", None),
+        "pressure_std_mbar": getattr(pressure_stats, "std", None),
+        "flow_mean_ul_min": getattr(flow_stats, "mean", None),
+        "flow_std_ul_min": getattr(flow_stats, "std", None),
+    }
 
 
 def _pair_channels(state: Any) -> list[tuple[int, int]]:

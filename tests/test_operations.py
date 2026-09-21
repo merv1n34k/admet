@@ -107,6 +107,13 @@ class TargetTests(unittest.TestCase):
         self.assertEqual({op["id"] for op in listed}, {"add_source", "list_sources", "run_analysis"})
 
 
+# Two ids are fixed by the validation-loop specification, which names them in
+# its acceptance run. They break the verb-first law -- observe is a bare verb,
+# protocol_events is a noun phrase -- and are exceptions rather than a reason to
+# weaken the law for everything else.
+SPECIFIED_NAMES = {"observe", "protocol_events"}
+
+
 class NamingTests(unittest.TestCase):
     """One law for ids, so a name can be trusted to mean the same thing twice."""
 
@@ -117,6 +124,8 @@ class NamingTests(unittest.TestCase):
             "add", "verify", "calibrate", "shutdown",
         )
         for op in OPERATIONS:
+            if op.id in SPECIFIED_NAMES:
+                continue
             with self.subTest(operation=op.id):
                 self.assertTrue(
                     op.id.split("_")[0] in verbs,
@@ -126,9 +135,14 @@ class NamingTests(unittest.TestCase):
     def test_an_operation_and_the_action_it_drives_share_a_name(self):
         # The same call should not be called two things at two levels.
         for op in OPERATIONS:
-            if len(op.uses) == 1:
+            if len(op.uses) == 1 and op.id not in SPECIFIED_NAMES:
                 with self.subTest(operation=op.id):
                     self.assertEqual(op.id, op.uses[0])
+
+    def test_the_exceptions_to_the_law_are_only_the_specified_ones(self):
+        # If this grows, the law is being eroded rather than excepted.
+        self.assertEqual(SPECIFIED_NAMES & {op.id for op in OPERATIONS}, SPECIFIED_NAMES)
+        self.assertEqual(len(SPECIFIED_NAMES), 2)
 
     def test_every_operation_says_what_calling_it_does(self):
         for op in OPERATIONS:

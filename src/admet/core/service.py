@@ -37,6 +37,24 @@ ENGINE_GROUPS = {
 }
 
 
+def _describe_event(event: Any) -> dict[str, Any]:
+    """One protocol event as plain data, for anything outside the engine."""
+    return {
+        "sequence": event.sequence,
+        "at": event.at,
+        "monotonic": event.monotonic,
+        "state": str(event.state),
+        "outcome": str(event.outcome),
+        "step_index": event.current_step,
+        "total_steps": event.total_steps,
+        "step_name": event.step_name,
+        "progress": event.progress,
+        "step_volumes": dict(event.step_volumes),
+        "confirmation_message": event.confirmation_message,
+        "error": event.error_msg,
+    }
+
+
 def _describe_param(param: Any) -> dict[str, Any]:
     return {
         "name": param.name,
@@ -81,6 +99,17 @@ class Admet:
         self._engines: dict[str, Any] = {}
         self._marks: dict[str, Any] = {}
         self.project: ProjectStore | None = None
+        # Attached by whoever provides them. Absent, observe reports honestly
+        # that nothing is publishing and nothing is running.
+        self._runtime: Any | None = None
+        self._validation: Any | None = None
+        self._safety: dict[str, Any] = {
+            "armed": False,
+            "tripped": False,
+            "reason": "",
+            "at": None,
+            "limits": {},
+        }
         if project is not None:
             self.open_project(project)
 
@@ -398,6 +427,42 @@ class Admet:
             "running": engine.pipeline_state in {"running", "paused", "stopping"},
             "sources": len(self.analysis_sources()),
         }
+
+    def runtime_state(self) -> dict[str, Any]:
+        """What the serving process is publishing, if it is publishing."""
+        if self._runtime is None:
+            return {"publishing": False, "path": None, "heartbeat": None, "pid": None}
+        return self._runtime.describe()
+
+    def validation_state(self) -> dict[str, Any]:
+        """The validation run in progress, if there is one."""
+        if self._validation is None:
+            return {
+                "active": False,
+                "id": None,
+                "state": "idle",
+                "configuration": None,
+                "current_target_ul_min": None,
+                "artifacts": {},
+                "error": "",
+                "classification": None,
+            }
+        return self._validation.describe()
+
+    def safety_state(self) -> dict[str, Any]:
+        """Whether a limit is armed, and whether anything has tripped it.
+
+        A trip latches: it stays reported until it is explicitly reset, because
+        a safety event that clears itself is one nobody finds out about.
+        """
+        return dict(self._safety)
+
+    def protocol_events(self, *, after_sequence: int = 0, limit: int = 100) -> list[dict[str, Any]]:
+        """Protocol events newer than one already seen, as plain data."""
+        engine = self._engines.get("acquisition")
+        if engine is None:
+            return []
+        return [_describe_event(event) for event in engine.events_after(after_sequence, limit)]
 
     def mark(self, name: str, value: Any) -> None:
         """Remember something the hardware does not report, such as corrections."""

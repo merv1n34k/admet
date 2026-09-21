@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 
 from pathlib import Path
@@ -48,6 +49,14 @@ class Runner(Protocol):
     def state(self) -> dict[str, Any]: ...
 
     def mark(self, name: str, value: Any) -> None: ...
+
+    def runtime_state(self) -> dict[str, Any]: ...
+
+    def validation_state(self) -> dict[str, Any]: ...
+
+    def safety_state(self) -> dict[str, Any]: ...
+
+    def protocol_events(self, *, after_sequence: int, limit: int) -> list[dict[str, Any]]: ...
 
     def create_project(self, path: str, project_id: str) -> Any: ...
 
@@ -183,6 +192,37 @@ def _apply_corrections(runner: Runner, settings: dict[str, Any]) -> dict[str, An
     result = runner.engine_action("acquisition", "apply_corrections", settings)
     runner.mark("corrections", True)
     return result.metadata
+
+
+def _observe(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
+    """One coherent picture of the rig, the session, and the run.
+
+    Unguarded on purpose. Asking what is happening must work when nothing is
+    connected -- that is exactly when the answer matters -- so the fields that
+    would need hardware come back null rather than as a plausible zero.
+    """
+    observation = runner.engine_action("acquisition", "read_observation", {}).metadata
+    return {
+        "observed_at": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+        "project": runner.describe_project(),
+        **observation,
+        "runtime": runner.runtime_state(),
+        "validation": runner.validation_state(),
+        "safety": runner.safety_state(),
+    }
+
+
+def _protocol_events(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
+    """Events newer than one already seen, without taking them from anyone."""
+    after = int(settings.get("after_sequence", 0) or 0)
+    limit = int(settings.get("limit", 100) or 100)
+    events = runner.protocol_events(after_sequence=after, limit=limit)
+    return {
+        "after_sequence": after,
+        "count": len(events),
+        "latest_sequence": events[-1]["sequence"] if events else after,
+        "events": events,
+    }
 
 
 def _status(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
@@ -462,6 +502,30 @@ OPERATIONS: tuple[Operation, ...] = (
         requires=("fluidics",),
         uses=("apply_corrections",),
         run=_apply_corrections,
+    ),
+    Operation(
+        "observe",
+        "Observe",
+        "Everything measurable right now: the session, the instrument, every "
+        "channel, the running protocol, the validation, and the safety state. "
+        "Callable while disconnected, where measurements come back null.",
+        target=GENERAL,
+        kind=READ,
+        uses=("read_observation",),
+        run=_observe,
+    ),
+    Operation(
+        "protocol_events",
+        "Protocol events",
+        "What the protocol has reported. Ask for what is newer than the last "
+        "sequence you saw; reading never removes anything.",
+        target=CONTROL,
+        kind=READ,
+        params=(
+            _whole("after_sequence", "After sequence", 0, minimum=0),
+            _whole("limit", "How many at most", 100, minimum=1, maximum=1000),
+        ),
+        run=_protocol_events,
     ),
     Operation("read_status", "Status", "What the instrument and the session are doing.", kind=READ,
               target=GENERAL, uses=("read_status",), run=_status),
