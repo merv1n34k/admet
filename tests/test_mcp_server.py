@@ -44,7 +44,11 @@ class SurfaceTests(unittest.TestCase):
     def test_every_tool_is_an_operation_or_describe(self):
         from admet.workflows.operations import BY_ID
 
-        self.assertEqual(self.names - {"describe"}, set(BY_ID))
+        planning = {
+            "plan_protocol", "planned_protocols", "execute_protocol_plan",
+            "cancel_protocol_plan",
+        }
+        self.assertEqual(self.names - {"describe"} - planning, set(BY_ID))
 
     def test_a_tool_says_what_it_needs_first(self):
         tools = {tool["name"]: tool for tool in self.server.tools()}
@@ -81,7 +85,7 @@ class GuardTests(unittest.TestCase):
         text, is_error = _call(self.server, "run_priming")
 
         self.assertTrue(is_error)
-        self.assertIn("the fluidics are not connected", text)
+        self.assertIn("use plan_protocol", text)
 
     def test_a_protocol_is_refused_until_corrections_are_applied(self):
         _call(self.server, "connect_fluidics")
@@ -89,16 +93,16 @@ class GuardTests(unittest.TestCase):
         text, is_error = _call(self.server, "run_characterisation")
 
         self.assertTrue(is_error)
-        self.assertIn("correction factors have not been applied", text)
+        self.assertIn("use plan_protocol", text)
 
-    def test_the_guard_lifts_once_the_condition_is_met(self):
+    def test_direct_protocol_start_remains_refused_once_guards_are_met(self):
         _call(self.server, "connect_fluidics")
         _call(self.server, "apply_corrections")
 
         text, is_error = _call(self.server, "run_priming", {"prime_oil_volume_ul": 2.0, "tick_s": 0.1})
 
-        self.assertFalse(is_error, text)
-        _call(self.server, "stop_protocol")
+        self.assertTrue(is_error, text)
+        self.assertIn("execute_protocol_plan", text)
         _call(self.server, "disconnect_fluidics")
 
     def test_a_setting_the_operation_does_not_have_is_refused(self):
@@ -106,6 +110,87 @@ class GuardTests(unittest.TestCase):
 
         self.assertTrue(is_error)
         self.assertIn("has no setting", text)
+
+
+class PlanningBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.server = AdmetServer(simulated=True)
+        _call(self.server, "connect_fluidics")
+        _call(self.server, "apply_corrections")
+        self.addCleanup(self.server.admet.do, "disconnect_fluidics")
+
+    @staticmethod
+    def settings(duration_s=0.05):
+        return {
+            "steps": [{
+                "name": "safe simulated pulse",
+                "sensor_setpoints": {"0": 1.0},
+                "trigger_type": "time",
+                "trigger_params": {"duration_s": duration_s},
+                "on_complete": "zero",
+            }],
+            "tick_s": 0.01,
+        }
+
+    def test_planning_does_not_call_an_engine_action_or_start_anything(self):
+        with patch.object(self.server.admet, "engine_action") as action:
+            text, is_error = _call(self.server, "plan_protocol", {
+                "operation_id": "run_steps", "settings": self.settings(),
+            })
+
+        self.assertFalse(is_error, text)
+        action.assert_not_called()
+        plan = json.loads(text)
+        self.assertEqual(plan["state"], "planned")
+        self.assertEqual(plan["steps"][0]["flow_setpoints_ul_min"], {"0": 1.0})
+        self.assertEqual(self.server.admet.state()["running"], False)
+        self.assertFalse(self.server.admet.engine("acquisition").recording_active)
+
+    def test_execute_accepts_only_the_plan_id_and_cannot_run_twice(self):
+        plan = json.loads(_call(self.server, "plan_protocol", {
+            "operation_id": "run_steps", "settings": self.settings(),
+        })[0])
+
+        result, is_error = _call(self.server, "execute_protocol_plan", {"plan_id": plan["plan_id"]})
+        self.assertFalse(is_error, result)
+        self.server.admet.wait_for_protocol(timeout_s=2.0, poll_s=0.01)
+        self.assertEqual(
+            self.server.admet.planned_protocols(plan["plan_id"])["plans"][0]["state"],
+            "completed",
+        )
+        refused, is_error = _call(
+            self.server, "execute_protocol_plan", {"plan_id": plan["plan_id"]}
+        )
+        self.assertTrue(is_error)
+        self.assertIn("completed", refused)
+
+    def test_cancelled_and_stale_plans_are_refused(self):
+        first = self.server.admet.plan_protocol("run_steps", self.settings())
+        self.server.admet.cancel_protocol_plan(first["plan_id"])
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            self.server.admet.execute_protocol_plan(first["plan_id"])
+
+        stale = self.server.admet.plan_protocol("run_steps", self.settings())
+        self.server.admet.mark("correction_settings", {"changed": True})
+        with self.assertRaisesRegex(RuntimeError, "stale"):
+            self.server.admet.execute_protocol_plan(stale["plan_id"])
+
+    def test_direct_python_binding_remains_the_expert_escape_hatch(self):
+        result = self.server.admet.do("run_steps", self.settings())
+
+        self.assertTrue(result["started"])
+        self.server.admet.wait_for_protocol(timeout_s=2.0, poll_s=0.01)
+
+    def test_every_protocol_producing_mcp_tool_refuses_direct_start(self):
+        from admet.workflows.operations import OPERATIONS
+
+        for operation in OPERATIONS:
+            if not operation.starts_protocol:
+                continue
+            with self.subTest(operation=operation.id):
+                text, is_error = _call(self.server, operation.id)
+                self.assertTrue(is_error)
+                self.assertIn("plan_protocol", text)
 
 
 

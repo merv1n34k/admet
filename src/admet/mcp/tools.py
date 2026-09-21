@@ -82,6 +82,56 @@ DESCRIBE_TOOL = {
     },
 }
 
+PLAN_TOOLS = [
+    {
+        "name": "plan_protocol",
+        "description": "Validate and freeze a protocol proposal without touching hardware.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "operation_id": {"type": "string", "description": "Existing protocol operation ID"},
+                "settings": {
+                    "type": "object",
+                    "description": "Settings accepted by that protocol operation",
+                    "additionalProperties": True,
+                },
+            },
+            "required": ["operation_id", "settings"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "planned_protocols",
+        "description": "List immutable protocol plans from this server session.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"plan_id": {"type": "string", "description": "Optional exact plan ID"}},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "execute_protocol_plan",
+        "description": "Execute exactly one previously validated plan by ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"plan_id": {"type": "string", "description": "Immutable plan ID"}},
+            "required": ["plan_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "cancel_protocol_plan",
+        "description": "Cancel a planned protocol before it executes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"plan_id": {"type": "string", "description": "Immutable plan ID"}},
+            "required": ["plan_id"],
+            "additionalProperties": False,
+        },
+    },
+]
+
 
 def operation_tools() -> list[dict[str, Any]]:
     from admet.workflows.operations import OPERATIONS
@@ -99,5 +149,4 @@ def operation_tools() -> list[dict[str, Any]]:
             }
         )
     return tools
-
 

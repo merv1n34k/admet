@@ -88,6 +88,8 @@ class Runner(Protocol):
 
     def analyze(self, *, engine: str, cache: str) -> dict[str, Any]: ...
 
+    def planned_protocols(self, plan_id: str = "") -> dict[str, Any]: ...
+
 
 # ---- requirements ----------------------------------------------------------
 #
@@ -514,6 +516,30 @@ def _step_from(entry: dict[str, Any], index: int) -> ProtocolStep:
         repeat=int(entry.get("repeat") or 1),
         group=str(entry.get("group") or ""),
     )
+
+
+def build_protocol_steps(
+    operation: Operation, settings: dict[str, Any], *, channels: list[dict[str, Any]]
+) -> list[ProtocolStep]:
+    """Build a protocol without starting acquisition or touching hardware."""
+    if not operation.starts_protocol:
+        raise Refused(f"{operation.id} does not produce a protocol")
+    if operation.id == "run_steps":
+        declared = settings.get("steps") or []
+        if not declared:
+            raise Refused("run_steps needs at least one step")
+        return [_step_from(entry, index) for index, entry in enumerate(declared)]
+    if operation.id == "validate_oil_capacity":
+        from admet.workflows import validation
+
+        configuration = str(settings["configuration"])
+        if configuration not in validation.CONFIGURATIONS:
+            raise Refused(f"configuration must be one of: {', '.join(validation.CONFIGURATIONS)}")
+        if len(channels) <= validation.OIL_CHANNEL:
+            raise Refused("the configured rig has no Oil-L channel to plan against")
+        steps, _ = validation.build_steps(settings, channels[validation.OIL_CHANNEL])
+        return steps
+    return protocols.build_protocol(operation.protocol, settings)
 
 
 OPERATIONS: tuple[Operation, ...] = (

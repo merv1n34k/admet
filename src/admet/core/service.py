@@ -21,11 +21,16 @@ from __future__ import annotations
 import threading
 
 import time
+import hashlib
+import json
+import uuid
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from admet.core.engine import ActionSpec, action_spec
+from admet.core.clock import now_iso as _now_iso
 from admet.core.project import ProjectStore
 from admet.core.run import RunJob, RunResult
 from admet.core.session import PROJECT_EXTENSION
@@ -90,6 +95,31 @@ def _fill_defaults(operation: Any, settings: dict[str, Any]) -> dict[str, Any]:
     return {**filled, **{name: settings[name] for name in raw if name in settings}}
 
 
+def _planned_step(index: int, step: Any) -> dict[str, Any]:
+    params = deepcopy(step.trigger_params)
+    timeout = params.get("timeout_s")
+    expected = params.get("duration_s")
+    if expected is None and step.trigger_type == "stability":
+        expected = timeout
+    return {
+        "number": index,
+        "name": step.name,
+        "flow_setpoints_ul_min": {str(k): v for k, v in step.sensor_setpoints.items()},
+        "pressure_setpoints_mbar": {str(k): v for k, v in step.pressure_setpoints.items()},
+        "trigger_type": step.trigger_type,
+        "trigger_params": params,
+        "timeout_s": timeout,
+        "expected_duration_s": expected,
+        "on_complete": step.on_complete,
+        "confirmation": step.confirm_message or None,
+    }
+
+
+def _sum_expected_duration(steps: list[dict[str, Any]]) -> float | None:
+    values = [step["expected_duration_s"] for step in steps]
+    return sum(float(value) for value in values) if all(value is not None for value in values) else None
+
+
 class NoProject(Exception):
     """An action needed somewhere to write, and no project was open."""
 
@@ -105,6 +135,8 @@ class Admet:
         # that nothing is publishing and nothing is running.
         self._runtime: Any | None = None
         self._validation: Any | None = None
+        self._protocol_plans: dict[str, dict[str, Any]] = {}
+        self._executing_plan_id: str | None = None
         # The publisher observes from its own thread, so creating an engine
         # must not be a race between it and whoever is driving.
         self._engine_lock = threading.Lock()
@@ -317,6 +349,186 @@ class Admet:
         op.check(self.state())
         settings = _fill_defaults(op, dict(settings or {}))
         return op.run(self, settings)
+
+    def plan_protocol(self, operation_id: str, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Validate and freeze a protocol proposal without performing an engine action."""
+        from admet.engines.acquisition.pipeline import expand_protocol_steps
+        from admet.workflows.operations import REQUIREMENTS, build_protocol_steps
+
+        op = find_operation(operation_id)
+        if not op.starts_protocol:
+            raise LookupError(f"{operation_id} is not a protocol-producing operation")
+        normalized = _fill_defaults(op, dict(settings or {}))
+        state = self.state()
+        guards = {
+            name: {"met": bool(REQUIREMENTS[name][0](state)), "why_not": (
+                "" if REQUIREMENTS[name][0](state) else REQUIREMENTS[name][1]
+            )}
+            for name in op.requires
+        }
+        channels = self._cached_channel_mapping()
+        steps = expand_protocol_steps(build_protocol_steps(op, normalized, channels=channels))
+        described_steps = [_planned_step(index, step) for index, step in enumerate(steps, 1)]
+        executable = {
+            "operation_id": operation_id,
+            "normalized_settings": normalized,
+            "steps": described_steps,
+        }
+        digest = hashlib.sha256(
+            json.dumps(executable, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest()
+        plan_id = f"plan_{uuid.uuid4().hex}"
+        pressure_limits = (
+            {"0": normalized["oil_pressure_trip_mbar"]}
+            if operation_id == "validate_oil_capacity"
+            else {}
+        )
+        plan = {
+            "plan_id": plan_id,
+            "operation_id": operation_id,
+            "state": "planned",
+            "created_at": _now_iso(),
+            "normalized_settings": normalized,
+            "steps": described_steps,
+            "step_count": len(described_steps),
+            "expected_duration_s": _sum_expected_duration(described_steps),
+            "required_confirmations": [
+                step["confirmation"] for step in described_steps if step["confirmation"]
+            ],
+            "recording": {
+                "required": operation_id == "validate_oil_capacity",
+                "include_video": bool(normalized.get("include_video", False)),
+            },
+            "camera_required": bool(normalized.get("include_video", False)),
+            "armed_safety_limits": {"pressure_mbar": pressure_limits},
+            "abort_conditions": [
+                "armed pressure limit reached",
+                "safety latch trips",
+                "fluidics disconnects or required telemetry becomes unavailable",
+                "protocol reports an error",
+            ],
+            "warnings": ([] if all(g["met"] for g in guards.values()) else [
+                "one or more execution guards are currently unmet"
+            ]),
+            "assumptions": [
+                "configured channel labels match the physical tubing only after operator confirmation"
+            ],
+            "guards": guards,
+            "unmet_guards": [name for name, guard in guards.items() if not guard["met"]],
+            "digest": digest,
+            "rig_fingerprint": self._rig_fingerprint(),
+            "error": "",
+        }
+        for previous in self._protocol_plans.values():
+            if previous["operation_id"] == operation_id and previous["state"] == "planned":
+                previous["state"] = "replaced"
+                previous["replaced_at"] = plan["created_at"]
+        self._protocol_plans[plan_id] = deepcopy(plan)
+        return deepcopy(plan)
+
+    def planned_protocols(self, plan_id: str = "") -> dict[str, Any]:
+        self._refresh_plan_lifecycle()
+        if plan_id:
+            if plan_id not in self._protocol_plans:
+                raise LookupError(f"unknown protocol plan {plan_id!r}")
+            return {"plans": [deepcopy(self._protocol_plans[plan_id])]}
+        return {"plans": [deepcopy(plan) for plan in self._protocol_plans.values()]}
+
+    def execute_protocol_plan(self, plan_id: str) -> dict[str, Any]:
+        self._refresh_plan_lifecycle()
+        plan = self._protocol_plans.get(plan_id)
+        if plan is None:
+            raise LookupError(f"unknown protocol plan {plan_id!r}")
+        if plan["state"] != "planned":
+            raise RuntimeError(f"protocol plan {plan_id} is {plan['state']} and cannot be executed")
+        if plan["rig_fingerprint"] != self._rig_fingerprint():
+            plan["state"] = "replaced"
+            raise RuntimeError(f"protocol plan {plan_id} is stale because the rig context changed")
+        op = find_operation(plan["operation_id"])
+        op.check(self.state())
+        plan["state"] = "executing"
+        plan["executed_at"] = _now_iso()
+        self._executing_plan_id = plan_id
+        try:
+            result = op.run(self, deepcopy(plan["normalized_settings"]))
+        except Exception as exc:
+            plan["state"] = "failed"
+            plan["error"] = str(exc)
+            self._executing_plan_id = None
+            raise
+        return {**result, "plan_id": plan_id, "plan_state": plan["state"]}
+
+    def cancel_protocol_plan(self, plan_id: str) -> dict[str, Any]:
+        plan = self._protocol_plans.get(plan_id)
+        if plan is None:
+            raise LookupError(f"unknown protocol plan {plan_id!r}")
+        if plan["state"] != "planned":
+            raise RuntimeError(f"protocol plan {plan_id} is {plan['state']} and cannot be cancelled")
+        plan["state"] = "cancelled"
+        plan["cancelled_at"] = _now_iso()
+        return deepcopy(plan)
+
+    def _refresh_plan_lifecycle(self) -> None:
+        if not self._executing_plan_id:
+            return
+        engine = self._engines.get("acquisition")
+        if engine is None or engine.pipeline_state in {"running", "paused", "stopping"}:
+            return
+        plan = self._protocol_plans[self._executing_plan_id]
+        event = engine.latest_event()
+        outcome = str(getattr(event, "outcome", "")) if event else ""
+        plan["state"] = "completed" if outcome == "completed" else "failed"
+        plan["completed_at"] = _now_iso()
+        plan["error"] = getattr(event, "error_msg", "") if event else "protocol ended without an event"
+        self._executing_plan_id = None
+
+    def _rig_fingerprint(self) -> dict[str, Any]:
+        engine = self._engines.get("acquisition")
+        mapping = []
+        hardware = None
+        if engine is not None:
+            hardware = engine.hardware.state
+            mapping = [channel.get("detected") for channel in self._cached_channel_mapping()]
+        return {
+            "project": str(self.project.path) if self.project else None,
+            "fluidics_connected": bool(hardware and hardware.connected),
+            "simulated": bool(hardware and hardware.simulated),
+            "channel_mapping": mapping,
+            "correction_settings": deepcopy(self._marks.get("correction_settings")),
+            "safety": self.safety_state(),
+            "hardware_identity": {
+                "controller_serials": sorted({
+                    getattr(item, "controller_sn", None)
+                    for item in getattr(hardware, "pressure_channels", ())
+                }) if hardware else [],
+                "camera_connected": bool(engine and getattr(engine.camera, "connected", False)),
+                "cameras": deepcopy(
+                    getattr(getattr(engine, "_camera", None), "_preflight_cache", {}).get(
+                        "cameras", []
+                    )
+                ) if engine else [],
+            },
+        }
+
+    def _cached_channel_mapping(self) -> list[dict[str, Any]]:
+        """Configured/detected identities already held in memory; never query an SDK."""
+        engine = self._engines.get("acquisition")
+        if engine is None:
+            return []
+        from admet.engines.acquisition.engine import _detected_channel
+        from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_LABELS
+
+        state = engine.hardware.state
+        return [
+            {
+                "index": index,
+                "label": FLUIDIC_CHANNEL_LABELS[index]
+                if index < len(FLUIDIC_CHANNEL_LABELS)
+                else "",
+                "detected": _detected_channel(state, channel),
+            }
+            for index, channel in enumerate(engine.channel_manager.channels)
+        ]
 
 
 

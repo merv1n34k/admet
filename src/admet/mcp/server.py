@@ -22,7 +22,8 @@ import traceback
 from typing import Any, TextIO
 
 from admet.core.service import Admet
-from admet.mcp.tools import DESCRIBE_TOOL, operation_tools
+from admet.mcp.tools import DESCRIBE_TOOL, PLAN_TOOLS, operation_tools
+from admet.workflows.operations import operation as find_operation
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER = {"name": "admet", "version": "0.1.0"}
@@ -65,13 +66,29 @@ class AdmetServer:
         a model that is the wrong default. The Python binding still reaches them
         -- Admet.engine_action -- as the expert escape hatch.
         """
-        return [DESCRIBE_TOOL, *operation_tools()]
+        return [DESCRIBE_TOOL, *PLAN_TOOLS, *operation_tools()]
 
     # -- calling ------------------------------------------------------------
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         arguments = dict(arguments or {})
         if name == "describe":
             return self.admet.describe(str(arguments.get("target") or ""))
+        if name == "plan_protocol":
+            return self.admet.plan_protocol(
+                str(arguments.get("operation_id") or ""), dict(arguments.get("settings") or {})
+            )
+        if name == "planned_protocols":
+            return self.admet.planned_protocols(str(arguments.get("plan_id") or ""))
+        if name == "execute_protocol_plan":
+            return self.admet.execute_protocol_plan(str(arguments.get("plan_id") or ""))
+        if name == "cancel_protocol_plan":
+            return self.admet.cancel_protocol_plan(str(arguments.get("plan_id") or ""))
+        operation = find_operation(name)
+        if operation.starts_protocol:
+            raise RuntimeError(
+                f"{name} cannot start directly over MCP; use plan_protocol, review the plan, "
+                "then execute_protocol_plan with its plan_id"
+            )
         return self.admet.do(name, self._simulated(name, arguments))
 
     def _simulated(self, name: str, settings: dict[str, Any]) -> dict[str, Any]:
