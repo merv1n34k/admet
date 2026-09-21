@@ -791,6 +791,9 @@ class AcquisitionEngine:
     def events_after(self, sequence: int = 0, limit: int = 100) -> list[Any]:
         return self._pipeline.events_after(sequence, limit) if self._pipeline else []
 
+    def polling_started_monotonic(self) -> float:
+        return self._acquisition.started_monotonic if self._acquisition else 0.0
+
     def latest_snapshot(self) -> Any:
         return self._acquisition.latest_snapshot() if self._acquisition else None
 

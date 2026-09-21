@@ -120,7 +120,7 @@ class NamingTests(unittest.TestCase):
         verbs = (
             "connect", "disconnect", "apply", "set", "stop", "start", "pause",
             "resume", "confirm", "skip", "run", "read", "list", "create", "open",
-            "add", "verify", "calibrate", "shutdown", "reset",
+            "add", "verify", "calibrate", "shutdown", "reset", "validate",
         )
         for op in OPERATIONS:
             if op.id in SPECIFIED_NAMES:
@@ -345,10 +345,12 @@ class DescribeTests(unittest.TestCase):
                     self.assertIn(op.protocol, PROTOCOLS)
 
     def test_an_operation_that_starts_a_shipped_protocol_names_which(self):
-        # run_steps is the exception: it starts a protocol the caller wrote, so
-        # there is no name in this build to give.
+        # Two build their steps rather than naming one of this build's
+        # protocols: run_steps runs what the caller wrote, and
+        # validate_oil_capacity composes its own from the targets it is given.
+        builds_its_own = {"run_steps", "validate_oil_capacity"}
         for op in OPERATIONS:
-            if op.id == "run_steps":
+            if op.id in builds_its_own:
                 continue
             with self.subTest(operation=op.id):
                 self.assertEqual(bool(op.protocol), op.starts_protocol)

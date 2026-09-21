@@ -475,6 +475,27 @@ class Admet:
             return SafetyState().describe()
         return engine.safety_state()
 
+    def polling_started_monotonic(self) -> float:
+        engine = self._engines.get("acquisition")
+        return engine.polling_started_monotonic() if engine is not None else 0.0
+
+    def save_validation(self, summary: dict[str, Any], *, check_id: str = "") -> Path:
+        """Keep a validation's summary in the project, beside its raw data."""
+        if self.project is None:
+            raise NoProject("no project is open; create or open one first")
+        path = self.project.append_system_check(
+            summary,
+            summary=summary.get("classification_reason", ""),
+            check_id=check_id,
+        )
+        self.project = ProjectStore(self.project.path)
+        return path
+
+    def start_validation(self, run: Any) -> None:
+        """Hand core the supervisor watching the run, so observe can report it."""
+        self._validation = run
+        run.start()
+
     def emergency_stop(self, reason: str = "") -> dict[str, Any]:
         """Zero everything now. Works whatever else is or is not true."""
         return self.engine("acquisition").emergency_stop(reason)

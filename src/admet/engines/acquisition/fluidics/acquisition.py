@@ -187,6 +187,16 @@ class AcquisitionThread(threading.Thread):
             self._data_queue.put(snapshot)
         return snapshot
 
+    @property
+    def started_monotonic(self) -> float:
+        """When polling began, so a CSV's elapsed_s can be placed on a clock.
+
+        Every row is stamped relative to this, and protocol events carry raw
+        monotonic times. Without it the two cannot be lined up, and a sampling
+        window cannot be turned into the rows it covers.
+        """
+        return self._start_time
+
     def latest_snapshot(self) -> DataSnapshot | None:
         """The newest reading, without removing it. None before the first poll."""
         with self._observation_lock:

@@ -58,6 +58,18 @@ class Runner(Protocol):
 
     def emergency_stop(self, reason: str) -> dict[str, Any]: ...
 
+    def arm_pressure_limits(self, limits: dict[int, float]) -> dict[str, Any]: ...
+
+    def save_validation(self, summary: dict[str, Any], *, check_id: str) -> Any: ...
+
+    def start_validation(self, run: Any) -> None: ...
+
+    def polling_started_monotonic(self) -> float: ...
+
+    def run_context(self) -> dict[str, Any]: ...
+
+    def do(self, operation_id: str, settings: dict[str, Any] | None = None) -> dict[str, Any]: ...
+
     def reset_safety(self) -> dict[str, Any]: ...
 
     def protocol_events(self, *, after_sequence: int, limit: int) -> list[dict[str, Any]]: ...
@@ -203,6 +215,61 @@ def _apply_corrections(runner: Runner, settings: dict[str, Any]) -> dict[str, An
     # under. Flows are not comparable across different correction factors.
     runner.mark("correction_settings", dict(settings))
     return result.metadata
+
+
+def _validate_oil_capacity(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
+    """Measure how much oil the path carries, stopping short of the ceiling."""
+    from admet.workflows import validation
+
+    configuration = str(settings["configuration"])
+    if configuration not in validation.CONFIGURATIONS:
+        raise Refused(
+            f"configuration must be one of: {', '.join(validation.CONFIGURATIONS)}; "
+            f"got {configuration!r}"
+        )
+    # The cap is the parameter's declared maximum, so it is refused by the
+    # schema before this runs and is visible to anything reading the schema.
+    trip_mbar = float(settings["oil_pressure_trip_mbar"])
+    targets = [float(t) for t in (settings.get("flow_targets_ul_min") or [])]
+    if not targets:
+        raise Refused("validate_oil_capacity needs at least one flow target")
+
+    observed = runner.engine_action("acquisition", "read_observation", {}).metadata
+    channels = observed.get("channels") or []
+    if len(channels) <= validation.OIL_CHANNEL:
+        raise Refused(
+            f"the instrument reports {len(channels)} channels, so there is no "
+            f"channel {validation.OIL_CHANNEL} to run the oil line on"
+        )
+    if not observed.get("polling"):
+        raise Refused("the fluidics are not being polled; nothing would be measured")
+
+    prepared = {**settings, "flow_targets_ul_min": targets, "configuration": configuration}
+    steps, plan = validation.build_steps(prepared, channels[validation.OIL_CHANNEL])
+
+    # Armed before anything flows, and before the recording, so there is no
+    # moment where oil is moving with nothing watching the pressure.
+    runner.arm_pressure_limits({validation.OIL_CHANNEL: trip_mbar})
+
+    check_id = f"oilcap_{configuration}_{now_iso()[:19].replace(':', '').replace('-', '')}"
+    started = runner.do("start_recording", {"recording_label": check_id})
+
+    run = validation.ValidationRun(runner, prepared, plan, check_id=check_id)
+    if started.get("csv_path"):
+        run.note_artifact("fluidics_csv", started["csv_path"])
+    result = runner.run_steps(steps, tick_s=float(settings.get("tick_s", 0.2)))
+    runner.start_validation(run)
+
+    return {
+        **result.metadata,
+        "validation_id": check_id,
+        "configuration": configuration,
+        "targets_ul_min": sorted(set(targets)),
+        "oil_pressure_trip_mbar": trip_mbar,
+        "fluidics_csv": started.get("csv_path"),
+        "steps": len(steps),
+        "awaiting": "confirm_protocol -- the channel mapping must be confirmed before oil moves",
+    }
 
 
 def _emergency_stop(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
@@ -521,6 +588,56 @@ OPERATIONS: tuple[Operation, ...] = (
         requires=("fluidics",),
         uses=("apply_corrections",),
         run=_apply_corrections,
+    ),
+    Operation(
+        "validate_oil_capacity",
+        "Validate oil-path capacity",
+        "Measure how much oil the path carries, one target at a time, stopping "
+        "short of the controller's ceiling rather than finding it. Asks the "
+        "operator to confirm the channel mapping before anything flows. Returns "
+        "once started; poll observe and protocol_events while it runs.",
+        kind=START,
+        starts_protocol=True,
+        requires=("project", "fluidics", "corrections", "idle", "safe"),
+        params=(
+            Param(
+                "configuration",
+                "Configuration",
+                ParamKind.CHOICE,
+                default="bypass_chip",
+                required=True,
+                options=(
+                    ParamOption("bypass_chip", "Bypass the chip"),
+                    ParamOption("with_chip", "Through the chip"),
+                ),
+                description="What is plumbed in; the difference isolates chip resistance",
+            ),
+            _number("settle_tolerance_ul_min", "Settle tolerance", 5.0, unit="uL/min"),
+            _number("settle_window_s", "Settle window", 5.0, minimum=0.1, unit="s"),
+            _number("settle_timeout_s", "Settle timeout", 30.0, minimum=0.1, unit="s"),
+            _number("sample_window_s", "Sample window", 10.0, minimum=0.1, unit="s"),
+            Param(
+                "oil_pressure_trip_mbar",
+                "Oil pressure trip",
+                ParamKind.FLOAT,
+                default=1900.0,
+                minimum=1.0,
+                maximum=1900.0,
+                description="Measured pressure that stops the run (mbar); capped well "
+                "under the controller's 2000",
+            ),
+            _number("minimum_flow_fraction", "Minimum flow fraction", 0.85, minimum=0.0),
+            TICK,
+        ),
+        raw={
+            "flow_targets_ul_min": {
+                "type": "array",
+                "description": "Oil flow targets in uL/min, run from lowest to highest. "
+                "Start at [50, 100, 150] on a bench rig.",
+                "items": {"type": "number", "minimum": 0.0},
+            }
+        },
+        run=_validate_oil_capacity,
     ),
     Operation(
         "emergency_stop",
