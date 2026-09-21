@@ -15,13 +15,16 @@ line, a stray print -- corrupts the stream, so diagnostics go to stderr.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import select
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
+import uuid
 from pathlib import Path
 import traceback
 from typing import Any, TextIO
@@ -35,6 +38,7 @@ SERVER = {"name": "admet", "version": "0.1.0"}
 CONTROL_SOCKET = "control.sock"
 OWNER_LOG = "owner.log"
 OWNER_CHILD_ENV = "ADMET_OWNER_CHILD"
+ATTACH_METHOD = "admet/attach"
 
 
 class SimulationRefused(Exception):
@@ -97,7 +101,10 @@ class AdmetServer:
                 f"{name} cannot start directly over MCP; use plan_protocol, review the plan, "
                 "then execute_protocol_plan with its plan_id"
             )
-        return self.admet.do(name, self._simulated(name, arguments))
+        result = self.admet.do(name, self._simulated(name, arguments))
+        if name == "set_channel_flow":
+            result = {**result, "control_lease_s": float(arguments.get("control_lease_s", 10.0))}
+        return result
 
     def _simulated(self, name: str, settings: dict[str, Any]) -> dict[str, Any]:
         """Keep a simulated session simulated.
@@ -250,20 +257,40 @@ def _serve_relay(
     with client:
         reader = client.makefile("r", encoding="utf-8")
         try:
-            for line in source:
-                if not line.strip():
-                    continue
-                client.sendall(line.encode("utf-8") if line.endswith("\n") else (line + "\n").encode())
+            attach = {
+                "method": ATTACH_METHOD,
+                "mode": "simulated" if simulated else "live",
+                "project": str(Path(project).resolve()) if project else None,
+                "software_digest": _software_digest(),
+            }
+            client.sendall(json.dumps(attach).encode() + b"\n")
+            acknowledgement = json.loads(reader.readline())
+            if not acknowledgement.get("ok"):
+                raise RuntimeError(acknowledgement.get("error") or "owner refused attachment")
+            pump_error: list[BaseException] = []
+
+            def upstream() -> None:
                 try:
-                    request = json.loads(line)
-                except json.JSONDecodeError:
-                    request = {"id": None}
-                if "id" in request:
-                    response = reader.readline()
-                    if not response:
-                        raise RuntimeError("the persistent ADMET owner disconnected")
-                    sink.write(response)
-                    sink.flush()
+                    for line in source:
+                        if line.strip():
+                            payload = line if line.endswith("\n") else line + "\n"
+                            client.sendall(payload.encode("utf-8"))
+                except BaseException as exc:
+                    pump_error.append(exc)
+                finally:
+                    try:
+                        client.shutdown(socket.SHUT_WR)
+                    except OSError:
+                        pass
+
+            sender = threading.Thread(target=upstream, name="MCPRelayUpstream", daemon=True)
+            sender.start()
+            for response in reader:
+                sink.write(response)
+                sink.flush()
+            sender.join(timeout=1.0)
+            if pump_error:
+                raise pump_error[0]
         finally:
             reader.close()
     return 0
@@ -329,10 +356,23 @@ def _validate_owner(runtime: Path, *, simulated: bool, project: str | None) -> N
             f"runtime already owns a {header.get('mode')} session; requested {expected_mode}"
         )
     existing_project = header.get("project")
-    if project and existing_project and Path(existing_project) != Path(project):
+    existing_project_normalized = (
+        str(Path(existing_project).resolve()) if existing_project else None
+    )
+    requested_project = str(Path(project).resolve()) if project else None
+    if existing_project_normalized != requested_project:
         raise RuntimeError(
             f"runtime already serves project {existing_project}; requested {project}"
         )
+
+
+def _software_digest() -> str:
+    package = Path(__file__).resolve().parents[1]
+    digest = hashlib.sha256()
+    for path in sorted(package.rglob("*.py")):
+        digest.update(str(path.relative_to(package)).encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
 
 
 def _serve_owner(
@@ -344,6 +384,34 @@ def _serve_owner(
     owner, publisher = _claim_runtime(runtime, server, mode)
     control_path = Path(runtime) / CONTROL_SOCKET
     previous_handlers: dict[int, Any] = {}
+    stop_requested = threading.Event()
+    shutdown_requested = threading.Event()
+    emergency_requested = threading.Event()
+    clients: set[socket.socket] = set()
+    clients_lock = threading.Lock()
+    leases = _ManualLeaseManager(server)
+    owner_digest = _software_digest()
+
+    def safety_worker() -> None:
+        while True:
+            requested = emergency_requested.wait(0.1)
+            if requested:
+                emergency_requested.clear()
+                reason = (
+                    "manual SIGTERM shutdown"
+                    if shutdown_requested.is_set()
+                    else "manual SIGUSR1 emergency stop"
+                )
+                try:
+                    server.admet.emergency_stop(reason)
+                    leases.clear()
+                finally:
+                    if shutdown_requested.is_set():
+                        stop_requested.set()
+            if stop_requested.is_set():
+                return
+
+    safety = threading.Thread(target=safety_worker, name="EmergencyControl", daemon=True)
     try:
         control_path.unlink(missing_ok=True)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -351,16 +419,12 @@ def _serve_owner(
         os.chmod(control_path, 0o600)
         listener.listen(1)
         listener.setblocking(False)
-        stop_requested = False
-        emergency_requested = False
-
         def request_stop(_signum: int, _frame: Any) -> None:
-            nonlocal stop_requested
-            stop_requested = True
+            shutdown_requested.set()
+            emergency_requested.set()
 
         def request_emergency(_signum: int, _frame: Any) -> None:
-            nonlocal emergency_requested
-            emergency_requested = True
+            emergency_requested.set()
 
         previous_handlers[signal.SIGTERM] = signal.getsignal(signal.SIGTERM)
         previous_handlers[signal.SIGINT] = signal.getsignal(signal.SIGINT)
@@ -370,54 +434,54 @@ def _serve_owner(
             previous_handlers[signal.SIGUSR1] = signal.getsignal(signal.SIGUSR1)
             signal.signal(signal.SIGUSR1, request_emergency)
 
-        client: socket.socket | None = None
-        pending = b""
-        while not stop_requested:
-            if emergency_requested:
-                server.admet.emergency_stop("manual SIGUSR1 emergency stop")
-                emergency_requested = False
-            watched = [listener, *( [client] if client is not None else [])]
-            readable, _, _ = select.select(watched, [], [], 0.1)
-            if listener in readable:
-                candidate, _ = listener.accept()
-                if client is None:
-                    client = candidate
-                    pending = b""
-                else:
-                    candidate.close()
-            if client is not None and client in readable:
-                try:
-                    chunk = client.recv(65536)
-                except OSError:
-                    chunk = b""
-                if not chunk:
-                    client.close()
-                    client = None
-                    pending = b""
-                    continue
-                pending += chunk
-                while b"\n" in pending:
-                    raw, pending = pending.split(b"\n", 1)
-                    if not raw.strip():
-                        continue
-                    try:
-                        request = json.loads(raw)
-                        response = handle(server, request)
-                    except Exception as exc:
-                        response = _error(None, -32603, f"{type(exc).__name__}: {exc}")
-                    if response is not None:
-                        try:
-                            client.sendall(json.dumps(response).encode() + b"\n")
-                        except OSError:
-                            client.close()
-                            client = None
-                            pending = b""
-                            break
-        _shut_down(server, publisher, "manual SIGTERM shutdown")
+        safety.start()
+        leases.start()
+        while not stop_requested.is_set():
+            if shutdown_requested.is_set():
+                stop_requested.wait(0.1)
+                continue
+            readable, _, _ = select.select([listener], [], [], 0.1)
+            if listener not in readable:
+                continue
+            client, _ = listener.accept()
+            client.setblocking(True)
+            with clients_lock:
+                clients.add(client)
+            threading.Thread(
+                target=_serve_client,
+                args=(
+                    client,
+                    server,
+                    mode,
+                    project,
+                    owner_digest,
+                    leases,
+                    clients,
+                    clients_lock,
+                ),
+                name=f"MCPClient-{id(client)}",
+                daemon=True,
+            ).start()
+        _shut_down(
+            server,
+            publisher,
+            "manual SIGTERM shutdown",
+            emergency_already_attempted=True,
+        )
     except BaseException as exc:
         _shut_down(server, publisher, f"{type(exc).__name__}: {exc}")
         raise
     finally:
+        stop_requested.set()
+        leases.stop()
+        with clients_lock:
+            active_clients = list(clients)
+        for client in active_clients:
+            try:
+                client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            client.close()
         try:
             listener.close()
         except UnboundLocalError:
@@ -430,18 +494,173 @@ def _serve_owner(
     return 0
 
 
-def _shut_down(server: AdmetServer, publisher: Any, reason: str) -> None:
+def _serve_client(
+    client: socket.socket,
+    server: AdmetServer,
+    mode: str,
+    project: str | None,
+    owner_digest: str,
+    leases: "_ManualLeaseManager",
+    clients: set[socket.socket],
+    clients_lock: threading.Lock,
+) -> None:
+    client_id = uuid.uuid4().hex
+    reader: TextIO | None = None
+    try:
+        reader = client.makefile("r", encoding="utf-8")
+        first = reader.readline()
+        if not first:
+            return
+        attach = json.loads(first)
+        expected_project = str(Path(project).resolve()) if project else None
+        mismatch = None
+        if attach.get("method") != ATTACH_METHOD:
+            mismatch = "missing ADMET owner handshake"
+        elif attach.get("mode") != mode:
+            mismatch = f"owner mode is {mode}; relay requested {attach.get('mode')}"
+        elif attach.get("project") != expected_project:
+            mismatch = f"owner project is {expected_project}; relay requested {attach.get('project')}"
+        elif attach.get("software_digest") != owner_digest:
+            mismatch = "owner software differs from the relay; safely restart the owner"
+        client.sendall(json.dumps({"ok": mismatch is None, "error": mismatch}).encode() + b"\n")
+        if mismatch:
+            return
+        for line in reader:
+            if not line.strip():
+                continue
+            request = json.loads(line)
+            tool_name = ((request.get("params") or {}).get("name") or "")
+            arguments = (request.get("params") or {}).get("arguments") or {}
+            channel = int(arguments.get("channel_index", 0))
+            try:
+                if tool_name == "set_channel_flow":
+                    leases.reserve(
+                        client_id,
+                        channel,
+                        float(arguments.get("control_lease_s", 10.0)),
+                    )
+                response = handle(server, request)
+            except Exception as exc:
+                if tool_name == "set_channel_flow":
+                    leases.release(client_id, channel, stop=False)
+                response = _error(request.get("id"), -32603, f"{type(exc).__name__}: {exc}")
+            if response is not None:
+                client.sendall(json.dumps(response).encode() + b"\n")
+                result = response.get("result") or {}
+                if tool_name == "set_channel_flow" and not result.get("isError"):
+                    leases.activate(
+                        client_id,
+                        channel,
+                        float(arguments.get("control_lease_s", 10.0)),
+                    )
+                elif tool_name == "set_channel_flow":
+                    leases.release(client_id, channel, stop=False)
+                elif tool_name == "stop_channel" and not result.get("isError"):
+                    leases.release(client_id, channel, stop=False)
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    finally:
+        leases.release_client(client_id)
+        with clients_lock:
+            clients.discard(client)
+        if reader is not None:
+            reader.close()
+        try:
+            client.close()
+        except OSError:
+            pass
+
+
+class _ManualLeaseManager:
+    def __init__(self, server: AdmetServer):
+        self._server = server
+        self._leases: dict[int, tuple[str, float | None]] = {}
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._watch, name="ControlLeases", daemon=True)
+        self._thread.start()
+
+    def reserve(self, client_id: str, channel: int, duration_s: float = 10.0) -> None:
+        with self._lock:
+            current = self._leases.get(channel)
+            if current and current[0] != client_id:
+                raise RuntimeError(f"channel {channel} is leased by another MCP client")
+            self._leases[channel] = (client_id, time.monotonic() + duration_s)
+
+    def activate(self, client_id: str, channel: int, duration_s: float) -> None:
+        with self._lock:
+            if self._leases.get(channel, (None,))[0] == client_id:
+                self._leases[channel] = (client_id, time.monotonic() + duration_s)
+
+    def release(self, client_id: str, channel: int, *, stop: bool = True) -> None:
+        with self._lock:
+            current = self._leases.get(channel)
+            if not current or current[0] != client_id:
+                return
+            del self._leases[channel]
+        if stop:
+            self._stop_channel(channel)
+
+    def release_client(self, client_id: str) -> None:
+        with self._lock:
+            channels = [channel for channel, lease in self._leases.items() if lease[0] == client_id]
+        for channel in channels:
+            self.release(client_id, channel)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._leases.clear()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=1.0)
+        with self._lock:
+            leases = list(self._leases.items())
+        for channel, (client_id, _deadline) in leases:
+            self.release(client_id, channel)
+
+    def _watch(self) -> None:
+        while not self._stop.wait(0.1):
+            now = time.monotonic()
+            with self._lock:
+                expired = [
+                    (channel, client_id)
+                    for channel, (client_id, deadline) in self._leases.items()
+                    if deadline is not None and deadline <= now
+                ]
+            for channel, client_id in expired:
+                self.release(client_id, channel)
+
+    def _stop_channel(self, channel: int) -> None:
+        try:
+            self._server.admet.do("stop_channel", {"channel_index": channel})
+        except Exception as exc:
+            _warn(f"could not zero expired manual lease for channel {channel}: {exc}")
+
+
+def _shut_down(
+    server: AdmetServer,
+    publisher: Any,
+    reason: str,
+    *,
+    emergency_already_attempted: bool = False,
+) -> None:
     """Leave the rig safe, then say so.
 
     The instrument comes first and the telemetry second: if publishing fails
     the channels are still at zero, whereas the other order could leave a rig
     flowing because a file could not be written.
     """
-    try:
-        stopped = server.admet.emergency_stop(f"server shutting down ({reason})")
-        _warn(f"admet stopped the rig: {stopped.get('errors') or 'no errors'}")
-    except Exception as exc:
-        _warn(f"admet could not stop the rig cleanly: {exc}")
+    if not emergency_already_attempted:
+        try:
+            stopped = server.admet.emergency_stop(f"server shutting down ({reason})")
+            _warn(f"admet stopped the rig: {stopped.get('errors') or 'no errors'}")
+        except Exception as exc:
+            _warn(f"admet could not stop the rig cleanly: {exc}")
     try:
         cleaned = server.admet.engine_action("acquisition", "shutdown_instrument", {})
         cleanup_errors = cleaned.metadata.get("cleanup_errors", [])

@@ -316,7 +316,8 @@ class ShutdownTests(unittest.TestCase):
         state = read_state(runtime)
         self.assertEqual(raised, [])
         self.assertEqual(state["runtime"]["state"], "stopped")
-        self.assertEqual({c["mode"] for c in state["observation"]["channels"]}, {"off"})
+        self.assertFalse(state["observation"]["connection"]["fluidics"])
+        self.assertEqual(state["observation"]["channels"], [])
 
     def test_why_it_stopped_is_recorded(self):
         runtime, _raised = self._session(lambda writer: writer.close())

@@ -22,7 +22,11 @@ With `--runtime`, `serve` is split internally into a durable hardware owner and
 a per-chat stdio MCP relay. Closing a chat detaches only its relay; the owner,
 hardware connection, corrections, plans, protocol, safety latch, telemetry and
 event cursors remain alive. Running the same `serve` command later reattaches to
-that owner after verifying the live/simulated mode and project.
+that owner after verifying the live/simulated mode, exact project and software
+digest. A code update therefore requires an orderly owner restart rather than
+silently attaching new relay code to an old in-memory service. Relays pump MCP
+traffic in both directions and the owner serves each client independently, so
+notifications, large tool lists and a blocked client do not stall other clients.
 
 ```sh
 make setup      # uv sync --all-extras
@@ -110,6 +114,12 @@ kill -TERM PID   # safely stop activity, disconnect, publish stopped, and exit
 Use the exact PID currently shown by `watch`. `SIGKILL` is a last resort because
 it cannot run hardware cleanup. If pressure or flow may be unsafe, use the
 physical emergency stop first; it remains authoritative.
+
+Manual `set_channel_flow` calls over MCP carry a bounded `control_lease_s`
+(10 seconds by default, 60 seconds maximum). The owner gives each channel to
+only one MCP client at a time and automatically zeros it when the lease expires
+or that client disconnects. Protocol steps retain their separate planned,
+guarded lifecycle.
 
 ## Over MCP
 

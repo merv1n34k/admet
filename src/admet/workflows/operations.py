@@ -170,13 +170,22 @@ class Operation:
                 raise Refused(f"{self.id}: {remedy}")
 
 
-def _number(name: str, label: str, default: float, *, minimum: float = 0.0, unit: str = "") -> Param:
+def _number(
+    name: str,
+    label: str,
+    default: float,
+    *,
+    minimum: float = 0.0,
+    maximum: float | None = None,
+    unit: str = "",
+) -> Param:
     return Param(
         name,
         label,
         ParamKind.FLOAT,
         default=default,
         minimum=minimum,
+        maximum=maximum,
         description=f"{label} ({unit})" if unit else label,
     )
 
@@ -330,7 +339,9 @@ def _protocol_events(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]
 
 
 def _set_flow(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
-    return runner.engine_action("acquisition", "set_channel_flow", settings).metadata
+    engine_settings = dict(settings)
+    engine_settings.pop("control_lease_s", None)
+    return runner.engine_action("acquisition", "set_channel_flow", engine_settings).metadata
 
 
 def _stop_channel(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
@@ -729,6 +740,14 @@ OPERATIONS: tuple[Operation, ...] = (
         params=(
             _whole("channel_index", "Channel", 0, minimum=0),
             _number("channel_flow_ul_min", "Flow", 0.0, unit="uL/min"),
+            _number(
+                "control_lease_s",
+                "Control lease",
+                10.0,
+                minimum=1.0,
+                maximum=60.0,
+                unit="s",
+            ),
         ),
         requires=("fluidics", "corrections", "idle", "safe"),
         uses=("set_channel_flow",),

@@ -333,6 +333,59 @@ class DocumentedCommandTests(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("--simulated", done.stderr)
 
+    def test_stdio_relay_pumps_initialize_notification_and_large_tool_list(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as runtime:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "admet.app",
+                    "serve",
+                    "--simulated",
+                    "--runtime",
+                    runtime,
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                messages = [
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "acceptance", "version": "1"},
+                        },
+                    },
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                ]
+                for message in messages:
+                    process.stdin.write(json.dumps(message) + "\n")
+                process.stdin.flush()
+
+                initialized = json.loads(process.stdout.readline())
+                tools = json.loads(process.stdout.readline())
+
+                self.assertEqual(initialized["id"], 1)
+                self.assertEqual(tools["id"], 2)
+                self.assertGreater(len(json.dumps(tools)), 15_000)
+                self.assertIn("tools", tools["result"])
+            finally:
+                process.stdin.close()
+                process.wait(timeout=10)
+                process.stdout.close()
+                process.stderr.close()
+                _terminate_owner(runtime)
+
     def test_a_mode_mismatch_on_an_existing_runtime_is_refused(self):
         import subprocess
         import sys

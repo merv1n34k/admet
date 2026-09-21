@@ -75,6 +75,15 @@ class SurfaceTests(unittest.TestCase):
         self.assertEqual(schema["properties"]["prime_oil_volume_ul"]["type"], "number")
         self.assertFalse(schema["additionalProperties"])
 
+    def test_manual_flow_exposes_a_bounded_control_lease(self):
+        tools = {tool["name"]: tool for tool in self.server.tools()}
+
+        lease = tools["set_channel_flow"]["inputSchema"]["properties"]["control_lease_s"]
+
+        self.assertEqual(lease["default"], 10.0)
+        self.assertEqual(lease["minimum"], 1.0)
+        self.assertEqual(lease["maximum"], 60.0)
+
 
 
 class GuardTests(unittest.TestCase):
