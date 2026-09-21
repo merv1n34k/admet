@@ -5,9 +5,7 @@ owns the instrument, and watch it.
 
     admet describe [TARGET]
     admet serve (--simulated | --live) [--project PATH] [--runtime PATH]
-
-`admet watch --runtime PATH` joins them once there is runtime telemetry for it
-to read.
+    admet watch --runtime PATH [--once]
 
 Running an experiment is deliberately not here. It happens through MCP or
 through the Python binding, both of which go through the same guarded
@@ -68,12 +66,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.add_argument("--runtime", default=argparse.SUPPRESS)
 
+    watch = sub.add_parser("watch", help="read-only monitor of a serving process")
+    watch.add_argument("--runtime", required=True, help="the serving process's runtime directory")
+    watch.add_argument("--once", action="store_true", help="draw one frame and exit")
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "watch":
+        from admet.core.watch import watch
+
+        return watch(args.runtime, once=args.once)
 
     if args.command == "serve":
         from admet.mcp.server import serve

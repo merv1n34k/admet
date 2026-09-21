@@ -25,8 +25,8 @@ def _commands() -> dict:
 
 
 class SurfaceTests(unittest.TestCase):
-    def test_the_command_line_is_discovery_and_the_controller(self):
-        self.assertEqual(set(_commands()), {"describe", "serve"})
+    def test_the_command_line_is_discovery_the_controller_and_the_monitor(self):
+        self.assertEqual(set(_commands()), {"describe", "serve", "watch"})
 
     def test_no_command_runs_an_experiment(self):
         # do, call, run, plan, operations and status are gone. One way to run

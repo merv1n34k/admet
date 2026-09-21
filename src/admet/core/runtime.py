@@ -252,10 +252,16 @@ class RuntimePublisher:
                 self._append({"type": name, "detail": value})
 
         # Protocol events are already sequenced, so ask for what has not been
-        # published rather than diffing them.
+        # published rather than diffing them. Progress ticks are left out: a
+        # protocol emits one per tick, which at a 0.05s tick is twenty lines a
+        # second of a bar moving, burying the transitions that matter in a file
+        # that only ever grows. Progress is in state.json, where being
+        # overwritten is the right behaviour for it.
         for event in self._events_since(self._protocol_sequence):
             self._protocol_sequence = max(self._protocol_sequence, event["sequence"])
-            self._append({"type": "protocol", "detail": event})
+            if _worth_recording(event, self._previous.get("protocol_step")):
+                self._previous["protocol_step"] = (event.get("state"), event.get("step_index"))
+                self._append({"type": "protocol", "detail": event})
 
     def _append(self, entry: dict[str, Any]) -> None:
         with self._lock:
@@ -266,6 +272,20 @@ class RuntimePublisher:
                 handle.write(json.dumps(line, default=str) + "\n")
         except OSError:
             pass  # telemetry must never take the instrument down with it
+
+
+def _worth_recording(event: dict[str, Any], last_step: Any) -> bool:
+    """Whether this protocol event is a happening rather than a tick.
+
+    A step ending, a run changing state, a question for the operator or an
+    error -- all of those happen once and must not be lost. The bar moving
+    happens constantly and is current state, not history.
+    """
+    if event.get("outcome") and event["outcome"] != "running":
+        return True
+    if event.get("confirmation_message") or event.get("error"):
+        return True
+    return (event.get("state"), event.get("step_index")) != last_step
 
 
 class _Unset:
