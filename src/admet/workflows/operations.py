@@ -308,6 +308,7 @@ def _observe(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
         "runtime": runner.runtime_state(),
         "validation": runner.validation_state(),
         "safety": runner.safety_state(),
+        "planned_protocols": runner.planned_protocols()["plans"],
     }
 
 

@@ -112,6 +112,8 @@ def render(
         RULE,
         *_camera(observation, paint),
         RULE,
+        *_plans(observation, paint, now),
+        RULE,
         *_protocol(observation, paint),
         RULE,
         *_validation(observation, paint),
@@ -262,6 +264,79 @@ def _camera(observation: dict[str, Any], paint: _Paint) -> list[str]:
         f"  {'settings':<11}exposure {_number(camera.get('exposure_us'))} us   "
         f"gain {_number(camera.get('gain'))}   transport {camera.get('transport') or '—'}",
     ]
+
+
+def _plans(observation: dict[str, Any], paint: _Paint, now: float | None) -> list[str]:
+    plans = observation.get("planned_protocols") or []
+    lines = [paint("  PLANNED PROTOCOLS", DIM)]
+    if not plans:
+        return [*lines, paint("  none", DIM)]
+    lines.append(
+        paint(
+            f"  {'PLAN ID':<22}{'OPERATION':<24}{'STATE':<11}{'AGE':>7}"
+            f"{'STEPS':>7}{'DURATION':>11}{'LIMIT':>9}  DIGEST",
+            DIM,
+        )
+    )
+    selected = next((plan for plan in plans if plan.get("state") == "executing"), None)
+    selected = selected or next((plan for plan in plans if plan.get("state") == "planned"), None)
+    selected = selected or plans[-1]
+    for plan in plans:
+        age = _iso_age(plan.get("created_at"), now)
+        limits = ((plan.get("armed_safety_limits") or {}).get("pressure_mbar") or {})
+        limit = next(iter(limits.values()), None)
+        lines.append(
+            f"  {str(plan.get('plan_id') or ''):<22.22}{str(plan.get('operation_id') or ''):<24.24}"
+            f"{str(plan.get('state') or ''):<11}{_number(age):>6}s"
+            f"{_number(plan.get('step_count'), '.0f'):>7}"
+            f"{_number(plan.get('expected_duration_s')):>10}s"
+            f"{_number(limit):>9}  {str(plan.get('digest') or '')[:12]}"
+        )
+        for warning in plan.get("warnings") or []:
+            lines.append(f"    {paint('warning: ' + str(warning), YELLOW)}")
+        if plan.get("unmet_guards"):
+            lines.append(f"    unmet: {', '.join(plan['unmet_guards'])}")
+    lines.append(paint(f"  STEPS · {selected.get('plan_id')}", DIM))
+    lines.append(
+        paint(f"  {'#':<4}{'NAME':<28}{'SETPOINTS':<30}{'TRIGGER':<22}{'END':<8}", DIM)
+    )
+    for step in selected.get("steps") or []:
+        setpoints = _plan_setpoints(step)
+        trigger = str(step.get("trigger_type") or "")
+        timeout = step.get("timeout_s")
+        if timeout is not None:
+            trigger += f" ≤{_number(timeout)}s"
+        lines.append(
+            f"  {str(step.get('number') or ''):<4}{str(step.get('name') or ''):<28.28}"
+            f"{setpoints:<30.30}{trigger:<22.22}{str(step.get('on_complete') or ''):<8}"
+        )
+        if step.get("confirmation"):
+            lines.append(f"      {paint('CONFIRM: ' + str(step['confirmation']), BOLD, YELLOW)}")
+    return lines
+
+
+def _plan_setpoints(step: dict[str, Any]) -> str:
+    flow = ", ".join(
+        f"ch{k}={_number(v)}uL/m" for k, v in (step.get("flow_setpoints_ul_min") or {}).items()
+    )
+    pressure = ", ".join(
+        f"ch{k}={_number(v)}mbar"
+        for k, v in (step.get("pressure_setpoints_mbar") or {}).items()
+    )
+    return ", ".join(value for value in (flow, pressure) if value) or "—"
+
+
+def _iso_age(created_at: Any, now: float | None) -> float | None:
+    if not created_at:
+        return None
+    try:
+        from datetime import datetime
+
+        created = datetime.fromisoformat(str(created_at))
+        reference = datetime.now().astimezone()
+        return max(0.0, (reference - created).total_seconds())
+    except (TypeError, ValueError):
+        return None
 
 
 def _protocol(observation: dict[str, Any], paint: _Paint) -> list[str]:

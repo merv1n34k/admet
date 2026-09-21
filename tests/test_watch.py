@@ -179,6 +179,29 @@ class ContentTests(unittest.TestCase):
         self.assertIn("disconnected", frame)
         self.assertIn("frames —", frame)
 
+    def test_a_plan_and_its_complete_steps_appear_before_execution(self):
+        frame = render(_state(planned_protocols=[{
+            "plan_id": "plan_abc123", "operation_id": "validate_oil_capacity",
+            "state": "planned", "created_at": "2026-09-21T12:00:00+03:00",
+            "step_count": 1, "expected_duration_s": 30.0,
+            "armed_safety_limits": {"pressure_mbar": {"0": 1850.0}},
+            "required_confirmations": ["Confirm Oil-L"], "warnings": [],
+            "unmet_guards": [], "digest": "0123456789abcdef",
+            "steps": [{
+                "number": 1, "name": "confirm oil mapping",
+                "flow_setpoints_ul_min": {}, "pressure_setpoints_mbar": {},
+                "trigger_type": "time", "timeout_s": None,
+                "on_complete": "hold", "confirmation": "Confirm Oil-L",
+            }],
+        }]))
+
+        self.assertIn("PLANNED PROTOCOLS", frame)
+        self.assertIn("plan_abc123", frame)
+        self.assertIn("validate_oil_capacity", frame)
+        self.assertIn("confirm oil mapping", frame)
+        self.assertIn("CONFIRM: Confirm Oil-L", frame)
+        self.assertIn("0123456789ab", frame)
+
     def test_the_running_step_and_its_progress_are_shown(self):
         frame = render(_state(protocol={
             "state": "running", "step_index": 1, "total_steps": 8,

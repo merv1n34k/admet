@@ -243,6 +243,15 @@ class RuntimePublisher:
             "recording": observation.get("recording"),
             "safety": observation.get("safety"),
             "validation": (observation.get("validation") or {}).get("state"),
+            "plans": [
+                {
+                    "plan_id": plan.get("plan_id"),
+                    "operation_id": plan.get("operation_id"),
+                    "state": plan.get("state"),
+                    "digest": plan.get("digest"),
+                }
+                for plan in observation.get("planned_protocols") or []
+            ],
         }
         for name, value in watched.items():
             if self._previous.get(name, _UNSET) != value:
