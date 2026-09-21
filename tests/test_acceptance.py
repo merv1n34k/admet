@@ -74,6 +74,19 @@ class AcceptanceRun(unittest.TestCase):
             raise AssertionError(f"{name} was refused: {content}")
         return json.loads(content)
 
+    def _call_error(self, name, **arguments):
+        self._id += 1
+        request = {
+            "jsonrpc": "2.0", "id": self._id, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }
+        self._stdin_w.write(json.dumps(request) + "\n")
+        self._stdin_w.flush()
+        self._wait_for(lambda: self._reply(self._id) is not None, f"a refusal from {name}")
+        reply = self._reply(self._id)["result"]
+        self.assertTrue(reply["isError"])
+        return reply["content"][0]["text"]
+
     def _reply(self, request_id):
         for line in self._out.getvalue().splitlines():
             try:
@@ -123,22 +136,44 @@ class AcceptanceRun(unittest.TestCase):
         self.assertIn("Oil L", frame)
         self.assertIn("read-only", frame)
 
-        # 4. The validation, which returns while it runs.
-        started = self.call(
-            "validate_oil_capacity",
-            configuration="bypass_chip",
-            flow_targets_ul_min=[5.0, 10.0, 20.0],
-            settle_tolerance_ul_min=50.0,
-            settle_window_s=1.0,
-            settle_timeout_s=3.0,
-            sample_window_s=1.0,
-            oil_pressure_trip_mbar=1900.0,
-            tick_s=0.1,
+        # 4. Planning builds and publishes the complete protocol without starting it.
+        plan = self.call(
+            "plan_protocol",
+            operation_id="validate_oil_capacity",
+            settings={
+                "configuration": "bypass_chip",
+                "flow_targets_ul_min": [5.0, 10.0, 20.0],
+                "settle_tolerance_ul_min": 50.0,
+                "settle_window_s": 1.0,
+                "settle_timeout_s": 3.0,
+                "sample_window_s": 1.0,
+                "oil_pressure_trip_mbar": 1900.0,
+                "tick_s": 0.1,
+            },
         )
+        before = self.call("observe")
+        self.assertEqual(before["protocol"]["state"], "idle")
+        self.assertFalse(before["recording"]["active"])
+        self.assertEqual({channel["mode"] for channel in before["channels"]}, {"off"})
+        self.assertEqual(before["planned_protocols"][0]["digest"], plan["digest"])
+        listed = self.call("planned_protocols", plan_id=plan["plan_id"])["plans"][0]
+        self.assertEqual(listed["steps"], plan["steps"])
+        self._wait_for(
+            lambda: plan["plan_id"] in render(read_state(self.runtime), read_events(self.runtime)),
+            "the plan to appear in watch",
+        )
+        runtime_events = read_events(self.runtime, limit=0)
+        self.assertTrue(any(event["type"] == "plans" for event in runtime_events))
+        self.assertEqual([event["seq"] for event in runtime_events], sorted(
+            event["seq"] for event in runtime_events
+        ))
+
+        # 5. Execution accepts only the immutable plan id and returns while it runs.
+        started = self.call("execute_protocol_plan", plan_id=plan["plan_id"])
         self.assertTrue(started["validation_id"])
         self.assertTrue(started["fluidics_csv"])
 
-        # 5. Nothing flows until the operator confirms the channel mapping.
+        # 6. Nothing flows until the operator confirms the channel mapping.
         self._wait_for(
             lambda: self.call("observe")["protocol"]["confirmation_message"] != "",
             "the mapping question",
@@ -148,7 +183,7 @@ class AcceptanceRun(unittest.TestCase):
         self.assertEqual(asked["channels"][0]["mode"], "off")
         self.call("confirm_protocol")
 
-        # 6. Polled through the same surface while it runs, without taking
+        # 7. Polled through the same surface while it runs, without taking
         #    anything from anyone.
         seen_targets, sequence = set(), 0
         while self.call("observe")["validation"]["active"]:
@@ -160,11 +195,15 @@ class AcceptanceRun(unittest.TestCase):
             time.sleep(0.2)
         self.assertTrue(seen_targets, "the run never reported a target")
 
-        # 7. It completes, the rig is back at zero, and the artifacts are real.
+        # 8. It completes, the rig is back at zero, and the artifacts are real.
         finished = self.call("observe")
         self.assertEqual(finished["validation"]["classification"], "pass")
         self.assertFalse(finished["protocol"]["state"] == "running")
         self.assertEqual({c["mode"] for c in finished["channels"]}, {"off"})
+        completed_plan = self.call("planned_protocols", plan_id=plan["plan_id"])["plans"][0]
+        self.assertEqual(completed_plan["state"], "completed")
+        refused = self._call_error("execute_protocol_plan", plan_id=plan["plan_id"])
+        self.assertIn("completed", refused)
 
         summary_path = Path(finished["validation"]["artifacts"]["summary"])
         csv_path = Path(finished["validation"]["artifacts"]["fluidics_csv"])
@@ -180,14 +219,24 @@ class AcceptanceRun(unittest.TestCase):
             self.assertGreater(target["samples"], 0)
             self.assertIsNotNone(target["flow_ul_min"]["mean"])
 
-        # 8. The manifest lists what was produced, and nothing that was not.
+        # 9. Cancelled and stale plans are refused.
+        cancelled = self.call("plan_protocol", operation_id="run_steps", settings={
+            "steps": [{"name": "never runs", "trigger_type": "time",
+                       "trigger_params": {"duration_s": 0.1}}],
+        })
+        self.call("cancel_protocol_plan", plan_id=cancelled["plan_id"])
+        self.assertIn("cancelled", self._call_error(
+            "execute_protocol_plan", plan_id=cancelled["plan_id"]
+        ))
+
+        # 10. The manifest lists what was produced, and nothing that was not.
         manifest = json.loads((self.project / "manifest.json").read_text())
         roles = {entry["role"] for entry in manifest["files"]}
         self.assertIn("control_fluidics_csv", roles)
         self.assertNotIn("control_video", roles)
         self.assertEqual(list(self.project.rglob("*.avi")), [])
 
-        # 9. Closing stdin leaves every channel at zero and the runtime stopped.
+        # 11. Closing stdin leaves every channel at zero and the runtime stopped.
         self._stdin_w.close()
         self._server.join(timeout=15)
         stopped = read_state(self.runtime)

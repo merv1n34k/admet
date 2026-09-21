@@ -100,9 +100,40 @@ admet serve --simulated --runtime /tmp/admet-live \
 `--project`, `--create-project` and `--runtime` are accepted on either side of
 `serve`.
 
-32 tools, generated from the same declarations `describe` reads, so there is no
-second description to fall out of step. Guarded operations only — engine actions
-have no guards, which is what they are for, and they stay on the Python binding.
+Protocol starts over MCP use an immutable plan boundary. Direct protocol tools
+return a refusal telling the client to call `plan_protocol`; engine actions have
+no guards and remain available only through the expert Python binding.
+
+The human/AI workflow is deliberately two-phase:
+
+1. The AI calls `plan_protocol` with an existing protocol operation and settings.
+2. The complete immutable plan appears in `observe` and `admet watch` before execution.
+3. The AI explains every ordered step, safety limit, confirmation, and abort condition.
+4. The AI stops and waits for explicit human approval.
+5. The human reviews the read-only TUI and confirms the physical setup.
+6. Only after approval does the AI call `execute_protocol_plan` with the `plan_id` alone.
+7. The AI continuously monitors `observe` and `protocol_events` until completion.
+8. The physical emergency stop remains authoritative.
+
+Planning performs no hardware action: it starts no acquisition, recording,
+pressure, or flow. Execution rejects cancelled, replaced, previously executed,
+or stale plans when the project, connection, channel mapping, correction,
+safety, or hardware identity has changed.
+
+```json
+{"operation_id": "validate_oil_capacity",
+ "settings": {"configuration": "bypass_chip",
+              "flow_targets_ul_min": [50, 100, 150],
+              "oil_pressure_trip_mbar": 1900}}
+```
+
+Call that object as the arguments to `plan_protocol`, review the returned
+`steps`, `required_confirmations`, `armed_safety_limits`, `abort_conditions`,
+`unmet_guards`, and `digest`, then execute with:
+
+```json
+{"plan_id": "plan_…"}
+```
 
 **`observe`** is the one read. Unguarded, no arguments, and it takes nothing
 from anyone:
@@ -138,10 +169,8 @@ monitor or the recorder.
 
 ## The oil capacity validation
 
-```json
-{"configuration": "bypass_chip", "flow_targets_ul_min": [50, 100, 150],
- "oil_pressure_trip_mbar": 1900, "sample_window_s": 10}
-```
+Submit the oil settings through `plan_protocol` as shown above; do not call
+`validate_oil_capacity` directly over MCP.
 
 Targets are run exactly as given, each settled then sampled, with a lead-in at
 half the first so nothing jumps from zero straight to a target. They are not
@@ -225,6 +254,11 @@ A stability step that gives up is recorded `timed_out`, not `completed` — a
 settle that never happened must not read like one that did.
 
 ## From Python
+
+`Admet.do("run_steps", ...)` and the other direct protocol operations remain an
+intentional expert escape hatch for trusted in-process integrations. The MCP
+server alone enforces plan-before-execute; this distinction is deliberate and
+covered by tests.
 
 ```python
 from admet.core.service import Admet
