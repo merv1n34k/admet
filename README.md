@@ -86,14 +86,19 @@ A measurement that has not been taken shows as `—`, never `0.0`: on this scree
 the two would be indistinguishable. A heartbeat older than three seconds says
 `STALE` and that the screen is not current.
 
-The monitor reads two files and nothing else. A test parses its import graph to
-prove it: the only `admet` module it touches is `core.runtime`.
+The monitor reads two files and nothing else. Two tests hold that: one parses
+its import graph, and one runs `admet watch` as a real process and asserts
+neither the service nor any engine module was loaded.
 
 ## Over MCP
 
 ```sh
-admet serve --simulated --runtime /tmp/admet-live --project /runs/oil.admetp
+admet serve --simulated --runtime /tmp/admet-live \
+            --project /runs/oil.admetp --create-project
 ```
+
+`--project`, `--create-project` and `--runtime` are accepted on either side of
+`serve`.
 
 32 tools, generated from the same declarations `describe` reads, so there is no
 second description to fall out of step. Guarded operations only — engine actions
@@ -138,10 +143,14 @@ monitor or the recorder.
  "oil_pressure_trip_mbar": 1900, "sample_window_s": 10}
 ```
 
-Targets run lowest first, each settled then sampled, with a lead-in at half the
-first so nothing jumps from zero straight to a target. The pressure limit is
-capped at 1900 mbar — the controller tops out at 2000, and the point is to stop
-short of it rather than go looking for it.
+Targets are run exactly as given, each settled then sampled, with a lead-in at
+half the first so nothing jumps from zero straight to a target. They are not
+sorted or deduplicated for you: a list that does not climb, repeats itself, or
+opens above 50 uL/min is refused, because silently rewriting it gives a run that
+does not match its own request.
+
+The pressure limit is capped at 1900 mbar — the controller tops out at 2000, and
+the point is to stop short of it rather than go looking for it.
 
 Nothing flows until the operator answers a question quoting what the
 *instrument* reports about channel 0, not what the configuration claims. Answer
@@ -166,10 +175,14 @@ A run is never called a pass because the protocol thread ended.
 zeroes every channel, then stops the protocol, then closes the recording, each
 attempted independently, and latches why.
 
-A pressure watchdog reads *measured* pressure inside the acquisition poll — a
-setpoint is what was asked for, and the failure that matters (a line that will
-not flow, so the controller pushes harder) shows only in the measurement. It is
-independent of the protocol, so a protocol that has hung is still stopped.
+A pressure watchdog reads *measured* pressure inside the acquisition poll and
+trips **at** the limit, not above it — a ceiling you may sit on is not a
+ceiling. A setpoint is what was asked for; the failure that matters, a line that
+will not flow so the controller pushes harder, shows only in the measurement. It
+is independent of the protocol, so a protocol that has hung is still stopped.
+The poll itself only zeroes the channels and latches; stopping the protocol and
+closing the recording happen off that thread, because blocking there would stop
+the very polling the watchdog reads from.
 
 A trip latches. While set, everything that makes liquid move is refused and
 `observe` says so; reading, stopping and disconnecting stay available, because a
@@ -239,8 +252,10 @@ keeps the context it was made under — software version, correction factors, wh
 the instrument says each channel is, the armed limits — because flows measured
 under different corrections are not comparable.
 
-Recording does not require a camera. A video that was never written is never
-registered: the manifest lists only files that exist.
+Recording does not require a camera, and does not record video unless
+`include_video` asks for it -- a camera that happens to be live is not a request
+to record it. A video that was never written is never registered: the manifest
+lists only files that exist.
 
 ## Layout
 

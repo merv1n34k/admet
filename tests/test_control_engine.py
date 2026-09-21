@@ -327,6 +327,7 @@ class AcquisitionEngineTests(unittest.TestCase):
                 {
                     "recording_root": str(Path(tmpdir) / "records"),
                     "recording_label": "set01_rep02",
+                    "include_video": True,
                     "camera_video_fps": 120.0,
                     "camera_preview_off_recording": True,
                 },
@@ -337,6 +338,7 @@ class AcquisitionEngineTests(unittest.TestCase):
                 {
                     "recording_root": str(Path(tmpdir) / "records"),
                     "recording_label": "set01_rep03",
+                    "include_video": True,
                     "camera_video_fps": 120.0,
                     "camera_preview_off_recording": True,
                 },
@@ -378,6 +380,7 @@ class AcquisitionEngineTests(unittest.TestCase):
                 {
                     "recording_root": str(root / "unused"),
                     "recording_label": "set01_rep04",
+                    "include_video": True,
                     "camera_video_fps": 120.0,
                     "camera_preview_off_recording": False,
                 },

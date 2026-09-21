@@ -44,6 +44,11 @@ MAX_TRIP_MBAR = 1900.0
 
 CONFIGURATIONS = ("bypass_chip", "with_chip")
 
+# The first target a run is allowed to open with. The bench plan starts at 50,
+# and opening higher is how a restricted line gets a pressure spike before
+# anyone has seen a single measurement from it.
+FIRST_TARGET_CEILING_UL_MIN = 50.0
+
 PASS = "pass"
 CAPACITY_LIMITED = "capacity_limited"
 UNSTABLE = "unstable"
@@ -70,6 +75,38 @@ def confirmation_message(configuration: str, channel: dict[str, Any]) -> str:
     )
 
 
+def check_targets(targets: list[float]) -> list[float]:
+    """The targets as given, or a refusal saying what is wrong with them.
+
+    Deliberately not sorted or deduplicated. Quietly rewriting what was asked
+    for means a run that does not match its own request, and [300, 50] almost
+    certainly means somebody made a mistake rather than that they wanted them
+    reordered.
+    """
+    if not targets:
+        raise ValueError("validate_oil_capacity needs at least one flow target")
+    if any(target <= 0 for target in targets):
+        raise ValueError("every flow target must be above zero")
+    repeated = [t for t in targets if targets.count(t) > 1]
+    if repeated:
+        raise ValueError(
+            f"flow targets repeat {', '.join(f'{t:g}' for t in sorted(set(repeated)))} uL/min; "
+            f"give each one once"
+        )
+    if targets != sorted(targets):
+        raise ValueError(
+            f"flow targets must climb: {', '.join(f'{t:g}' for t in targets)} does not. "
+            f"A run works upwards so it stops at the first target the path cannot carry"
+        )
+    if targets[0] > FIRST_TARGET_CEILING_UL_MIN:
+        raise ValueError(
+            f"the first target is {targets[0]:g} uL/min, above the "
+            f"{FIRST_TARGET_CEILING_UL_MIN:g} this run may open with; start lower and "
+            f"work up once the path is known"
+        )
+    return list(targets)
+
+
 def build_steps(settings: dict[str, Any], channel: dict[str, Any]) -> tuple[list[ProtocolStep], list[dict[str, Any]]]:
     """The steps, and what each one is for.
 
@@ -77,9 +114,7 @@ def build_steps(settings: dict[str, Any], channel: dict[str, Any]) -> tuple[list
     which target, and reading that back out of step names later would be
     guessing at its own protocol.
     """
-    targets = sorted({float(target) for target in settings["flow_targets_ul_min"]})
-    if not targets:
-        raise ValueError("validate_oil_capacity needs at least one flow target")
+    targets = check_targets([float(target) for target in settings["flow_targets_ul_min"]])
 
     tolerance = float(settings["settle_tolerance_ul_min"])
     window_s = float(settings["settle_window_s"])
@@ -339,7 +374,15 @@ class ValidationRun(threading.Thread):
                 self._record(event)
                 if event["step_name"] == "" and event["outcome"] != "running":
                     # A terminal event describes the run rather than a step.
-                    return "" if event["outcome"] == "completed" else f"the run {event['outcome']}"
+                    if event["outcome"] == "completed":
+                        return ""
+                    # A trip cancels the protocol, so the cancellation is the
+                    # trip's own consequence. Reporting it as a reason would
+                    # override the finding with its own side effect and file
+                    # the clearest result as an unreadable run.
+                    if self._admet.safety_state()["tripped"]:
+                        return ""
+                    return f"the run {event['outcome']}"
             if self._admet.safety_state()["tripped"]:
                 return ""  # a trip is a finding, and the summary says so
             if not self._admet.state()["running"]:

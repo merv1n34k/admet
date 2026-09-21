@@ -18,7 +18,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import StrEnum
 from queue import Queue
-from typing import Protocol
+from typing import Any, Protocol
 
 from admet.core.clock import now_iso
 from admet.engines.acquisition.triggers import Trigger, create_trigger
@@ -159,6 +159,8 @@ class PipelineEngine(threading.Thread):
         *,
         tick_s: float = 0.1,
         recent_events: int = 500,
+        next_sequence: Any = None,
+        on_event: Any = None,
     ):
         super().__init__(daemon=True, name="PipelineEngine")
         self._steps = steps
@@ -172,7 +174,13 @@ class PipelineEngine(threading.Thread):
 
         # Observation, kept apart from the queue for the same reason as the
         # acquisition snapshots: a full queue must not cost a reader an event.
+        # A protocol is one of several a session runs, so the numbering cannot
+        # belong to it: a reader holding a cursor from the last protocol would
+        # be handed a new one starting at 1 and see nothing. Whoever owns the
+        # session supplies the counter; on its own it keeps its own.
         self._sequence = 0
+        self._next_sequence = next_sequence or self._own_sequence
+        self._on_event = on_event
         self._latest_event: PipelineEvent | None = None
         self._recent_events: deque[PipelineEvent] = deque(maxlen=recent_events)
         self._observation_lock = threading.Lock()
@@ -374,6 +382,10 @@ class PipelineEngine(threading.Thread):
             for sensor_index, start_volume in self._step_start_volumes.items()
         }
 
+    def _own_sequence(self) -> int:
+        self._sequence += 1
+        return self._sequence
+
     def latest_event(self) -> PipelineEvent | None:
         """The newest event, without removing it. None before the first."""
         with self._observation_lock:
@@ -409,8 +421,8 @@ class PipelineEngine(threading.Thread):
             if progress == 0.0:
                 progress = self._steps[self._current_step_idx].trigger.progress()
 
+        sequence = self._next_sequence()
         with self._observation_lock:
-            self._sequence += 1
             event = PipelineEvent(
                 state=self._state,
                 current_step=self._current_step_idx,
@@ -420,13 +432,16 @@ class PipelineEngine(threading.Thread):
                 error_msg=error_msg,
                 step_volumes=step_volumes or {},
                 confirmation_message=confirmation_message,
-                sequence=self._sequence,
+                sequence=sequence,
                 at=now_iso(),
                 monotonic=time.monotonic(),
                 outcome=outcome,
             )
             self._latest_event = event
             self._recent_events.append(event)
+
+        if self._on_event is not None:
+            self._on_event(event)
 
         # Best effort, and after the observation state: a full queue must not
         # cost a reader the confirmation prompt or the outcome.

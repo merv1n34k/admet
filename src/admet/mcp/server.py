@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 import traceback
 from typing import Any, TextIO
 
@@ -39,9 +40,23 @@ class AdmetServer:
     rather than quietly given it.
     """
 
-    def __init__(self, *, simulated: bool = False, project: str | None = None):
+    def __init__(
+        self,
+        *,
+        simulated: bool = False,
+        project: str | None = None,
+        create: bool = False,
+    ):
         self.simulated = simulated
-        self.admet = Admet(project=project)
+        self.admet = Admet()
+        if project:
+            # Created here rather than by whoever started us, so that starting
+            # a server on a new project is one command and not two.
+            path = Path(project)
+            if create and not (path / "manifest.json").is_file():
+                self.admet.create_project(path)
+            else:
+                self.admet.open_project(path)
 
     def tools(self) -> list[dict[str, Any]]:
         """Guarded operations, and describe. Nothing below them.
@@ -100,12 +115,13 @@ def serve(
     *,
     simulated: bool,
     project: str | None = None,
+    create_project: bool = False,
     runtime: str | None = None,
     stdin: TextIO | None = None,
     stdout: TextIO | None = None,
 ) -> int:
     """Read requests until the stream closes. Returns a process exit code."""
-    server = AdmetServer(simulated=simulated, project=project)
+    server = AdmetServer(simulated=simulated, project=project, create=create_project)
     source = stdin or sys.stdin
     sink = stdout or sys.stdout
     mode = "simulated" if simulated else "live"

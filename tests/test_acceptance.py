@@ -199,3 +199,139 @@ class AcceptanceRun(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DocumentedCommandTests(unittest.TestCase):
+    """The commands the README prints, run as real processes.
+
+    In-process tests share an interpreter with the code under test, so an
+    import that only happens at module level, or an argument the parser never
+    really accepts, can pass there and fail the first time somebody types it.
+    """
+
+    def _admet(self, *arguments, stdin="", timeout=60):
+        import subprocess
+        import sys
+
+        return subprocess.run(
+            [sys.executable, "-m", "admet.app", *arguments],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(Path(__file__).resolve().parent.parent),
+        )
+
+    def test_serve_starts_and_creates_its_project_as_documented(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            project = Path(tmp) / "oil.admetp"
+
+            done = self._admet(
+                "serve", "--simulated",
+                "--runtime", str(runtime),
+                "--project", str(project),
+                "--create-project",
+                stdin="",  # EOF straight away: start, then shut down cleanly
+            )
+
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertTrue((project / "manifest.json").is_file())
+            self.assertEqual(read_state(runtime)["runtime"]["state"], "stopped")
+
+    def test_the_same_flags_work_before_the_subcommand(self):
+        # The acceptance run in the specification writes them this way.
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime, project = Path(tmp) / "runtime", Path(tmp) / "oil.admetp"
+
+            done = self._admet(
+                "--project", str(project), "--create-project",
+                "--runtime", str(runtime),
+                "serve", "--simulated",
+                stdin="",
+            )
+
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertTrue((project / "manifest.json").is_file())
+
+    def test_serving_without_saying_which_hardware_fails(self):
+        done = self._admet("serve")
+
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("--simulated", done.stderr)
+
+    def test_a_second_server_on_the_same_runtime_is_refused(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            first = subprocess.Popen(
+                [sys.executable, "-m", "admet.app", "serve", "--simulated",
+                 "--runtime", str(runtime)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, cwd=str(Path(__file__).resolve().parent.parent),
+            )
+            try:
+                deadline = time.monotonic() + 30
+                while read_state(runtime) is None and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                self.assertIsNotNone(read_state(runtime), "the first server never published")
+
+                second = self._admet("serve", "--simulated", "--runtime", str(runtime))
+
+                self.assertNotEqual(second.returncode, 0)
+                self.assertIn("already served by", second.stderr)
+            finally:
+                first.stdin.close()
+                first.wait(timeout=30)
+                first.stdout.close()
+                first.stderr.close()
+
+    def test_watch_renders_a_real_server_and_stays_telemetry_only(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            server = subprocess.Popen(
+                [sys.executable, "-m", "admet.app", "serve", "--simulated",
+                 "--runtime", str(runtime)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, cwd=str(Path(__file__).resolve().parent.parent),
+            )
+            try:
+                deadline = time.monotonic() + 30
+                while read_state(runtime) is None and time.monotonic() < deadline:
+                    time.sleep(0.1)
+
+                watched = self._admet("watch", "--runtime", str(runtime), "--once")
+
+                self.assertEqual(watched.returncode, 0, watched.stderr)
+                self.assertIn("SIMULATED", watched.stdout)
+                self.assertIn("read-only", watched.stdout)
+            finally:
+                server.stdin.close()
+                server.wait(timeout=30)
+                server.stdout.close()
+                server.stderr.close()
+
+    def test_watching_loads_neither_the_service_nor_an_engine(self):
+        # Checked in a real process, because the eager import that made this
+        # false lived in app.py rather than in the monitor itself.
+        import subprocess
+        import sys
+
+        probe = (
+            "import sys; sys.argv = ['admet', 'watch', '--runtime', '/nonexistent', '--once'];"
+            "from admet.app import main; main();"
+            "print('SERVICE', 'admet.core.service' in sys.modules);"
+            "print('ENGINES', any(m.startswith('admet.engines') for m in sys.modules))"
+        )
+        done = subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,
+            cwd=str(Path(__file__).resolve().parent.parent),
+        )
+
+        self.assertIn("SERVICE False", done.stdout)
+        self.assertIn("ENGINES False", done.stdout)

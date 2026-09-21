@@ -28,8 +28,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from admet.core.service import Admet
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="admet", description="admet headless control")
@@ -65,6 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="permit real hardware",
     )
     serve.add_argument("--runtime", default=argparse.SUPPRESS)
+    serve.add_argument("--project", default=argparse.SUPPRESS)
+    serve.add_argument("--create-project", action="store_true", default=argparse.SUPPRESS)
 
     watch = sub.add_parser("watch", help="read-only monitor of a serving process")
     watch.add_argument("--runtime", required=True, help="the serving process's runtime directory")
@@ -88,18 +88,23 @@ def main(argv: list[str] | None = None) -> int:
         return serve(
             simulated=args.simulated,
             project=args.project,
+            create_project=args.create_project,
             runtime=getattr(args, "runtime", None),
         )
 
     if args.command == "describe":
-        return _attempt(lambda: _open(args).describe(args.target))
+        # Imported here, not at the top: `watch` reads files and must not pull
+        # the service -- and through it every engine -- into a process whose
+        # whole claim is that it cannot touch the instrument.
+        from admet.core.service import Admet
+
+        return _attempt(lambda: _open(Admet(), args).describe(args.target))
 
     parser.error(f"unknown command {args.command!r}")
     return 2
 
 
-def _open(args: argparse.Namespace) -> Admet:
-    admet = Admet()
+def _open(admet: Any, args: argparse.Namespace) -> Any:
     if args.project:
         path = Path(args.project)
         if args.create_project and not (path / "manifest.json").is_file():

@@ -54,10 +54,19 @@ class WatchdogTests(unittest.TestCase):
         self.assertIn("1900", state["reason"])
         self.assertEqual(len(self.tripped), 1)
 
-    def test_a_reading_at_the_limit_is_not_a_breach(self):
+    def test_a_reading_at_the_limit_is_a_breach(self):
+        # A ceiling you are allowed to sit on is not a ceiling, and nothing
+        # should rest on the difference between 1900.0 and 1900.1.
         self.watchdog.arm({0: 1900.0})
 
         self.watchdog.check([1900.0])
+
+        self.assertTrue(self.watchdog.describe()["tripped"])
+
+    def test_a_reading_below_the_limit_is_not(self):
+        self.watchdog.arm({0: 1900.0})
+
+        self.watchdog.check([1899.9])
 
         self.assertFalse(self.watchdog.describe()["tripped"])
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import threading
+from collections import deque
 from dataclasses import asdict
 from queue import Queue
 from typing import Any, Callable
@@ -28,6 +31,8 @@ from admet.engines.acquisition.recording import (
 )
 from admet.engines.acquisition.pipeline import PipelineEngine, ProtocolStep, build_pipeline_steps
 from admet.engines.acquisition.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES
+
+log = logging.getLogger(__name__)
 
 ActionHandler = Callable[[dict[str, Any]], dict[str, Any]]
 ActionSettingsPreparer = Callable[[RunJob, dict[str, Any]], dict[str, Any]]
@@ -96,6 +101,7 @@ ACQUISITION_ACTIONS = (
         params=(
             "recording_root",
             "recording_label",
+            "include_video",
             "recording_max_frames",
             "recording_max_seconds",
             "camera_width",
@@ -137,6 +143,12 @@ class AcquisitionEngine:
         self.hardware = HardwareManager(self.sdk)
         self.channel_manager = ChannelManager(self.sdk)
         self.watchdog = PressureWatchdog(on_trip=self._tripped)
+        # Event numbering and history belong to the session, not to one
+        # protocol. A client's cursor has to keep meaning what it meant after
+        # the next protocol starts.
+        self._event_sequence = 0
+        self._event_history: deque = deque(maxlen=2000)
+        self._event_lock = threading.Lock()
         self.data_queue: Queue = Queue(maxsize=50)
         self.pipeline_queue: Queue = Queue(maxsize=50)
         self._camera = CameraController()
@@ -405,7 +417,13 @@ class AcquisitionEngine:
     ) -> dict[str, Any]:
         if not self.hardware.connected:
             raise RuntimeError("Fluidics hardware is not connected")
-        camera_recorder = self._camera.acquisition if self.camera_live else None
+        # Asked for, not inferred. A camera being live is not a request to
+        # record it, and a video appearing because of what happened to be
+        # switched on is a file nobody chose.
+        wants_video = bool(settings.get("include_video", False))
+        camera_recorder = self._camera.acquisition if (wants_video and self.camera_live) else None
+        if wants_video and not self.camera_live:
+            raise RuntimeError("include_video was asked for, but no camera is live")
         return self._recordings.start_recording(
             settings,
             camera_recorder=camera_recorder,
@@ -437,6 +455,8 @@ class AcquisitionEngine:
             self.pipeline_queue,
             sensor_to_channel,
             tick_s=tick_s,
+            next_sequence=self.next_event_sequence,
+            on_event=self.record_event,
         )
         self._pipeline.start()
 
@@ -700,8 +720,31 @@ class AcquisitionEngine:
         return {**stopped, "errors": errors, "safety": latched}
 
     def _tripped(self, reason: str) -> None:
-        """What the watchdog calls. The same path as an operator asking."""
-        self.emergency_stop(reason)
+        """What the watchdog calls, from inside the polling loop.
+
+        Only what must happen now happens here: the channels go to zero. The
+        rest of the cleanup stops a thread and closes a file, either of which
+        can block for seconds -- and blocking here stops the polling that the
+        watchdog itself reads from, leaving the rig unwatched at exactly the
+        moment something has gone wrong.
+        """
+        try:
+            self.channel_manager.emergency_stop_all()
+        except Exception:
+            log.exception("Emergency zeroing failed")
+        pipeline = self._pipeline
+        if pipeline is not None:
+            pipeline.stop()  # signalled, not joined: the join belongs elsewhere
+        threading.Thread(
+            target=self._finish_trip, args=(reason,), name="TripCleanup", daemon=True
+        ).start()
+
+    def _finish_trip(self, reason: str) -> None:
+        """The part of a trip that is allowed to take its time."""
+        try:
+            self.emergency_stop(reason)
+        except Exception:
+            log.exception("Trip cleanup failed")
 
     def reset_safety(self) -> dict[str, Any]:
         return self.watchdog.reset(self._pressures())
@@ -785,11 +828,25 @@ class AcquisitionEngine:
             "error": event.error_msg if event else "",
         }
 
+    def next_event_sequence(self) -> int:
+        with self._event_lock:
+            self._event_sequence += 1
+            return self._event_sequence
+
+    def record_event(self, event: Any) -> None:
+        with self._event_lock:
+            self._event_history.append(event)
+
     def latest_event(self) -> Any:
-        return self._pipeline.latest_event() if self._pipeline else None
+        with self._event_lock:
+            return self._event_history[-1] if self._event_history else None
 
     def events_after(self, sequence: int = 0, limit: int = 100) -> list[Any]:
-        return self._pipeline.events_after(sequence, limit) if self._pipeline else []
+        """Events newer than a cursor, across every protocol this session ran."""
+        with self._event_lock:
+            events = list(self._event_history)
+        newer = [event for event in events if event.sequence > sequence]
+        return newer[: max(0, limit)] if limit else newer
 
     def polling_started_monotonic(self) -> float:
         return self._acquisition.started_monotonic if self._acquisition else 0.0

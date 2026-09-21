@@ -252,7 +252,10 @@ def _validate_oil_capacity(runner: Runner, settings: dict[str, Any]) -> dict[str
     runner.arm_pressure_limits({validation.OIL_CHANNEL: trip_mbar})
 
     check_id = f"oilcap_{configuration}_{now_iso()[:19].replace(':', '').replace('-', '')}"
-    started = runner.do("start_recording", {"recording_label": check_id})
+    started = runner.do(
+        "start_recording",
+        {"recording_label": check_id, "include_video": bool(settings.get("include_video", False))},
+    )
 
     run = validation.ValidationRun(runner, prepared, plan, check_id=check_id)
     if started.get("csv_path"):
@@ -627,6 +630,13 @@ OPERATIONS: tuple[Operation, ...] = (
                 "under the controller's 2000",
             ),
             _number("minimum_flow_fraction", "Minimum flow fraction", 0.85, minimum=0.0),
+            Param(
+                "include_video",
+                "Include video",
+                ParamKind.BOOLEAN,
+                default=False,
+                description="A capacity run measures fluidics; video is off unless asked for",
+            ),
             TICK,
         ),
         raw={
@@ -818,9 +828,16 @@ OPERATIONS: tuple[Operation, ...] = (
     Operation(
         "start_recording",
         "Start recording",
-        "Record video and fluidics together into the open project.",
+        "Record fluidics into the open project, and video only if asked for.",
         params=(
             Param("recording_label", "Label", ParamKind.TEXT, default="recording"),
+            Param(
+                "include_video",
+                "Include video",
+                ParamKind.BOOLEAN,
+                default=False,
+                description="Record video as well as fluidics; needs a live camera",
+            ),
             _whole("recording_max_frames", "Frame limit", 100_000, minimum=0),
             _number("recording_max_seconds", "Time limit", 0.0, unit="s"),
         ),

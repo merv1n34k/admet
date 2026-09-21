@@ -78,6 +78,14 @@ RECORDING_SETTINGS = ParamSchema(
     (
         Param("recording_root", "Recording Root", ParamKind.PATH, default=""),
         Param("recording_label", "Recording Label", ParamKind.TEXT, default="recording"),
+        Param(
+            "include_video",
+            "Include Video",
+            ParamKind.BOOLEAN,
+            default=False,
+            description="Record video as well as fluidics. Off unless asked for, so a "
+            "camera that happens to be live cannot add a file nobody wanted",
+        ),
         # Each frame is written as its own file, so an unattended recording can fill
         # the disk. Recording stops once either limit is reached; 0 disables it.
         Param("recording_max_frames", "Max Frames", ParamKind.INTEGER, default=100_000, minimum=0),

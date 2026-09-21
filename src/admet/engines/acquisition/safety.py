@@ -81,7 +81,10 @@ class PressureWatchdog:
             breach = None
             for index, limit in self.state.limits.items():
                 position = int(index)
-                if 0 <= position < len(pressures) and pressures[position] > limit:
+                # At the limit is a breach. A ceiling you are allowed to sit on
+                # is not a ceiling, and the difference between 1900.0 and
+                # 1900.1 is not something to stake the hardware on.
+                if 0 <= position < len(pressures) and pressures[position] >= limit:
                     breach = (position, pressures[position], limit)
                     break
             if breach is None:
@@ -91,7 +94,7 @@ class PressureWatchdog:
             self.state.at = now_iso()
             self.state.reason = (
                 f"channel {position} reached {measured:.1f} mbar, "
-                f"over its {limit:.0f} mbar limit"
+                f"at or over its {limit:.0f} mbar limit"
             )
             self.state.readings = {str(i): float(p) for i, p in enumerate(pressures)}
             reason = self.state.reason
@@ -125,7 +128,7 @@ class PressureWatchdog:
             unsafe = [
                 f"channel {index} is at {pressures[int(index)]:.1f} mbar, over {limit:.0f}"
                 for index, limit in self.state.limits.items()
-                if 0 <= int(index) < len(pressures) and pressures[int(index)] > limit
+                if 0 <= int(index) < len(pressures) and pressures[int(index)] >= limit
             ]
             if unsafe:
                 raise SafetyUnsafe(

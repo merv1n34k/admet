@@ -18,12 +18,14 @@ from admet.core.service import Admet
 from admet.workflows.operations import Refused, operation
 from admet.workflows.validation import (
     CAPACITY_LIMITED,
+    FIRST_TARGET_CEILING_UL_MIN,
     INVALID,
     MAX_TRIP_MBAR,
     OIL_CHANNEL,
     PASS,
     UNSTABLE,
     build_steps,
+    check_targets,
     classify,
     confirmation_message,
     read_rows,
@@ -85,11 +87,11 @@ class ShapeTests(unittest.TestCase):
 
     def test_a_single_target_still_gets_a_lead_in(self):
         # Otherwise one target means going straight from nothing to all of it.
-        _steps, plan = build_steps({**SETTINGS, "flow_targets_ul_min": [150.0]}, CHANNEL)
+        _steps, plan = build_steps({**SETTINGS, "flow_targets_ul_min": [50.0]}, CHANNEL)
 
         self.assertEqual([entry["role"] for entry in plan],
                          ["confirm", "lead_in", "settle", "sample"])
-        self.assertEqual(plan[1]["target_ul_min"], 75.0)
+        self.assertEqual(plan[1]["target_ul_min"], 25.0)
 
     def test_each_target_settles_before_it_is_sampled(self):
         _steps, plan = build_steps(SETTINGS, CHANNEL)
@@ -99,13 +101,38 @@ class ShapeTests(unittest.TestCase):
             if role == "sample":
                 self.assertEqual(roles[index - 1], "settle")
 
-    def test_targets_are_run_lowest_first_and_deduplicated(self):
+    def test_targets_are_run_exactly_as_given(self):
         _steps, plan = build_steps(
-            {**SETTINGS, "flow_targets_ul_min": [100.0, 50.0, 100.0]}, CHANNEL
+            {**SETTINGS, "flow_targets_ul_min": [50.0, 100.0]}, CHANNEL
         )
 
         sampled = [entry["target_ul_min"] for entry in plan if entry["role"] == "sample"]
         self.assertEqual(sampled, [50.0, 100.0])
+
+    def test_targets_out_of_order_are_refused_rather_than_sorted(self):
+        # Rewriting what was asked for gives a run that does not match its own
+        # request; [300, 50] is much more likely a mistake than a preference.
+        with self.assertRaises(ValueError) as caught:
+            check_targets([300.0, 50.0])
+
+        self.assertIn("must climb", str(caught.exception))
+
+    def test_repeated_targets_are_refused_rather_than_deduplicated(self):
+        with self.assertRaises(ValueError) as caught:
+            check_targets([50.0, 50.0, 100.0])
+
+        self.assertIn("repeat", str(caught.exception))
+
+    def test_opening_above_the_first_target_ceiling_is_refused(self):
+        # Opening high is how a restricted line spikes before anyone has seen
+        # a measurement from it.
+        with self.assertRaises(ValueError) as caught:
+            check_targets([FIRST_TARGET_CEILING_UL_MIN + 25, 200.0])
+
+        self.assertIn("start lower", str(caught.exception))
+
+    def test_the_bench_plan_is_accepted(self):
+        self.assertEqual(check_targets([50.0, 100.0, 150.0]), [50.0, 100.0, 150.0])
 
     def test_the_last_step_takes_the_channel_back_to_zero(self):
         steps, _plan = build_steps(SETTINGS, CHANNEL)
