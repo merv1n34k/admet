@@ -16,11 +16,11 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import StrEnum
 from queue import Queue
 from typing import Protocol
 
+from admet.core.clock import now_iso
 from admet.engines.acquisition.triggers import Trigger, create_trigger
 
 log = logging.getLogger(__name__)
@@ -421,7 +421,7 @@ class PipelineEngine(threading.Thread):
                 step_volumes=step_volumes or {},
                 confirmation_message=confirmation_message,
                 sequence=self._sequence,
-                at=datetime.now().astimezone().isoformat(timespec="milliseconds"),
+                at=now_iso(),
                 monotonic=time.monotonic(),
                 outcome=outcome,
             )

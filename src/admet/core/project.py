@@ -289,6 +289,11 @@ class ProjectStore:
             video_path = self.path / video_path
         if not fluidics_csv.is_absolute():
             fluidics_csv = self.path / fluidics_csv
+        # A path is only recorded for a file that is actually there. The
+        # manifest already refuses to list one that is not, but leaving the
+        # path here would still be a claim a reader could believe -- and a
+        # fluidics-only run writes no video at all.
+        wrote_video = video_path.is_file()
         normalized = dict(recording)
         normalized.update(
             {
@@ -296,8 +301,8 @@ class ProjectStore:
                 "video_prefix": str(recording.get("video_prefix") or recording_id),
                 "report_dir": "records",
                 "output_dir": "records/camera",
-                "video_path": self._stored_path(video_path),
-                "video_candidates": [self._stored_path(video_path)],
+                "video_path": self._stored_path(video_path) if wrote_video else "",
+                "video_candidates": [self._stored_path(video_path)] if wrote_video else [],
                 "fluidics_csv": self._stored_path(fluidics_csv),
             }
         )

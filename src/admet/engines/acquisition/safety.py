@@ -16,12 +16,9 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Callable
 
-
-def _now() -> str:
-    return datetime.now().astimezone().isoformat(timespec="milliseconds")
+from admet.core.clock import now_iso
 
 
 @dataclass
@@ -75,12 +72,6 @@ class PressureWatchdog:
             self.state.limits = {str(index): float(limit) for index, limit in limits.items()}
         return self.state.describe()
 
-    def disarm(self) -> dict[str, Any]:
-        with self._lock:
-            self.state.armed = False
-            self.state.limits = {}
-        return self.state.describe()
-
     # -- watching -----------------------------------------------------------
     def check(self, pressures: list[float]) -> None:
         """One poll's worth of measurements. Trips at most once."""
@@ -97,7 +88,7 @@ class PressureWatchdog:
                 return
             position, measured, limit = breach
             self.state.tripped = True
-            self.state.at = _now()
+            self.state.at = now_iso()
             self.state.reason = (
                 f"channel {position} reached {measured:.1f} mbar, "
                 f"over its {limit:.0f} mbar limit"
@@ -115,7 +106,7 @@ class PressureWatchdog:
         with self._lock:
             if not self.state.tripped:
                 self.state.tripped = True
-                self.state.at = _now()
+                self.state.at = now_iso()
                 self.state.reason = reason
                 if pressures is not None:
                     self.state.readings = {str(i): float(p) for i, p in enumerate(pressures)}

@@ -5,6 +5,7 @@ accident: an action that writes needs a session, gets its paths from core, and
 what it produced is in the manifest afterwards.
 """
 
+import json
 import tempfile
 import time
 import unittest
@@ -36,6 +37,13 @@ class RecordingEngine:
     def __init__(self):
         self.settings = _EmptySchema()
         self.jobs: list[RunJob] = []
+
+    def observation(self) -> dict:
+        """Part of the engine contract core reads when it records context."""
+        return {"connection": {"fluidics": True, "simulated": True}, "channels": []}
+
+    def safety_state(self) -> dict:
+        return {"armed": False, "tripped": False, "reason": "", "at": None, "limits": {}}
 
     def run(self, job: RunJob) -> RunResult:
         self.jobs.append(job)
@@ -135,6 +143,74 @@ class PathOwnershipTests(unittest.TestCase):
 
             self.assertEqual(engine.jobs[-1].metadata["session_id"], "rig")
             self.assertEqual(engine.jobs[-1].metadata["workdir"], str(admet.project.path))
+
+
+class FluidicsOnlyRecordingTests(unittest.TestCase):
+    """System validation must not need a camera pointed at the chip."""
+
+    def _recorded(self, tmp):
+        admet = Admet()
+        admet.create_project(Path(tmp) / "rig.admetp")
+        admet.do("connect_fluidics", {"simulated": True})
+        admet.do("apply_corrections", {"oil_l_scale": 1.07})
+        admet.arm_pressure_limits({0: 1900.0})
+        started = admet.do("start_recording", {"recording_label": "oilcap"})
+        time.sleep(0.5)
+        admet.do("stop_recording")
+        admet.do("disconnect_fluidics")
+        return admet, started
+
+    def test_a_recording_starts_with_no_camera_connected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            admet, started = self._recorded(tmp)
+
+            self.assertFalse(admet.state()["camera"])
+            self.assertTrue(started["csv_path"])
+
+    def test_the_csv_path_is_known_as_soon_as_it_starts(self):
+        # The operator needs somewhere to look while the run is going, not
+        # after it has finished.
+        with tempfile.TemporaryDirectory() as tmp:
+            _admet_service, started = self._recorded(tmp)
+
+            self.assertTrue(Path(started["csv_path"]).is_file())
+
+    def test_the_fluidics_log_has_rows_in_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _admet_service, started = self._recorded(tmp)
+
+            self.assertGreater(len(Path(started["csv_path"]).read_text().splitlines()), 1)
+
+    def test_no_video_is_claimed_that_was_never_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            admet, _started = self._recorded(tmp)
+
+            session = load_session(admet.project.path)
+            recorded = json.loads(
+                (admet.project.path / "records" / "metadata.json").read_text()
+            )["recordings"][0]
+
+            self.assertEqual([p for p in admet.project.path.rglob("*.avi")], [])
+            self.assertEqual({f.role for f in session.files}, {"control_fluidics_csv"})
+            self.assertEqual(recorded["video_path"], "")
+            self.assertEqual(recorded["video_candidates"], [])
+
+    def test_what_was_true_during_the_run_is_kept_with_it(self):
+        # Flows measured under different correction factors are not comparable,
+        # and a measurement without its channel mapping is not reproducible.
+        with tempfile.TemporaryDirectory() as tmp:
+            admet, _started = self._recorded(tmp)
+
+            context = json.loads(
+                (admet.project.path / "records" / "metadata.json").read_text()
+            )["recordings"][0]["context"]
+
+            self.assertEqual(context["corrections"]["oil_l_scale"], 1.07)
+            self.assertEqual(context["channels"][0]["label"], "Oil L")
+            self.assertIsNotNone(context["channels"][0]["pressure_max_mbar"])
+            self.assertEqual(context["safety"]["limits"], {"0": 1900.0})
+            self.assertTrue(context["software_version"])
+            self.assertTrue(context["connection"]["simulated"])
 
 
 class RegistrationTests(unittest.TestCase):

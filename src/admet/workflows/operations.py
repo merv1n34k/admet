@@ -18,11 +18,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Protocol
 
 from pathlib import Path
 
+from admet.core.clock import now_iso
 from admet.core.engine import READ, START, WRITE, Param, ParamKind, ParamOption
 from admet.engines.acquisition.fluidics.config import (
     GRAVIMETRIC_REPLICATES,
@@ -199,6 +199,9 @@ def _connect_camera(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]
 def _apply_corrections(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
     result = runner.engine_action("acquisition", "apply_corrections", settings)
     runner.mark("corrections", True)
+    # Kept so a recording can say which calibration its flows were measured
+    # under. Flows are not comparable across different correction factors.
+    runner.mark("correction_settings", dict(settings))
     return result.metadata
 
 
@@ -220,7 +223,7 @@ def _observe(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
     observation = runner.engine_action("acquisition", "read_observation", {}).metadata
     state = runner.state()
     return {
-        "observed_at": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+        "observed_at": now_iso(),
         "project": runner.describe_project(),
         **observation,
         # Every condition an operation can be refused on, read from the same
@@ -704,7 +707,11 @@ OPERATIONS: tuple[Operation, ...] = (
             _whole("recording_max_frames", "Frame limit", 100_000, minimum=0),
             _number("recording_max_seconds", "Time limit", 0.0, unit="s"),
         ),
-        requires=("project", "fluidics", "camera"),
+        # No camera requirement: a validation run measures fluidics, and a rig
+        # with no camera on it must still be able to record what it measured.
+        # A video that was never written is not registered, so nothing claims
+        # a file that is not there.
+        requires=("project", "fluidics"),
         uses=("start_recording",),
         run=_start_recording,
     ),

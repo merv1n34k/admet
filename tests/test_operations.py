@@ -49,12 +49,11 @@ class DeclarationTests(unittest.TestCase):
             with self.subTest(operation=name):
                 self.assertIn("project", operation(name).requires)
 
-    def test_recording_needs_both_instruments(self):
-        # A recording is video and fluidics together; with no camera it would
-        # quietly be half of one.
-        self.assertEqual(
-            set(operation("start_recording").requires), {"project", "fluidics", "camera"}
-        )
+    def test_recording_does_not_need_a_camera(self):
+        # A validation run measures fluidics. Requiring a camera would make a
+        # rig without one unable to record what it measured -- and a video that
+        # was never written is not registered, so nothing claims a missing file.
+        self.assertEqual(set(operation("start_recording").requires), {"project", "fluidics"})
 
     def test_an_unknown_operation_names_the_ones_there_are(self):
         with self.assertRaises(LookupError) as caught:

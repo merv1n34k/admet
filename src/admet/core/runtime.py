@@ -28,6 +28,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from admet.core.clock import now_iso
+
 try:  # POSIX only, which is where this runs.
     import fcntl
 except ImportError:  # pragma: no cover - documented in acquire()
@@ -44,10 +46,6 @@ PUBLISH_INTERVAL_S = 0.25
 
 class RuntimeBusy(Exception):
     """Another process already owns this runtime directory."""
-
-
-def _now() -> str:
-    return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
 class RuntimeOwner:
@@ -81,7 +79,7 @@ class RuntimeOwner:
                 f"--runtime directory"
             ) from exc
 
-        claim = {"pid": os.getpid(), "started_at": _now()}
+        claim = {"pid": os.getpid(), "started_at": now_iso()}
         handle.seek(0)
         handle.truncate()
         handle.write(json.dumps(claim))
@@ -140,7 +138,7 @@ class RuntimePublisher:
         self.directory = Path(directory)
         self.mode = mode
         self.pid = pid or os.getpid()
-        self.started_at = _now()
+        self.started_at = now_iso()
         self._observe = observe
         self._events_since = events_since
         self._interval_s = interval_s
@@ -207,7 +205,7 @@ class RuntimePublisher:
     def publish_once(self) -> dict[str, Any]:
         observation = self._observe()
         with self._lock:
-            self._heartbeat = _now()
+            self._heartbeat = now_iso()
             self._project = (observation.get("project") or {}).get("path")
             header = {
                 "pid": self.pid,
@@ -266,7 +264,7 @@ class RuntimePublisher:
     def _append(self, entry: dict[str, Any]) -> None:
         with self._lock:
             self._event_sequence += 1
-            line = {"seq": self._event_sequence, "at": _now(), **entry}
+            line = {"seq": self._event_sequence, "at": now_iso(), **entry}
         try:
             with (self.directory / EVENTS_FILE).open("a") as handle:
                 handle.write(json.dumps(line, default=str) + "\n")

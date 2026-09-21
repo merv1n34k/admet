@@ -468,14 +468,11 @@ class Admet:
         """
         engine = self._engines.get("acquisition")
         if engine is None:
-            return {
-                "armed": False,
-                "tripped": False,
-                "reason": "",
-                "at": None,
-                "limits": {},
-                "readings": {},
-            }
+            # The latch's own idea of "nothing has happened", rather than a
+            # second copy of its shape here that would drift from it.
+            from admet.engines.acquisition.safety import SafetyState
+
+            return SafetyState().describe()
         return engine.safety_state()
 
     def emergency_stop(self, reason: str = "") -> dict[str, Any]:
@@ -535,6 +532,28 @@ class Admet:
         self._register(spec, result)
         return result
 
+    def run_context(self) -> dict[str, Any]:
+        """What was true when something ran, kept alongside what it produced.
+
+        A measurement without its calibration, its channel mapping and the
+        limits it ran under is not reproducible, and the flows are not even
+        comparable with another run's.
+        """
+        from admet import __version__
+
+        engine = self._engines.get("acquisition")
+        observation = engine.observation() if engine is not None else {}
+        return {
+            "software_version": __version__,
+            "connection": observation.get("connection", {}),
+            "corrections": self._marks.get("correction_settings", {}),
+            "channels": [
+                {"index": channel["index"], "label": channel["label"], **channel["detected"]}
+                for channel in observation.get("channels", [])
+            ],
+            "safety": self.safety_state(),
+        }
+
     def _job_metadata(self) -> dict[str, Any]:
         if self.project is None:
             return {}
@@ -574,6 +593,6 @@ class Admet:
         if spec.artifact == "control_recording":
             recording = result.metadata.get("recording")
             if recording:
-                self.project.append_control_recording(recording)
+                self.project.append_control_recording({**recording, "context": self.run_context()})
             return
         raise LookupError(f"{spec.id} declares an artifact core cannot store: {spec.artifact!r}")
