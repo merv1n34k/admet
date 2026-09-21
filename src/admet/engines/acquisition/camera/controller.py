@@ -196,6 +196,64 @@ class CameraController:
         metadata.update(self.read_parameters())
         return metadata
 
+    def observation(self) -> dict[str, Any]:
+        """Camera diagnostics, using null for every unavailable SDK value."""
+        connected = bool(self.camera.connected)
+        parameters = self.read_parameters().get("camera_parameters", {}) if connected else {}
+        with self._lock:
+            stats = dict(self._stats)
+            frame = self._last_frame
+        device = getattr(self.camera, "device", None)
+        info = None
+        getter = getattr(device, "GetDeviceInfo", None)
+        if callable(getter):
+            try:
+                info = getter()
+            except Exception:
+                info = None
+
+        def identity(name: str) -> Any:
+            method = getattr(info, name, None)
+            if not callable(method):
+                return None
+            try:
+                result = method()
+                return result if result not in (None, "") else None
+            except Exception:
+                return None
+
+        def value(name: str) -> Any:
+            return (parameters.get(name) or {}).get("value")
+
+        latest_at = stats.get("latest_frame_monotonic")
+        width = value("Width")
+        height = value("Height")
+        if frame is not None:
+            width = width if width is not None else int(frame.shape[1])
+            height = height if height is not None else int(frame.shape[0])
+        return {
+            "connected": connected,
+            "live": self.live,
+            "model": identity("GetModelName"),
+            "serial_number": identity("GetSerialNumber"),
+            "transport": identity("GetTLType"),
+            "device_identity": identity("GetFullName") or identity("GetUserDefinedName"),
+            "frame_width": width if connected else None,
+            "frame_height": height if connected else None,
+            "pixel_format": value("PixelFormat") if connected else None,
+            "configured_frame_rate_hz": value("AcquisitionFrameRate") if connected else None,
+            "measured_frame_rate_hz": stats.get("fps") if self.live else None,
+            "exposure_us": value("ExposureTime") if connected else None,
+            "gain": value("Gain") if connected else None,
+            "frame_count": stats.get("total_frames") if self.live else None,
+            "dropped_frame_count": stats.get("dropped_frames") if self.live else None,
+            "latest_frame_age_s": (
+                max(0.0, time.monotonic() - latest_at) if latest_at is not None else None
+            ),
+            "recording": bool(stats.get("recording", False)),
+            "recording_path": stats.get("recording_path"),
+        }
+
     def read_parameters(self) -> dict[str, Any]:
         if not self.camera.connected:
             return {"camera_parameters": {}}

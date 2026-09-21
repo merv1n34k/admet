@@ -166,6 +166,19 @@ class ContentTests(unittest.TestCase):
         self.assertIn("±2.1", render(_state()))
         self.assertIn("±1.40", render(_state()))
 
+    def test_camera_has_a_separate_section_and_missing_values_are_dashes(self):
+        frame = render(_state(camera={
+            "connected": False, "live": False, "model": None, "serial_number": None,
+            "frame_width": None, "frame_height": None, "pixel_format": None,
+            "configured_frame_rate_hz": None, "measured_frame_rate_hz": None,
+            "frame_count": None, "dropped_frame_count": None,
+            "latest_frame_age_s": None, "recording": False,
+        }))
+
+        self.assertIn("CAMERA", frame)
+        self.assertIn("disconnected", frame)
+        self.assertIn("frames —", frame)
+
     def test_the_running_step_and_its_progress_are_shown(self):
         frame = render(_state(protocol={
             "state": "running", "step_index": 1, "total_steps": 8,

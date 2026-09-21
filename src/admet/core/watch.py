@@ -110,6 +110,8 @@ def render(
         RULE,
         *_channels(observation, paint),
         RULE,
+        *_camera(observation, paint),
+        RULE,
         *_protocol(observation, paint),
         RULE,
         *_validation(observation, paint),
@@ -191,7 +193,8 @@ def _channels(observation: dict[str, Any], paint: _Paint) -> list[str]:
     # row out of line by however much colour it happens to carry.
     heading = paint(
         f"  {'CH':<4}{'LABEL':<10}{'MODE':<7}{'REQUESTED':>10}"
-        f"{'PRESSURE mbar':>20}{'FLOW uL/min':>20}{'VOLUME':>9}  STABLE",
+        f"{'PRESSURE mean±sd':>22}{'FLOW mean±sd':>20}{'MARGIN':>10}"
+        f"{'VOL':>9}{'AGE':>8}  STABLE",
         DIM,
     )
     if not channels:
@@ -207,22 +210,58 @@ def _channels(observation: dict[str, Any], paint: _Paint) -> list[str]:
         )
         pressure = (
             f"{_number(channel.get('pressure_mbar'))} "
-            f"±{_number(channel.get('pressure_std_mbar'))}"
+            f"({_number(channel.get('pressure_mean_mbar'))}±"
+            f"{_number(channel.get('pressure_std_mbar'))})"
         )
         flow = (
             f"{_number(channel.get('flow_ul_min'), '.2f')} "
-            f"±{_number(channel.get('flow_std_ul_min'), '.2f')}"
+            f"({_number(channel.get('flow_mean_ul_min'), '.2f')}±"
+            f"{_number(channel.get('flow_std_ul_min'), '.2f')})"
         )
+        age_value = channel.get("measurement_age_s")
+        age = f"{_number(age_value)}s"
+        if age_value is not None and float(age_value) > STALE_AFTER_S:
+            age = paint(f"STALE {age}", BOLD, RED)
         stable = channel.get("stable")
         stability = (
             paint("yes", GREEN) if stable else (paint("no", YELLOW) if stable is False else "—")
         )
         rows.append(
             f"  {str(channel.get('index', '?')):<4}{str(channel.get('label') or ''):<10}"
-            f"{mode:<7}{requested:>10}{pressure:>20}{flow:>20}"
-            f"{_number(channel.get('volume_ul'), '.2f'):>9}  {stability}"
+            f"{mode:<7}{requested:>10}{pressure:>22}{flow:>20}"
+            f"{_number(channel.get('pressure_margin_mbar')):>10}"
+            f"{_number(channel.get('volume_ul'), '.2f'):>9}{age:>8}  {stability}"
         )
     return rows
+
+
+def _camera(observation: dict[str, Any], paint: _Paint) -> list[str]:
+    camera = observation.get("camera") or {}
+    state = "connected" if camera.get("connected") else "disconnected"
+    live = "live" if camera.get("live") else "not live"
+    identity = " ".join(
+        str(value) for value in (camera.get("model"), camera.get("serial_number")) if value
+    ) or "—"
+    size = (
+        f"{_number(camera.get('frame_width'), '.0f')}×"
+        f"{_number(camera.get('frame_height'), '.0f')}"
+    )
+    age = camera.get("latest_frame_age_s")
+    age_text = f"{_number(age)}s"
+    if age is not None and float(age) > STALE_AFTER_S:
+        age_text = paint(f"STALE {age_text}", BOLD, RED)
+    return [
+        paint("  CAMERA", DIM),
+        f"  {'state':<11}{state}   {live}   {identity}",
+        f"  {'image':<11}{size}   {camera.get('pixel_format') or '—'}   "
+        f"configured {_number(camera.get('configured_frame_rate_hz'))} fps   "
+        f"measured {_number(camera.get('measured_frame_rate_hz'))} fps",
+        f"  {'capture':<11}frames {_number(camera.get('frame_count'), '.0f')}   "
+        f"dropped {_number(camera.get('dropped_frame_count'), '.0f')}   age {age_text}   "
+        f"recording {'yes' if camera.get('recording') else 'no'}",
+        f"  {'settings':<11}exposure {_number(camera.get('exposure_us'))} us   "
+        f"gain {_number(camera.get('gain'))}   transport {camera.get('transport') or '—'}",
+    ]
 
 
 def _protocol(observation: dict[str, Any], paint: _Paint) -> list[str]:

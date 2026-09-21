@@ -149,14 +149,42 @@ class ConnectedTests(unittest.TestCase):
         self.assertIsNotNone(channel["pressure_mbar"])
         self.assertIsNotNone(channel["flow_mean_ul_min"])
 
+        for name in (
+            "sample_count", "window_duration_s", "flow_min_ul_min", "flow_max_ul_min",
+            "pressure_min_mbar", "pressure_max_mbar", "pressure_limit_mbar",
+            "pressure_margin_mbar", "pressure_percent_of_limit", "measurement_age_s",
+            "stability_rule",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, channel)
+
+    def test_disconnected_camera_values_are_null(self):
+        camera = self.admet.do("observe")["camera"]
+
+        self.assertFalse(camera["connected"])
+        for name in (
+            "model", "serial_number", "transport", "device_identity", "frame_width",
+            "frame_height", "pixel_format", "configured_frame_rate_hz",
+            "measured_frame_rate_hz", "exposure_us", "gain", "frame_count",
+            "dropped_frame_count", "latest_frame_age_s", "recording_path",
+        ):
+            with self.subTest(name=name):
+                self.assertIsNone(camera[name])
+
     def test_a_requested_flow_is_reported_as_requested(self):
         self.admet.do("set_channel_flow", {"channel_index": 0, "channel_flow_ul_min": 4.0})
 
         channel = self.admet.do("observe")["channels"][0]
+        deadline = time.monotonic() + 2.0
+        while channel["flow_error_ul_min"] is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+            channel = self.admet.do("observe")["channels"][0]
 
         self.assertEqual(channel["mode"], "flow")
         self.assertEqual(channel["requested_flow_ul_min"], 4.0)
         self.assertIsNone(channel["requested_pressure_mbar"])
+        self.assertIsNotNone(channel["flow_error_ul_min"])
+        self.assertIsNotNone(channel["flow_error_percent"])
         self.admet.do("stop_channel", {"channel_index": 0})
 
     def test_observing_repeatedly_gives_fresh_timestamps(self):

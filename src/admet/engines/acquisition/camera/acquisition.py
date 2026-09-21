@@ -63,6 +63,9 @@ class CameraAcquisitionThread(Thread):
         self.last_recording_frames: int | None = None
         self.last_writer_frame_count: int | None = None
         self.frame_count = 0
+        self.total_frames = 0
+        self.live_started_monotonic: float | None = None
+        self.latest_frame_monotonic: float | None = None
         self.start_time = 0.0
         self.last_stats_time = 0.0
         self.max_frames: int | None = None
@@ -95,6 +98,7 @@ class CameraAcquisitionThread(Thread):
 
     def run(self) -> None:
         self._stop_event.clear()
+        self.live_started_monotonic = time.monotonic()
         self.last_stats_time = time.time()
         self.camera.start_grabbing(latest_only=True)
         while not self._stop_event.is_set():
@@ -106,6 +110,8 @@ class CameraAcquisitionThread(Thread):
         self.camera.stop_grabbing()
 
     def process_frame(self, frame: np.ndarray) -> None:
+        self.total_frames += 1
+        self.latest_frame_monotonic = time.monotonic()
         if self._recording_event.is_set() and not self._recording_paused.is_set() and self.writer:
             if self.writer.write(frame):
                 self.frame_count += 1
@@ -125,6 +131,14 @@ class CameraAcquisitionThread(Thread):
                     "recording": recording,
                     "frames": self.frame_count if recording else 0,
                     "elapsed": current_time - self.start_time if recording else 0,
+                    "total_frames": self.total_frames,
+                    "latest_frame_monotonic": self.latest_frame_monotonic,
+                    "fps": (
+                        self.total_frames
+                        / max(time.monotonic() - self.live_started_monotonic, 1e-9)
+                        if self.live_started_monotonic is not None
+                        else None
+                    ),
                 }
             )
 

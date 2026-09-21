@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections import deque
 from dataclasses import asdict
 from queue import Queue
@@ -23,6 +24,8 @@ from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNEL_LABELS,
     FLUIDIC_CHANNELS,
     SENSOR_CALIBRATIONS,
+    STABILITY_TOLERANCE_UL_MIN,
+    STABILITY_WINDOW_SAMPLES,
 )
 from admet.engines.acquisition.safety import PressureWatchdog
 from admet.engines.acquisition.recording import (
@@ -768,6 +771,7 @@ class AcquisitionEngine:
         """
         state = self.hardware.state
         snapshot = self._acquisition.latest_snapshot() if self._acquisition else None
+        recent = self._acquisition.recent_snapshots() if self._acquisition else []
         return {
             "connection": {
                 "fluidics": bool(state.connected),
@@ -775,7 +779,8 @@ class AcquisitionEngine:
             },
             "polling": self.polling_active,
             "recording": self._recording_observation(),
-            "channels": self._channel_observations(snapshot),
+            "channels": self._channel_observations(snapshot, recent),
+            "camera": self._camera.observation(),
             "protocol": self._protocol_observation(),
             "safety": self.watchdog.describe(),
         }
@@ -790,7 +795,7 @@ class AcquisitionEngine:
             "video": current.get("video_path"),
         }
 
-    def _channel_observations(self, snapshot: Any) -> list[dict[str, Any]]:
+    def _channel_observations(self, snapshot: Any, recent: list[Any]) -> list[dict[str, Any]]:
         state = self.hardware.state
         channels = self.channel_manager.channels
         observations = []
@@ -809,7 +814,17 @@ class AcquisitionEngine:
                     "requested_pressure_mbar": channel.pressure_setpoint
                     if channel.mode != "flow"
                     else None,
-                    **_measured(snapshot, sensor, channel.pressure_index),
+                    **_measured(
+                        snapshot,
+                        recent,
+                        sensor,
+                        channel.pressure_index,
+                        requested_flow=(channel.active_setpoint if channel.mode == "flow" else None),
+                        pressure_limit=_pressure_limit(state, channel.pressure_index),
+                        polling_started=(
+                            self._acquisition.started_monotonic if self._acquisition else 0.0
+                        ),
+                    ),
                 }
             )
         return observations
@@ -920,7 +935,28 @@ def _detected_channel(state: Any, channel: Any) -> dict[str, Any]:
     }
 
 
-def _measured(snapshot: Any, sensor_index: int, pressure_index: int) -> dict[str, Any]:
+def _pressure_limit(state: Any, pressure_index: int) -> float | None:
+    info = next((item for item in state.pressure_channels if item.index == pressure_index), None)
+    return getattr(info, "pmax", None)
+
+
+def _stability_rule() -> str:
+    return (
+        f"stable when the last {STABILITY_WINDOW_SAMPLES} flow samples span no more than "
+        f"{2 * STABILITY_TOLERANCE_UL_MIN:g} uL/min"
+    )
+
+
+def _measured(
+    snapshot: Any,
+    recent: list[Any],
+    sensor_index: int,
+    pressure_index: int,
+    *,
+    requested_flow: float | None,
+    pressure_limit: float | None,
+    polling_started: float,
+) -> dict[str, Any]:
     """The readings for one channel, or nulls where there has been no reading."""
     empty = {
         "pressure_mbar": None,
@@ -931,6 +967,19 @@ def _measured(snapshot: Any, sensor_index: int, pressure_index: int) -> dict[str
         "pressure_std_mbar": None,
         "flow_mean_ul_min": None,
         "flow_std_ul_min": None,
+        "flow_min_ul_min": None,
+        "flow_max_ul_min": None,
+        "pressure_min_mbar": None,
+        "pressure_max_mbar": None,
+        "sample_count": 0,
+        "window_duration_s": None,
+        "flow_error_ul_min": None,
+        "flow_error_percent": None,
+        "pressure_limit_mbar": pressure_limit,
+        "pressure_margin_mbar": None,
+        "pressure_percent_of_limit": None,
+        "measurement_age_s": None,
+        "stability_rule": _stability_rule(),
     }
     if snapshot is None:
         return empty
@@ -940,15 +989,51 @@ def _measured(snapshot: Any, sensor_index: int, pressure_index: int) -> dict[str
 
     pressure_stats = at(snapshot.pressure_stats, pressure_index)
     flow_stats = at(snapshot.flow_stats, sensor_index)
+    flow = at(snapshot.flows, sensor_index)
+    pressure = at(snapshot.pressures, pressure_index)
+    flow_error = (
+        abs(flow - requested_flow) if flow is not None and requested_flow is not None else None
+    )
     return {
-        "pressure_mbar": at(snapshot.pressures, pressure_index),
-        "flow_ul_min": at(snapshot.flows, sensor_index),
+        "pressure_mbar": pressure,
+        "flow_ul_min": flow,
         "volume_ul": at(snapshot.volumes_ul, sensor_index),
         "stable": at(snapshot.stability, sensor_index),
         "pressure_mean_mbar": getattr(pressure_stats, "mean", None),
         "pressure_std_mbar": getattr(pressure_stats, "std", None),
         "flow_mean_ul_min": getattr(flow_stats, "mean", None),
         "flow_std_ul_min": getattr(flow_stats, "std", None),
+        "flow_min_ul_min": getattr(flow_stats, "min", None),
+        "flow_max_ul_min": getattr(flow_stats, "max", None),
+        "pressure_min_mbar": getattr(pressure_stats, "min", None),
+        "pressure_max_mbar": getattr(pressure_stats, "max", None),
+        "sample_count": len(recent),
+        "window_duration_s": (
+            recent[-1].elapsed_s - recent[0].elapsed_s if len(recent) > 1 else 0.0
+        ),
+        "flow_error_ul_min": flow_error,
+        "flow_error_percent": (
+            flow_error / abs(requested_flow) * 100.0
+            if flow_error is not None and requested_flow not in (None, 0)
+            else None
+        ),
+        "pressure_limit_mbar": pressure_limit,
+        "pressure_margin_mbar": (
+            pressure_limit - pressure
+            if pressure is not None and pressure_limit is not None
+            else None
+        ),
+        "pressure_percent_of_limit": (
+            pressure / pressure_limit * 100.0
+            if pressure is not None and pressure_limit not in (None, 0)
+            else None
+        ),
+        "measurement_age_s": (
+            max(0.0, time.monotonic() - polling_started - snapshot.elapsed_s)
+            if polling_started
+            else None
+        ),
+        "stability_rule": _stability_rule(),
     }
 
 
