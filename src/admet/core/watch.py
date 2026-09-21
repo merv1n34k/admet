@@ -14,6 +14,8 @@ against without a terminal.
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import sys
 import time
 from typing import Any, TextIO
@@ -35,6 +37,7 @@ CYAN = "\x1b[36m"
 REVERSE = "\x1b[7m"
 
 RULE = "─" * 78
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
 class _Paint:
@@ -432,6 +435,34 @@ def _frame(directory: str, colour: bool) -> str:
     )
 
 
+def _fit_frame(frame: str, columns: int, rows: int) -> str:
+    """Keep a live frame inside the terminal so redraws cannot scroll it."""
+    available_rows = max(1, rows)
+    lines = frame.splitlines()[:available_rows]
+    return "\n".join(_clip_ansi(line, max(1, columns)) for line in lines)
+
+
+def _clip_ansi(line: str, width: int) -> str:
+    result: list[str] = []
+    visible = 0
+    position = 0
+    for match in ANSI_RE.finditer(line):
+        text = line[position:match.start()]
+        remaining = width - visible
+        if remaining <= 0:
+            break
+        result.append(text[:remaining])
+        visible += min(len(text), remaining)
+        if visible < width:
+            result.append(match.group())
+        position = match.end()
+    if visible < width:
+        result.append(line[position:position + width - visible])
+    if ANSI_RE.search(line):
+        result.append(RESET)
+    return "".join(result)
+
+
 def watch(
     directory: str,
     *,
@@ -449,18 +480,20 @@ def watch(
         return 0
 
     with _quit_key(out) as pressed_quit:
-        out.write("\x1b[?25l")  # the cursor would sit blinking in the middle of a row
+        out.write("\x1b[?1049h\x1b[?25l")
         try:
+            next_refresh = time.monotonic()
             while not pressed_quit():
-                # Home the cursor and clear each line as it is rewritten, rather
-                # than clearing the screen first, which flickers.
-                out.write("\x1b[H" + _frame(directory, colour).replace("\n", "\x1b[K\n") + "\x1b[J")
+                size = shutil.get_terminal_size(fallback=(80, 24))
+                frame = _fit_frame(_frame(directory, colour), size.columns, size.lines)
+                out.write("\x1b[H" + frame.replace("\n", "\x1b[K\n") + "\x1b[J")
                 out.flush()
-                time.sleep(interval_s)
+                next_refresh += interval_s
+                time.sleep(max(0.0, next_refresh - time.monotonic()))
         except KeyboardInterrupt:
             pass
         finally:
-            out.write("\x1b[?25h\n")
+            out.write("\x1b[?25h\x1b[?1049l")
             out.flush()
     return 0
 

@@ -17,7 +17,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from admet.core.watch import STALE_AFTER_S, render, watch
+from admet.core.watch import STALE_AFTER_S, _fit_frame, render, watch
 
 
 def _state(**overrides):
@@ -283,6 +283,20 @@ class ContentTests(unittest.TestCase):
 
 
 class LayoutTests(unittest.TestCase):
+    def test_live_frame_is_clipped_to_the_terminal_without_scrolling(self):
+        frame = "\n".join(f"line {index} is deliberately wide" for index in range(20))
+
+        fitted = _fit_frame(frame, columns=12, rows=5)
+
+        self.assertEqual(len(fitted.splitlines()), 5)
+        self.assertTrue(all(len(line) <= 12 for line in fitted.splitlines()))
+
+    def test_clipping_counts_visible_width_not_colour_sequences(self):
+        fitted = _fit_frame("\x1b[31mabcdefghijk\x1b[0m", columns=5, rows=1)
+
+        self.assertIn("abcde", fitted)
+        self.assertNotIn("f", fitted)
+
     def test_colour_adds_no_width(self):
         # Padding a string that already holds escape codes counts them as
         # width, which pulls every row out of line.
