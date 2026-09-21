@@ -202,10 +202,18 @@ def _observe(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
     would need hardware come back null rather than as a plausible zero.
     """
     observation = runner.engine_action("acquisition", "read_observation", {}).metadata
+    state = runner.state()
     return {
         "observed_at": datetime.now().astimezone().isoformat(timespec="milliseconds"),
         "project": runner.describe_project(),
         **observation,
+        # Every condition an operation can be refused on, read from the same
+        # place the refusal reads it. Without this, a caller told "corrections
+        # have not been applied" cannot see that from observe.
+        "guards": {
+            name: {"met": bool(passes(state)), "why_not": "" if passes(state) else remedy}
+            for name, (passes, remedy) in REQUIREMENTS.items()
+        },
         "runtime": runner.runtime_state(),
         "validation": runner.validation_state(),
         "safety": runner.safety_state(),
@@ -224,14 +232,6 @@ def _protocol_events(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]
         "events": events,
     }
 
-
-def _status(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
-    """The instrument, the guards, and the session, in one answer."""
-    return {
-        **runner.engine_action("acquisition", "read_status", {}).metadata,
-        **runner.state(),
-        "session": runner.describe_project(),
-    }
 
 
 # ---- channels --------------------------------------------------------------
@@ -527,8 +527,6 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         run=_protocol_events,
     ),
-    Operation("read_status", "Status", "What the instrument and the session are doing.", kind=READ,
-              target=GENERAL, uses=("read_status",), run=_status),
     Operation(
         "set_channel_flow",
         "Set a channel's flow",

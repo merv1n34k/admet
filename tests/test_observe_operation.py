@@ -55,13 +55,64 @@ class DisconnectedTests(unittest.TestCase):
         # The shape must not change once the later milestones fill these in.
         for section in (
             "observed_at", "project", "connection", "polling", "recording",
-            "channels", "protocol", "runtime", "validation", "safety",
+            "channels", "protocol", "guards", "runtime", "validation", "safety",
         ):
             with self.subTest(section=section):
                 self.assertIn(section, self.observed)
 
+    def test_it_says_why_nothing_can_run_yet(self):
+        guards = self.observed["guards"]
+
+        self.assertFalse(guards["fluidics"]["met"])
+        self.assertIn("run connect_fluidics first", guards["fluidics"]["why_not"])
+
+    def test_a_met_guard_gives_no_reason(self):
+        self.assertTrue(self.observed["guards"]["idle"]["met"])
+        self.assertEqual(self.observed["guards"]["idle"]["why_not"], "")
+
     def test_no_event_means_no_events(self):
         self.assertEqual(Admet().do("protocol_events")["events"], [])
+
+
+class OneAnswerTests(unittest.TestCase):
+    """observe replaced read_status rather than sitting beside it."""
+
+    def test_the_flat_status_operation_is_gone(self):
+        from admet.workflows.operations import BY_ID
+
+        self.assertNotIn("read_status", BY_ID)
+
+    def test_what_observe_reports_is_what_a_refusal_is_decided_on(self):
+        # Not merely equal today: read from the same place, so they cannot
+        # drift into disagreeing.
+        from admet.workflows.operations import REQUIREMENTS
+
+        admet = Admet()
+
+        self.assertEqual(set(admet.do("observe")["guards"]), set(REQUIREMENTS))
+
+    def test_a_refusal_repeats_what_observe_already_said(self):
+        from admet.workflows.operations import Refused
+
+        admet = Admet()
+        admet.do("connect_fluidics", {"simulated": True})
+        try:
+            reported = admet.do("observe")["guards"]["corrections"]["why_not"]
+            with self.assertRaises(Refused) as caught:
+                admet.do("run_priming")
+            self.assertIn(reported, str(caught.exception))
+        finally:
+            admet.do("disconnect_fluidics")
+
+    def test_a_guard_changes_in_observe_once_it_is_satisfied(self):
+        admet = Admet()
+        self.assertFalse(admet.do("observe")["guards"]["fluidics"]["met"])
+
+        admet.do("connect_fluidics", {"simulated": True})
+        try:
+            self.assertTrue(admet.do("observe")["guards"]["fluidics"]["met"])
+        finally:
+            admet.do("disconnect_fluidics")
 
 
 class ConnectedTests(unittest.TestCase):
