@@ -106,24 +106,61 @@ def serve(
 ) -> int:
     """Read requests until the stream closes. Returns a process exit code."""
     server = AdmetServer(simulated=simulated, project=project)
-    _ = runtime  # published from here once there is a publisher to do it
     source = stdin or sys.stdin
     sink = stdout or sys.stdout
-    _warn(f"admet mcp ready ({'simulated' if simulated else 'live hardware'})")
+    mode = "simulated" if simulated else "live"
 
-    for line in source:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-        except json.JSONDecodeError as exc:
-            _respond(sink, _error(None, -32700, f"invalid JSON: {exc}"))
-            continue
-        response = handle(server, request)
-        if response is not None:
-            _respond(sink, response)
-    return 0
+    owner, publisher = _claim_runtime(runtime, server, mode)
+    _warn(f"admet mcp ready ({mode}{f', runtime {runtime}' if runtime else ''})")
+    try:
+        for line in source:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                request = json.loads(line)
+            except json.JSONDecodeError as exc:
+                _respond(sink, _error(None, -32700, f"invalid JSON: {exc}"))
+                continue
+            response = handle(server, request)
+            if response is not None:
+                _respond(sink, response)
+        return 0
+    finally:
+        # Reached on end of stream, on an exception, and on interrupt. The
+        # runtime must not be left saying running after this process is gone.
+        if publisher is not None:
+            publisher.stop(state="stopped", reason="server shut down")
+        if owner is not None:
+            owner.release()
+
+
+def _claim_runtime(
+    runtime: str | None, server: AdmetServer, mode: str
+) -> tuple[Any | None, Any | None]:
+    """Take the runtime directory, and start publishing into it.
+
+    The claim comes first. A second server pointed at the same directory is
+    refused here, before anything opens an instrument that is already open.
+    """
+    if not runtime:
+        return None, None
+    from admet.core.runtime import RuntimeOwner, RuntimePublisher
+
+    owner = RuntimeOwner(runtime)
+    claim = owner.acquire()
+    publisher = RuntimePublisher(
+        runtime,
+        observe=lambda: server.admet.do("observe"),
+        events_since=lambda sequence: server.admet.protocol_events(
+            after_sequence=sequence, limit=200
+        ),
+        mode=mode,
+        pid=claim["pid"],
+    )
+    server.admet.attach_runtime(publisher)
+    publisher.start()
+    return owner, publisher
 
 
 def handle(server: AdmetServer, request: dict[str, Any]) -> dict[str, Any] | None:

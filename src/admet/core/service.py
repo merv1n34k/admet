@@ -18,6 +18,8 @@ manifest mentions and nothing can find again.
 
 from __future__ import annotations
 
+import threading
+
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -103,6 +105,9 @@ class Admet:
         # that nothing is publishing and nothing is running.
         self._runtime: Any | None = None
         self._validation: Any | None = None
+        # The publisher observes from its own thread, so creating an engine
+        # must not be a race between it and whoever is driving.
+        self._engine_lock = threading.Lock()
         self._safety: dict[str, Any] = {
             "armed": False,
             "tripped": False,
@@ -165,8 +170,16 @@ class Admet:
         """Every engine this build has, whether or not it has been created yet."""
         return list(ENGINE_GROUPS)
 
+    def attach_runtime(self, publisher: Any) -> None:
+        """Let observe report the telemetry the serving process is publishing."""
+        self._runtime = publisher
+
     def engine(self, engine_id: str) -> Any:
         """The engine, created on first use. Analysis stacks are slow to import."""
+        with self._engine_lock:
+            return self._engine(engine_id)
+
+    def _engine(self, engine_id: str) -> Any:
         if engine_id not in self._engines:
             group = ENGINE_GROUPS.get(engine_id)
             if group is None:
