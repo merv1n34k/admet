@@ -18,6 +18,12 @@ terminal, through files that carry no way to command anything. Nothing else
 opens the hardware — a second server pointed at the same runtime directory is
 refused before it can try.
 
+With `--runtime`, `serve` is split internally into a durable hardware owner and
+a per-chat stdio MCP relay. Closing a chat detaches only its relay; the owner,
+hardware connection, corrections, plans, protocol, safety latch, telemetry and
+event cursors remain alive. Running the same `serve` command later reattaches to
+that owner after verifying the live/simulated mode and project.
+
 ```sh
 make setup      # uv sync --all-extras
 make test       # all simulated, no hardware touched
@@ -89,6 +95,21 @@ the two would be indistinguishable. A heartbeat older than three seconds says
 The monitor reads two files and nothing else. Two tests hold that: one parses
 its import graph, and one runs `admet watch` as a real process and asserts
 neither the service nor any engine module was loaded.
+
+### Manual emergency control
+
+`watch` remains strictly read-only. It displays the persistent owner's PID,
+which the operator can use for two fixed OS-level recovery actions when MCP is
+unavailable:
+
+```sh
+kill -USR1 PID   # emergency-stop activity and keep the owner alive
+kill -TERM PID   # safely stop activity, disconnect, publish stopped, and exit
+```
+
+Use the exact PID currently shown by `watch`. `SIGKILL` is a last resort because
+it cannot run hardware cleanup. If pressure or flow may be unsafe, use the
+physical emergency stop first; it remains authoritative.
 
 ## Over MCP
 

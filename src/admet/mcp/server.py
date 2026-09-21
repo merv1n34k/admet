@@ -16,7 +16,12 @@ from __future__ import annotations
 
 import json
 import os
+import select
+import signal
+import socket
+import subprocess
 import sys
+import time
 from pathlib import Path
 import traceback
 from typing import Any, TextIO
@@ -27,6 +32,9 @@ from admet.workflows.operations import operation as find_operation
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER = {"name": "admet", "version": "0.1.0"}
+CONTROL_SOCKET = "control.sock"
+OWNER_LOG = "owner.log"
+OWNER_CHILD_ENV = "ADMET_OWNER_CHILD"
 
 
 class SimulationRefused(Exception):
@@ -138,6 +146,51 @@ def serve(
     stdout: TextIO | None = None,
 ) -> int:
     """Read requests until the stream closes. Returns a process exit code."""
+    if runtime and stdin is None and stdout is None:
+        if os.environ.get(OWNER_CHILD_ENV) == "1":
+            return _serve_owner(
+                simulated=simulated,
+                project=project,
+                create_project=create_project,
+                runtime=runtime,
+            )
+        return _serve_relay(
+            simulated=simulated,
+            project=project,
+            create_project=create_project,
+            runtime=runtime,
+            source=sys.stdin,
+            sink=sys.stdout,
+        )
+    if runtime and os.environ.get(OWNER_CHILD_ENV) != "1":
+        return _serve_relay(
+            simulated=simulated,
+            project=project,
+            create_project=create_project,
+            runtime=runtime,
+            source=stdin or sys.stdin,
+            sink=stdout or sys.stdout,
+        )
+    return _serve_attached(
+        simulated=simulated,
+        project=project,
+        create_project=create_project,
+        runtime=runtime,
+        stdin=stdin,
+        stdout=stdout,
+    )
+
+
+def _serve_attached(
+    *,
+    simulated: bool,
+    project: str | None,
+    create_project: bool,
+    runtime: str | None,
+    stdin: TextIO | None,
+    stdout: TextIO | None,
+) -> int:
+    """Legacy attached serving when no durable runtime was requested."""
     server = AdmetServer(simulated=simulated, project=project, create=create_project)
     source = stdin or sys.stdin
     sink = stdout or sys.stdout
@@ -173,6 +226,210 @@ def serve(
     return 0
 
 
+def _serve_relay(
+    *,
+    simulated: bool,
+    project: str | None,
+    create_project: bool,
+    runtime: str,
+    source: TextIO,
+    sink: TextIO,
+) -> int:
+    """Attach this chat's stdio to the durable owner, then detach on EOF."""
+    runtime_path = Path(runtime)
+    control_path = runtime_path / CONTROL_SOCKET
+    _ensure_owner(
+        simulated=simulated,
+        project=project,
+        create_project=create_project,
+        runtime=runtime_path,
+    )
+    _validate_owner(runtime_path, simulated=simulated, project=project)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.connect(str(control_path))
+    with client:
+        reader = client.makefile("r", encoding="utf-8")
+        try:
+            for line in source:
+                if not line.strip():
+                    continue
+                client.sendall(line.encode("utf-8") if line.endswith("\n") else (line + "\n").encode())
+                try:
+                    request = json.loads(line)
+                except json.JSONDecodeError:
+                    request = {"id": None}
+                if "id" in request:
+                    response = reader.readline()
+                    if not response:
+                        raise RuntimeError("the persistent ADMET owner disconnected")
+                    sink.write(response)
+                    sink.flush()
+        finally:
+            reader.close()
+    return 0
+
+
+def _ensure_owner(
+    *, simulated: bool, project: str | None, create_project: bool, runtime: Path
+) -> None:
+    control_path = runtime / CONTROL_SOCKET
+    if _socket_alive(control_path):
+        time.sleep(0.2)
+        return
+    runtime.mkdir(parents=True, exist_ok=True)
+    command = [sys.executable, "-m", "admet.app", "serve"]
+    command.append("--simulated" if simulated else "--live")
+    command.extend(["--runtime", str(runtime)])
+    if project:
+        command.extend(["--project", project])
+    if create_project:
+        command.append("--create-project")
+    environment = {**os.environ, OWNER_CHILD_ENV: "1"}
+    with (runtime / OWNER_LOG).open("a", encoding="utf-8") as log:
+        subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            env=environment,
+            start_new_session=True,
+            close_fds=True,
+        )
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if _socket_alive(control_path):
+            time.sleep(0.2)
+            return
+        time.sleep(0.05)
+    raise RuntimeError(f"persistent ADMET owner did not start; see {runtime / OWNER_LOG}")
+
+
+def _socket_alive(path: Path) -> bool:
+    if not path.exists():
+        return False
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(0.2)
+        probe.connect(str(path))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+def _validate_owner(runtime: Path, *, simulated: bool, project: str | None) -> None:
+    from admet.core.runtime import read_state
+
+    state = read_state(runtime) or {}
+    header = state.get("runtime") or {}
+    expected_mode = "simulated" if simulated else "live"
+    if header.get("mode") != expected_mode:
+        raise RuntimeError(
+            f"runtime already owns a {header.get('mode')} session; requested {expected_mode}"
+        )
+    existing_project = header.get("project")
+    if project and existing_project and Path(existing_project) != Path(project):
+        raise RuntimeError(
+            f"runtime already serves project {existing_project}; requested {project}"
+        )
+
+
+def _serve_owner(
+    *, simulated: bool, project: str | None, create_project: bool, runtime: str
+) -> int:
+    """Long-lived hardware owner; chat relays may come and go."""
+    server = AdmetServer(simulated=simulated, project=project, create=create_project)
+    mode = "simulated" if simulated else "live"
+    owner, publisher = _claim_runtime(runtime, server, mode)
+    control_path = Path(runtime) / CONTROL_SOCKET
+    previous_handlers: dict[int, Any] = {}
+    try:
+        control_path.unlink(missing_ok=True)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(control_path))
+        os.chmod(control_path, 0o600)
+        listener.listen(1)
+        listener.setblocking(False)
+        stop_requested = False
+        emergency_requested = False
+
+        def request_stop(_signum: int, _frame: Any) -> None:
+            nonlocal stop_requested
+            stop_requested = True
+
+        def request_emergency(_signum: int, _frame: Any) -> None:
+            nonlocal emergency_requested
+            emergency_requested = True
+
+        previous_handlers[signal.SIGTERM] = signal.getsignal(signal.SIGTERM)
+        previous_handlers[signal.SIGINT] = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGTERM, request_stop)
+        signal.signal(signal.SIGINT, request_stop)
+        if hasattr(signal, "SIGUSR1"):
+            previous_handlers[signal.SIGUSR1] = signal.getsignal(signal.SIGUSR1)
+            signal.signal(signal.SIGUSR1, request_emergency)
+
+        client: socket.socket | None = None
+        pending = b""
+        while not stop_requested:
+            if emergency_requested:
+                server.admet.emergency_stop("manual SIGUSR1 emergency stop")
+                emergency_requested = False
+            watched = [listener, *( [client] if client is not None else [])]
+            readable, _, _ = select.select(watched, [], [], 0.1)
+            if listener in readable:
+                candidate, _ = listener.accept()
+                if client is None:
+                    client = candidate
+                    pending = b""
+                else:
+                    candidate.close()
+            if client is not None and client in readable:
+                try:
+                    chunk = client.recv(65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    client.close()
+                    client = None
+                    pending = b""
+                    continue
+                pending += chunk
+                while b"\n" in pending:
+                    raw, pending = pending.split(b"\n", 1)
+                    if not raw.strip():
+                        continue
+                    try:
+                        request = json.loads(raw)
+                        response = handle(server, request)
+                    except Exception as exc:
+                        response = _error(None, -32603, f"{type(exc).__name__}: {exc}")
+                    if response is not None:
+                        try:
+                            client.sendall(json.dumps(response).encode() + b"\n")
+                        except OSError:
+                            client.close()
+                            client = None
+                            pending = b""
+                            break
+        _shut_down(server, publisher, "manual SIGTERM shutdown")
+    except BaseException as exc:
+        _shut_down(server, publisher, f"{type(exc).__name__}: {exc}")
+        raise
+    finally:
+        try:
+            listener.close()
+        except UnboundLocalError:
+            pass
+        control_path.unlink(missing_ok=True)
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        if owner is not None:
+            owner.release()
+    return 0
+
+
 def _shut_down(server: AdmetServer, publisher: Any, reason: str) -> None:
     """Leave the rig safe, then say so.
 
@@ -185,6 +442,13 @@ def _shut_down(server: AdmetServer, publisher: Any, reason: str) -> None:
         _warn(f"admet stopped the rig: {stopped.get('errors') or 'no errors'}")
     except Exception as exc:
         _warn(f"admet could not stop the rig cleanly: {exc}")
+    try:
+        cleaned = server.admet.engine_action("acquisition", "shutdown_instrument", {})
+        cleanup_errors = cleaned.metadata.get("cleanup_errors", [])
+        if cleanup_errors:
+            _warn(f"admet cleanup reported errors: {cleanup_errors}")
+    except Exception as exc:
+        _warn(f"admet could not release instrument resources cleanly: {exc}")
     if publisher is not None:
         publisher.stop(state="stopped", reason=reason)
 

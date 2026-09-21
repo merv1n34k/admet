@@ -12,6 +12,7 @@ the acceptance run, not a smaller thing that resembles it.
 import io
 import json
 import os
+import signal
 import tempfile
 import threading
 import time
@@ -22,6 +23,20 @@ from pathlib import Path
 from admet.core.runtime import read_events, read_state
 from admet.core.watch import render
 from admet.mcp.server import serve
+
+
+def _terminate_owner(runtime, timeout_s=10.0):
+    state = read_state(runtime)
+    if not state or state["runtime"]["state"] == "stopped":
+        return
+    os.kill(int(state["runtime"]["pid"]), signal.SIGTERM)
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        current = read_state(runtime)
+        if current and current["runtime"]["state"] == "stopped":
+            return
+        time.sleep(0.05)
+    raise AssertionError("persistent owner did not stop after SIGTERM")
 
 
 class AcceptanceRun(unittest.TestCase):
@@ -53,6 +68,7 @@ class AcceptanceRun(unittest.TestCase):
         if not self._stdin_w.closed:
             self._stdin_w.close()
         self._server.join(timeout=15)
+        _terminate_owner(self.runtime)
         self._stdin.close()
         self._stderr.stop()
 
@@ -236,14 +252,20 @@ class AcceptanceRun(unittest.TestCase):
         self.assertNotIn("control_video", roles)
         self.assertEqual(list(self.project.rglob("*.avi")), [])
 
-        # 11. Closing stdin leaves every channel at zero and the runtime stopped.
+        # 11. Closing one chat detaches it without ending the durable owner.
+        owner_pid = self.call("observe")["runtime"]["pid"]
         self._stdin_w.close()
         self._server.join(timeout=15)
-        stopped = read_state(self.runtime)
-        self.assertEqual(stopped["runtime"]["state"], "stopped")
+        detached = read_state(self.runtime)
+        self.assertEqual(detached["runtime"]["state"], "running")
+        self.assertEqual(detached["runtime"]["pid"], owner_pid)
         self.assertEqual(
-            {c["mode"] for c in stopped["observation"]["channels"]}, {"off"}
+            {c["mode"] for c in detached["observation"]["channels"]}, {"off"}
         )
+
+        # 12. Manual SIGTERM safely stops the owner and publishes the final state.
+        _terminate_owner(self.runtime)
+        self.assertEqual(read_state(self.runtime)["runtime"]["state"], "stopped")
 
 
 if __name__ == "__main__":
@@ -286,7 +308,8 @@ class DocumentedCommandTests(unittest.TestCase):
 
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertTrue((project / "manifest.json").is_file())
-            self.assertEqual(read_state(runtime)["runtime"]["state"], "stopped")
+            self.assertEqual(read_state(runtime)["runtime"]["state"], "running")
+            _terminate_owner(runtime)
 
     def test_the_same_flags_work_before_the_subcommand(self):
         # The acceptance run in the specification writes them this way.
@@ -302,6 +325,7 @@ class DocumentedCommandTests(unittest.TestCase):
 
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertTrue((project / "manifest.json").is_file())
+            _terminate_owner(runtime)
 
     def test_serving_without_saying_which_hardware_fails(self):
         done = self._admet("serve")
@@ -309,7 +333,7 @@ class DocumentedCommandTests(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("--simulated", done.stderr)
 
-    def test_a_second_server_on_the_same_runtime_is_refused(self):
+    def test_a_mode_mismatch_on_an_existing_runtime_is_refused(self):
         import subprocess
         import sys
 
@@ -327,15 +351,16 @@ class DocumentedCommandTests(unittest.TestCase):
                     time.sleep(0.1)
                 self.assertIsNotNone(read_state(runtime), "the first server never published")
 
-                second = self._admet("serve", "--simulated", "--runtime", str(runtime))
+                second = self._admet("serve", "--live", "--runtime", str(runtime))
 
                 self.assertNotEqual(second.returncode, 0)
-                self.assertIn("already served by", second.stderr)
+                self.assertIn("already owns a simulated session", second.stderr)
             finally:
                 first.stdin.close()
                 first.wait(timeout=30)
                 first.stdout.close()
                 first.stderr.close()
+                _terminate_owner(runtime)
 
     def test_watch_renders_a_real_server_and_stays_telemetry_only(self):
         import subprocess
@@ -364,6 +389,7 @@ class DocumentedCommandTests(unittest.TestCase):
                 server.wait(timeout=30)
                 server.stdout.close()
                 server.stderr.close()
+                _terminate_owner(runtime)
 
     def test_watching_loads_neither_the_service_nor_an_engine(self):
         # Checked in a real process, because the eager import that made this

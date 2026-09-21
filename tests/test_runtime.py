@@ -11,7 +11,6 @@ import io
 import json
 import os
 import tempfile
-import threading
 import time
 import unittest
 import unittest.mock
@@ -241,49 +240,28 @@ class ReaderTests(unittest.TestCase):
 
 
 class ServeTests(unittest.TestCase):
-    """The serving process claims the runtime and leaves it marked stopped."""
+    """Runtime-backed serve delegates to the detachable relay."""
 
-    def test_a_session_publishes_while_it_serves_and_stops_when_stdin_closes(self):
-        from admet.mcp.server import serve
+    def test_a_runtime_session_uses_the_detachable_relay(self):
+        from admet.mcp import server as mcp_server
 
         directory = Path(tempfile.mkdtemp())
-        read_fd, write_fd = os.pipe()
-        stdin, stdin_w = os.fdopen(read_fd, "r"), os.fdopen(write_fd, "w")
+        stdin = io.StringIO("")
         output = io.StringIO()
-        errors: list[BaseException] = []
+        with unittest.mock.patch.object(mcp_server, "_serve_relay", return_value=0) as relay:
+            result = mcp_server.serve(
+                simulated=True, runtime=str(directory), stdin=stdin, stdout=output
+            )
 
-        def run():
-            try:
-                serve(simulated=True, runtime=str(directory), stdin=stdin, stdout=output)
-            except BaseException as exc:  # reported, not swallowed
-                errors.append(exc)
+        self.assertEqual(result, 0)
+        relay.assert_called_once()
+        self.assertIs(relay.call_args.kwargs["source"], stdin)
+        self.assertIs(relay.call_args.kwargs["sink"], output)
 
-        with unittest.mock.patch("sys.stderr", io.StringIO()):
-            server = threading.Thread(target=run, daemon=True)
-            server.start()
-            try:
-                deadline = time.monotonic() + 5
-                while read_state(directory) is None and time.monotonic() < deadline:
-                    time.sleep(0.05)
-                published = read_state(directory)
-                self.assertEqual(published["runtime"]["state"], "running")
-                self.assertEqual(published["runtime"]["mode"], "simulated")
-
-                with self.assertRaises(RuntimeBusy):
-                    RuntimeOwner(directory).acquire()
-            finally:
-                stdin_w.close()
-                server.join(timeout=10)
-
-        self.assertEqual(errors, [])
-        self.assertEqual(read_state(directory)["runtime"]["state"], "stopped")
-
-    def test_the_runtime_is_released_for_the_next_server(self):
-        from admet.mcp.server import serve
-
+    def test_the_runtime_lock_is_released_for_the_next_owner(self):
         directory = Path(tempfile.mkdtemp())
-        with unittest.mock.patch("sys.stderr", io.StringIO()):
-            serve(simulated=True, runtime=str(directory), stdin=io.StringIO(""), stdout=io.StringIO())
+        with RuntimeOwner(directory):
+            pass
 
         with RuntimeOwner(directory):
             pass

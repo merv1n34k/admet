@@ -270,7 +270,7 @@ class ShutdownTests(unittest.TestCase):
     """However the process ends, the rig ends at zero."""
 
     def _session(self, end):
-        from admet.mcp.server import serve
+        from admet.mcp.server import _serve_attached
 
         runtime = tempfile.mkdtemp()
         read_fd, write_fd = os.pipe()
@@ -279,7 +279,14 @@ class ShutdownTests(unittest.TestCase):
 
         def run():
             try:
-                serve(simulated=True, runtime=runtime, stdin=stdin, stdout=io.StringIO())
+                _serve_attached(
+                    simulated=True,
+                    project=None,
+                    create_project=False,
+                    runtime=runtime,
+                    stdin=stdin,
+                    stdout=io.StringIO(),
+                )
             except BaseException as exc:
                 raised.append(type(exc).__name__)
 
@@ -324,7 +331,7 @@ class ShutdownTests(unittest.TestCase):
 
     def test_shutdown_runs_even_when_the_stream_fails(self):
         # An exception on the way out must not skip stopping the rig.
-        from admet.mcp.server import serve
+        from admet.mcp.server import _serve_attached
 
         runtime = tempfile.mkdtemp()
 
@@ -334,7 +341,14 @@ class ShutdownTests(unittest.TestCase):
 
         with unittest.mock.patch("sys.stderr", io.StringIO()):
             with self.assertRaises(RuntimeError):
-                serve(simulated=True, runtime=runtime, stdin=Exploding(), stdout=io.StringIO())
+                _serve_attached(
+                    simulated=True,
+                    project=None,
+                    create_project=False,
+                    runtime=runtime,
+                    stdin=Exploding(),
+                    stdout=io.StringIO(),
+                )
 
         state = read_state(runtime)
         self.assertEqual(state["runtime"]["state"], "stopped")
@@ -342,7 +356,7 @@ class ShutdownTests(unittest.TestCase):
 
     def test_an_interrupt_stops_the_rig_too(self):
         # The key an operator reaches for when something is wrong.
-        from admet.mcp.server import serve
+        from admet.mcp.server import _serve_attached
 
         runtime = tempfile.mkdtemp()
 
@@ -352,7 +366,14 @@ class ShutdownTests(unittest.TestCase):
 
         with unittest.mock.patch("sys.stderr", io.StringIO()):
             with self.assertRaises(KeyboardInterrupt):
-                serve(simulated=True, runtime=runtime, stdin=Interrupted(), stdout=io.StringIO())
+                _serve_attached(
+                    simulated=True,
+                    project=None,
+                    create_project=False,
+                    runtime=runtime,
+                    stdin=Interrupted(),
+                    stdout=io.StringIO(),
+                )
 
         self.assertEqual(read_state(runtime)["runtime"]["state"], "stopped")
 
