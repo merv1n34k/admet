@@ -1,172 +1,215 @@
 # admet
 
-Microfluidics acquisition and analysis, with no interface of its own. A terminal,
-an MCP client, or a program drives it; each reaches the same three levels.
+Microfluidics acquisition and analysis, arranged around one rule: **one process
+owns the instrument.**
 
 ```
-  low    an engine action        one call to a device, no guards
-  med    an operation            the same call, plus the conditions under which
-                                 using it is not a mistake
-  high   a pipeline              several operations in order
+  MCP client  ──stdio──▶  admet serve  ──▶  Fluigent / camera
+                              │
+                              ├──▶  runtime/state.json     replaced ~4×/s
+                              ├──▶  runtime/events.jsonl   appended on change
+                              └──▶  project: raw data, summaries, manifest
+
+  human       ──────────▶  admet watch --runtime <same dir>     read-only
 ```
 
-It drives a Fluigent pressure controller and a Basler camera, runs protocols
-against them, records synchronised video and fluidics data into a project, and
-analyses the result.
+The client commands and reads. The human watches the same run from another
+terminal, through files that carry no way to command anything. Nothing else
+opens the hardware — a second server pointed at the same runtime directory is
+refused before it can try.
 
 ```sh
 make setup      # uv sync --all-extras
 make test       # all simulated, no hardware touched
 ```
 
-Nothing has to be read to start. Ask the system what it is:
+## Three commands
 
 ```sh
-admet describe                 # the three levels, and what is in each
-admet describe run_priming     # one operation: its settings and its guards
-admet describe acquisition     # one engine: its actions, and what drives them
+admet describe [TARGET]
+admet serve (--simulated | --live) [--project PATH] [--runtime PATH]
+admet watch --runtime PATH [--once]
 ```
 
-## Running something
+That is the whole command line. Running an experiment is deliberately not here:
+it happens over MCP or from Python, both through the same guarded operations. A
+terminal command per operation would be a third way to do the same thing, and
+the one that drifts.
+
+`serve` refuses to start without `--simulated` or `--live`. Real hardware is
+never what you get by saying nothing.
+
+## Finding out what exists
 
 ```sh
-admet do connect_fluidics --set simulated=true
-admet do apply_corrections
-admet do run_priming --set prime_oil_volume_ul=40
-
-admet run setup --set simulated=true      # a pipeline: several of the above
-admet plan setup                          # what it would do, without doing it
-
-admet call acquisition set_camera_settings --set camera_exposure_us=3000
+admet describe                      # every operation, and the engines beneath
+admet describe validate_oil_capacity   # its settings, and what must be true first
+admet describe acquisition          # one engine's actions, and what drives them
 ```
-
-`do` is an operation, `run` is a pipeline, `call` is one engine action with no
-guards. `--set name=value` for scalars, `--json '{...}'` for anything structured.
-
-Each invocation is its own process, so a connection does not outlive it. For a
-sequence, use MCP or Python.
-
-## Reading a name
 
 Every id is a verb then its subject, and the same call is called the same thing
 at every level: the operation `connect_fluidics` drives the action
-`connect_fluidics`.
-
-Each one also declares what calling it does, which the name alone cannot say:
+`connect_fluidics`. Each also declares what calling it does:
 
 | kind | meaning |
 | --- | --- |
 | `read` | answers a question and changes nothing |
 | `write` | has finished having its effect when it returns |
-| `start` | leaves something running after it returns — wait for it, or ask again |
+| `start` | leaves something running after it returns — poll `observe`, or wait |
 
-`run_priming` is a `start`: it reports success while liquid is still moving.
-
-And which half of the system it belongs to — `control` for the instrument,
-`analyze` for what it produced, `general` for the session both work in:
+## Watching a run
 
 ```sh
-admet operations --target analyze
+admet watch --runtime /tmp/admet-live          # live, q to quit
+admet watch --runtime /tmp/admet-live --once   # one frame, for pipes
 ```
 
-## MCP
+```
+ADMET  SIMULATED   pid 25966 · up 00:04:12
+──────────────────────────────────────────────────────────────────────────────
+  process    running   heartbeat 0.1s ago
+  project    /runs/oil.admetp
+  rig        connected   polling   recording oilcap_20260921
+  safety     armed (0 1900.0)
+──────────────────────────────────────────────────────────────────────────────
+  CH  LABEL     MODE    REQUESTED       PRESSURE mbar         FLOW uL/min   VOLUME  STABLE
+  0   Oil L     flow        100.0        742.3 ±2.1         98.40 ±1.40    21.60  yes
+  1   Cells M   off           0.0         -0.6 ±0.3          0.00 ±0.00     0.00  no
+──────────────────────────────────────────────────────────────────────────────
+  protocol   running   step 4/8   sample 100.0 uL/min
+             ██████████████░░░░░░░░░░ 60%   outcome running
+──────────────────────────────────────────────────────────────────────────────
+  validation oilcap_bypass_chip_…   running   target 100.0 uL/min   unclassified
+```
+
+A measurement that has not been taken shows as `—`, never `0.0`: on this screen
+the two would be indistinguishable. A heartbeat older than three seconds says
+`STALE` and that the screen is not current.
+
+The monitor reads two files and nothing else. A test parses its import graph to
+prove it: the only `admet` module it touches is `core.runtime`.
+
+## Over MCP
 
 ```sh
-admet serve --simulated
+admet serve --simulated --runtime /tmp/admet-live --project /runs/oil.admetp
 ```
 
-63 tools over stdio, generated from the same declarations `describe` reads, so
-there is no second description to fall out of step. The name says the level:
+32 tools, generated from the same declarations `describe` reads, so there is no
+second description to fall out of step. Guarded operations only — engine actions
+have no guards, which is what they are for, and they stay on the Python binding.
 
-```
-  acquisition_set_camera_settings   low    every camera setting, typed
-  run_priming                       med    guarded, and it says what it needs
-  pipeline_setup                    high   connect, correct, prime
-```
-
-`--simulated` keeps a session simulated: asking for real hardware is refused
-rather than quietly given.
-
-## Writing a protocol
-
-A protocol is a list of steps. A step holds channels at setpoints until its
-trigger fires.
-
-Run one you wrote, without adding it to the build — over MCP, or with
-`admet do run_steps --json`:
+**`observe`** is the one read. Unguarded, no arguments, and it takes nothing
+from anyone:
 
 ```json
 {
-  "steps": [
-    {"name": "wet the oil line",
-     "sensor_setpoints": {"0": 5.0},
-     "trigger_type": "volume",
-     "trigger_params": {"sensor_index": 0, "target_volume_ul": 2.0},
-     "on_complete": "hold"},
-    {"name": "settle",
-     "sensor_setpoints": {"0": 2.0},
-     "trigger_type": "time",
-     "trigger_params": {"duration_s": 30.0},
-     "on_complete": "zero"}
-  ]
+  "observed_at": "…", "project": {…}, "connection": {"fluidics": true, "simulated": true},
+  "polling": true, "recording": {"active": true, "fluidics_csv": "…"},
+  "channels": [{"index": 0, "label": "Oil L", "mode": "flow",
+                "requested_flow_ul_min": 100.0, "pressure_mbar": 742.3,
+                "flow_ul_min": 98.4, "flow_std_ul_min": 1.4, "stable": true,
+                "detected": {"sensor_type": "Flow_L_dual", "pressure_max_mbar": 2000.0}}],
+  "protocol": {"state": "running", "step_index": 3, "progress": 0.6,
+               "confirmation_message": "", "event_sequence": 412},
+  "guards": {"corrections": {"met": true, "why_not": ""}},
+  "runtime": {…}, "validation": {…}, "safety": {"armed": true, "tripped": false}
 }
 ```
 
+Disconnected it still answers — measurements come back `null` rather than as a
+plausible zero. The `guards` section is read from the same place a refusal is
+decided, so what it shows and why something is refused cannot disagree.
+
+**`protocol_events`** gives what you have not seen, by sequence:
+
+```json
+{"after_sequence": 412, "limit": 50}
+```
+
+Poll `observe` for what is true now and `protocol_events` for what happened
+between polls. Reading never removes anything, so a client cannot starve the
+monitor or the recorder.
+
+## The oil capacity validation
+
+```json
+{"configuration": "bypass_chip", "flow_targets_ul_min": [50, 100, 150],
+ "oil_pressure_trip_mbar": 1900, "sample_window_s": 10}
+```
+
+Targets run lowest first, each settled then sampled, with a lead-in at half the
+first so nothing jumps from zero straight to a target. The pressure limit is
+capped at 1900 mbar — the controller tops out at 2000, and the point is to stop
+short of it rather than go looking for it.
+
+Nothing flows until the operator answers a question quoting what the
+*instrument* reports about channel 0, not what the configuration claims. Answer
+with `confirm_protocol`.
+
+It returns as soon as it starts; poll `observe` while it runs. The summary lands
+in the project under `records/checks/` with per-target mean/std/min/max flow and
+pressure, sample counts, whether each settled, flow fraction, and:
+
+| classification | |
+| --- | --- |
+| `pass` | every target settled and held its flow, under the limit |
+| `capacity_limited` | pressure reached the boundary before the flow did |
+| `unstable` | pressure had room, but the flow never settled |
+| `invalid` | no data, no mapping confirmation, a disconnect, a failed recording |
+
+A run is never called a pass because the protocol thread ended.
+
+## Safety
+
+`emergency_stop` needs nothing to be true first and can be called twice. It
+zeroes every channel, then stops the protocol, then closes the recording, each
+attempted independently, and latches why.
+
+A pressure watchdog reads *measured* pressure inside the acquisition poll — a
+setpoint is what was asked for, and the failure that matters (a line that will
+not flow, so the controller pushes harder) shows only in the measurement. It is
+independent of the protocol, so a protocol that has hung is still stopped.
+
+A trip latches. While set, everything that makes liquid move is refused and
+`observe` says so; reading, stopping and disconnecting stay available, because a
+latch that blocked those would leave you holding a tripped rig with no way to
+deal with it. `reset_safety` is refused while anything still reads over its
+limit.
+
+However the server exits — stdin closing, an exception, `KeyboardInterrupt` —
+the rig is stopped before publishing stops, so a failed write can never leave
+liquid moving.
+
+## Writing a protocol
+
+A protocol is a list of steps; a step holds channels at setpoints until its
+trigger fires. Run one you wrote with `run_steps`, without adding it to the
+build:
+
+```json
+{"steps": [
+  {"name": "wet the oil line", "sensor_setpoints": {"0": 5.0},
+   "trigger_type": "volume",
+   "trigger_params": {"sensor_index": 0, "target_volume_ul": 2.0},
+   "on_complete": "hold"},
+  {"name": "settle", "sensor_setpoints": {"0": 2.0},
+   "trigger_type": "time", "trigger_params": {"duration_s": 30.0},
+   "on_complete": "zero"}
+]}
+```
+
 Triggers: `time`, `volume`, `stability`, `threshold`, `condition`,
-`confirmation`. What each one needs is read from the trigger itself and reported
-by `describe run_steps`, so it cannot drift. On completion: `hold`, `zero`,
-`revert`.
+`confirmation`. What each needs is read from the trigger itself and reported by
+`describe run_steps`, so it cannot drift. On completion: `hold`, `zero`,
+`revert`. A step with a `confirm_message` holds before applying any setpoint.
 
-To ship a protocol with the build, write a builder in
-`src/admet/workflows/protocols.py` and add an `Operation` naming it in
-`operations.py`. It then appears in the CLI, in MCP and in `describe` with no
-other change.
+To ship one with the build, write a builder in `workflows/protocols.py` and add
+an `Operation` naming it in `operations.py`. It appears in MCP and `describe`
+with no other change.
 
-A pipeline is plain Python — operations in order:
-
-```python
-def _setup(settings):
-    yield step("connect_fluidics", simulated=settings["simulated"])
-    yield step("apply_corrections")
-    yield step("run_priming", prime_oil_volume_ul=settings["prime_oil_volume_ul"])
-```
-
-Each stage is checked by the operation's own guards as it is reached, so a
-pipeline cannot do what the operation would have refused. A stage that starts a
-protocol is waited on. A protocol that stops for the operator stops the
-pipeline: it reports which stage it reached, the operator answers with
-`confirm_protocol`, and the run resumes with `--from-stage`. Nothing is
-auto-confirmed — a confirmation exists because somebody has to look at the rig.
-
-## Guards
-
-An operation refuses rather than warning, and says what to do:
-
-```
-run_priming: correction factors have not been applied, so flows would not be
-true flows; run apply_corrections first
-```
-
-The guards are `project`, `fluidics`, `camera`, `corrections`, `idle`,
-`running`, `sources`. `describe <operation>` lists the ones it needs and why.
-
-Engine actions have no guards. That is what they are for, and `call` reaches
-them deliberately.
-
-## Projects
-
-A project is a `.admetp` directory holding a manifest, recordings and results.
-Core decides where every file goes — an engine is handed paths and writes to
-them, never choosing its own, so nothing is written outside the open session.
-
-```sh
-admet do create_project --set path=runs/today.admetp
-admet do open_project --set path=runs/today.admetp
-admet do list_projects --set root=runs
-```
-
-Or for a single invocation:
-`admet --project runs/today.admetp --create-project do read_status`
+A stability step that gives up is recorded `timed_out`, not `completed` — a
+settle that never happened must not read like one that did.
 
 ## From Python
 
@@ -181,23 +224,37 @@ admet.do("run_priming", {"prime_oil_volume_ul": 40.0})
 admet.wait_for_protocol()
 ```
 
-`Admet` is the way in. It owns the session, decides where files go, and routes
-to whichever engine is wanted. Engines stay reachable — `admet.engine_action(...)`
-and `admet.engine(...)` — but they hold no protocols and no paths.
+`Admet` owns the session and decides where every file goes — an engine is handed
+paths and never chooses its own, so nothing is written outside the open project.
+Engine actions stay reachable here as the expert escape hatch:
+
+```python
+admet.engine_action("acquisition", "set_camera_settings", {"camera_exposure_us": 3000})
+```
+
+## Projects
+
+A `.admetp` directory holding a manifest, recordings and results. A recording
+keeps the context it was made under — software version, correction factors, what
+the instrument says each channel is, the armed limits — because flows measured
+under different corrections are not comparable.
+
+Recording does not require a camera. A video that was never written is never
+registered: the manifest lists only files that exist.
 
 ## Layout
 
 ```
-  src/admet/core/        the Admet service: sessions, paths, routing
-                         (core/engine.py is the contract engines implement)
-  src/admet/workflows/   protocols, operations, guards, pipelines
+  src/admet/core/        the Admet service: sessions, paths, routing,
+                         runtime telemetry, the monitor
+  src/admet/workflows/   protocols, operations, guards, the validation recipe
   src/admet/engines/     the workhorses: acquisition, opencv, cellpose
   src/admet/mcp/         the stdio server, generated from the declarations
   src/admet/app.py       the command line
 ```
 
-An interface used to live here and was removed. It is on the `admet2` branch and
-can be merged back; nothing outside `app.py` imported it.
+A Qt interface used to live here; it is on the `admet2` branch and can be merged
+back. Nothing outside `app.py` imported it.
 
 ## Tests
 
@@ -208,6 +265,28 @@ make lint
 ```
 
 Every test runs against the Fluigent simulator and the Pylon camera emulator,
-and that is enforced rather than assumed. Nothing here has been validated on a
-bench: simulation shows the software is consistent, not that a measurement is
-right.
+and that is enforced rather than assumed. `tests/test_acceptance.py` drives the
+whole arrangement over MCP: connect, observe, render the monitor's frame from
+the published files, run a validation, answer the operator gate, poll while it
+runs, then close stdin and confirm every channel is off.
+
+**Simulation shows the software is consistent, not that a measurement is right.**
+Nothing here has been validated on a bench.
+
+## First bench run
+
+Not automated, and not to be run casually:
+
+1. Oil reservoir, Flow Unit L, tubing straight to a safe waste container —
+   bypass the chip.
+2. Confirm channel 0 is physically Oil L, against what `observe` reports.
+3. Confirm the physical emergency stop is reachable. It remains authoritative;
+   nothing in this software replaces it.
+4. A new project, and a live runtime directory.
+5. `[50, 100, 150]` uL/min only, 1900 mbar trip.
+6. Watch the TUI while the client polls `observe`.
+7. Review the summary before authorising `[175, 200, 225, 250]`.
+8. Do not test 300 uL/min or deliberately reproduce the 2 bar ceiling until the
+   bypass result has been reviewed.
+9. Repeat the approved targets with the chip connected. The difference isolates
+   chip and inlet resistance from the reservoir, Flow Unit and tubing.
