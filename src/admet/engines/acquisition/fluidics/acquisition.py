@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from queue import Queue
 
+from typing import Any
+
 import numpy as np
 
 from .config import (
@@ -56,6 +58,7 @@ class AcquisitionThread(threading.Thread):
         stability_window_samples: int = STABILITY_WINDOW_SAMPLES,
         stability_tolerance_ul_min: float = STABILITY_TOLERANCE_UL_MIN,
         recent_samples: int = 600,
+        on_snapshot: Any = None,
     ):
         super().__init__(daemon=True, name="AcquisitionThread")
         self._sdk = sdk
@@ -84,6 +87,9 @@ class AcquisitionThread(threading.Thread):
         # Observation, kept apart from the queue. The queue is bounded and has
         # one consumer at most; anyone asking what the rig is doing right now
         # must not have to drain it, and must not be starved when it is full.
+        # Called with every reading, before anything else sees it. This is where
+        # the pressure watchdog runs: the earliest point the number exists.
+        self._on_snapshot = on_snapshot
         self._latest: DataSnapshot | None = None
         self._recent: deque[DataSnapshot] = deque(maxlen=recent_samples)
         self._observation_lock = threading.Lock()
@@ -168,6 +174,12 @@ class AcquisitionThread(threading.Thread):
         with self._observation_lock:
             self._latest = snapshot
             self._recent.append(snapshot)
+
+        if self._on_snapshot is not None:
+            try:
+                self._on_snapshot(snapshot)
+            except Exception:
+                log.exception("Snapshot observer failed")
 
         # Best effort, and deliberately after the observation state: a full
         # queue must not cost anyone the current reading.

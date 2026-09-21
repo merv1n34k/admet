@@ -108,13 +108,7 @@ class Admet:
         # The publisher observes from its own thread, so creating an engine
         # must not be a race between it and whoever is driving.
         self._engine_lock = threading.Lock()
-        self._safety: dict[str, Any] = {
-            "armed": False,
-            "tripped": False,
-            "reason": "",
-            "at": None,
-            "limits": {},
-        }
+
         if project is not None:
             self.open_project(project)
 
@@ -430,6 +424,7 @@ class Admet:
                 "camera": False,
                 "corrections": False,
                 "running": False,
+                "tripped": False,
                 "sources": len(self.analysis_sources()),
             }
         return {
@@ -438,6 +433,7 @@ class Admet:
             "camera": bool(getattr(engine.camera, "connected", False)),
             "corrections": self._marks.get("corrections", False),
             "running": engine.pipeline_state in {"running", "paused", "stopping"},
+            "tripped": bool(engine.safety_state()["tripped"]),
             "sources": len(self.analysis_sources()),
         }
 
@@ -465,10 +461,33 @@ class Admet:
     def safety_state(self) -> dict[str, Any]:
         """Whether a limit is armed, and whether anything has tripped it.
 
-        A trip latches: it stays reported until it is explicitly reset, because
-        a safety event that clears itself is one nobody finds out about.
+        Read from the engine's latch rather than mirrored here. A trip stays
+        reported until explicitly reset, because a safety event that clears
+        itself is one nobody finds out about, and two copies of it would be one
+        copy too many.
         """
-        return dict(self._safety)
+        engine = self._engines.get("acquisition")
+        if engine is None:
+            return {
+                "armed": False,
+                "tripped": False,
+                "reason": "",
+                "at": None,
+                "limits": {},
+                "readings": {},
+            }
+        return engine.safety_state()
+
+    def emergency_stop(self, reason: str = "") -> dict[str, Any]:
+        """Zero everything now. Works whatever else is or is not true."""
+        return self.engine("acquisition").emergency_stop(reason)
+
+    def arm_pressure_limits(self, limits: dict[int, float]) -> dict[str, Any]:
+        """Arm a measured-pressure ceiling per channel, for one run."""
+        return self.engine("acquisition").arm_pressure_limits(limits)
+
+    def reset_safety(self) -> dict[str, Any]:
+        return self.engine("acquisition").reset_safety()
 
     def protocol_events(self, *, after_sequence: int = 0, limit: int = 100) -> list[dict[str, Any]]:
         """Protocol events newer than one already seen, as plain data."""

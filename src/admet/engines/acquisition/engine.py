@@ -21,6 +21,7 @@ from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNELS,
     SENSOR_CALIBRATIONS,
 )
+from admet.engines.acquisition.safety import PressureWatchdog
 from admet.engines.acquisition.recording import (
     RecordingCoordinator,
     WriterFactory,
@@ -69,6 +70,8 @@ ACQUISITION_ACTIONS = (
     ActionSpec("stop_camera_live", "Stop Camera Live", "diagnostics"),
     ActionSpec("read_status", "Read Status", "diagnostics", kind=READ),
     ActionSpec("read_observation", "Read Observation", "diagnostics", kind=READ),
+    ActionSpec("emergency_stop", "Emergency Stop", "safety"),
+    ActionSpec("reset_safety", "Reset Safety", "safety"),
     ActionSpec("start_polling", "Start Polling", "diagnostics"),
     ActionSpec("stop_polling", "Stop Polling", "diagnostics"),
     ActionSpec("apply_corrections", "Apply Corrections", "fluidics", params=CORRECTION_PARAM_NAMES),
@@ -133,6 +136,7 @@ class AcquisitionEngine:
         self.sdk = sdk or FluigentSDK()
         self.hardware = HardwareManager(self.sdk)
         self.channel_manager = ChannelManager(self.sdk)
+        self.watchdog = PressureWatchdog(on_trip=self._tripped)
         self.data_queue: Queue = Queue(maxsize=50)
         self.pipeline_queue: Queue = Queue(maxsize=50)
         self._camera = CameraController()
@@ -187,6 +191,10 @@ class AcquisitionEngine:
                 extra_metadata=self._camera_status_metadata(),
             ),
             "read_observation": lambda _settings: self.observation(),
+            "emergency_stop": lambda settings: self.emergency_stop(
+                str(settings.get("stop_reason") or "asked for by the operator")
+            ),
+            "reset_safety": lambda _settings: self.reset_safety(),
             "start_polling": lambda _settings: self._status_after("start_polling", self.start_polling),
             "stop_polling": lambda _settings: self._status_after("stop_polling", self.stop_polling),
             "apply_corrections": lambda settings: self._status_after(
@@ -340,6 +348,9 @@ class AcquisitionEngine:
             sensor_count=len(state.sensor_channels),
             data_queue=self.data_queue,
             csv_logger=self.csv_logger if self.recording_active else None,
+            # The watchdog sees each reading where it is taken, so a breach is
+            # acted on in the same tick rather than whenever somebody asks.
+            on_snapshot=lambda snapshot: self.watchdog.check(snapshot.pressures),
         )
         self._acquisition.start()
 
@@ -651,6 +662,60 @@ class AcquisitionEngine:
             message="Fluigent SDK object is injected.",
         )
 
+    def emergency_stop(self, reason: str = "") -> dict[str, Any]:
+        """Take every channel to zero, now, and say why afterwards.
+
+        Idempotent, and safe to call when nothing is connected or running: this
+        is the call whose job is to work when other things have not. Each step
+        is attempted independently, so one failing does not skip the rest.
+        """
+        stopped: dict[str, Any] = {"channels_zeroed": False, "protocol": None, "recording": None}
+        errors: list[str] = []
+
+        # Channels first, and before anything that can block. Everything else
+        # here is bookkeeping; this is the part that makes the rig safe.
+        try:
+            self.channel_manager.emergency_stop_all()
+            stopped["channels_zeroed"] = True
+        except Exception as exc:
+            errors.append(f"zeroing channels: {exc}")
+
+        try:
+            was_running = self.pipeline_state in {"running", "paused", "stopping"}
+            self.stop_pipeline()
+            stopped["protocol"] = "stopped" if was_running else "not running"
+        except Exception as exc:
+            errors.append(f"stopping the protocol: {exc}")
+
+        try:
+            if self.recording_active:
+                self.stop_recording()
+                stopped["recording"] = "closed"
+            else:
+                stopped["recording"] = "not recording"
+        except Exception as exc:
+            errors.append(f"closing the recording: {exc}")
+
+        latched = self.watchdog.trip(reason or "emergency stop", self._pressures())
+        return {**stopped, "errors": errors, "safety": latched}
+
+    def _tripped(self, reason: str) -> None:
+        """What the watchdog calls. The same path as an operator asking."""
+        self.emergency_stop(reason)
+
+    def reset_safety(self) -> dict[str, Any]:
+        return self.watchdog.reset(self._pressures())
+
+    def arm_pressure_limits(self, limits: dict[int, float]) -> dict[str, Any]:
+        return self.watchdog.arm(limits)
+
+    def safety_state(self) -> dict[str, Any]:
+        return self.watchdog.describe()
+
+    def _pressures(self) -> list[float]:
+        snapshot = self._acquisition.latest_snapshot() if self._acquisition else None
+        return list(snapshot.pressures) if snapshot else []
+
     def observation(self) -> dict[str, Any]:
         """What the instrument is doing, measured rather than assumed.
 
@@ -669,6 +734,7 @@ class AcquisitionEngine:
             "recording": self._recording_observation(),
             "channels": self._channel_observations(snapshot),
             "protocol": self._protocol_observation(),
+            "safety": self.watchdog.describe(),
         }
 
     def _recording_observation(self) -> dict[str, Any]:

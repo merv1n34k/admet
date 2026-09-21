@@ -56,6 +56,10 @@ class Runner(Protocol):
 
     def safety_state(self) -> dict[str, Any]: ...
 
+    def emergency_stop(self, reason: str) -> dict[str, Any]: ...
+
+    def reset_safety(self) -> dict[str, Any]: ...
+
     def protocol_events(self, *, after_sequence: int, limit: int) -> list[dict[str, Any]]: ...
 
     def create_project(self, path: str, project_id: str) -> Any: ...
@@ -102,6 +106,10 @@ REQUIREMENTS: dict[str, tuple[Callable[[dict[str, Any]], bool], str]] = {
     "running": (
         lambda state: state["running"],
         "no protocol is running",
+    ),
+    "safe": (
+        lambda state: not state["tripped"],
+        "the safety latch has tripped; run reset_safety once the rig reads safe again",
     ),
     "sources": (
         lambda state: state["sources"] > 0,
@@ -192,6 +200,14 @@ def _apply_corrections(runner: Runner, settings: dict[str, Any]) -> dict[str, An
     result = runner.engine_action("acquisition", "apply_corrections", settings)
     runner.mark("corrections", True)
     return result.metadata
+
+
+def _emergency_stop(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
+    return runner.emergency_stop(str(settings.get("stop_reason") or ""))
+
+
+def _reset_safety(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
+    return runner.reset_safety()
 
 
 def _observe(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
@@ -504,6 +520,28 @@ OPERATIONS: tuple[Operation, ...] = (
         run=_apply_corrections,
     ),
     Operation(
+        "emergency_stop",
+        "Emergency stop",
+        "Take every channel to zero now, stop the protocol, close the recording, "
+        "and latch why. Needs nothing to be true first and can be called twice.",
+        target=CONTROL,
+        uses=("emergency_stop",),
+        params=(
+            Param("stop_reason", "Reason", ParamKind.TEXT, default="",
+                  description="Recorded with the trip"),
+        ),
+        run=_emergency_stop,
+    ),
+    Operation(
+        "reset_safety",
+        "Reset the safety latch",
+        "Clear a trip, once every channel reads safe again. Refused while the "
+        "rig is still over a limit.",
+        target=CONTROL,
+        uses=("reset_safety",),
+        run=_reset_safety,
+    ),
+    Operation(
         "observe",
         "Observe",
         "Everything measurable right now: the session, the instrument, every "
@@ -535,7 +573,7 @@ OPERATIONS: tuple[Operation, ...] = (
             _whole("channel_index", "Channel", 0, minimum=0),
             _number("channel_flow_ul_min", "Flow", 0.0, unit="uL/min"),
         ),
-        requires=("fluidics", "corrections", "idle"),
+        requires=("fluidics", "corrections", "idle", "safe"),
         uses=("set_channel_flow",),
         run=_set_flow,
     ),
@@ -558,7 +596,7 @@ OPERATIONS: tuple[Operation, ...] = (
             _number("prime_aqueous_volume_ul", "Aqueous volume", 5.0, minimum=0.1, unit="uL"),
             TICK,
         ),
-        requires=("fluidics", "corrections", "idle"),
+        requires=("fluidics", "corrections", "idle", "safe"),
         protocol="Priming",
         starts_protocol=True,
         run=_protocol("Priming"),
@@ -576,7 +614,7 @@ OPERATIONS: tuple[Operation, ...] = (
             _number("wash_pressure_duration_s", "Pressure duration", 120.0, unit="s"),
             TICK,
         ),
-        requires=("fluidics", "idle"),
+        requires=("fluidics", "idle", "safe"),
         protocol="Wash",
         starts_protocol=True,
         run=_protocol("Wash"),
@@ -595,7 +633,7 @@ OPERATIONS: tuple[Operation, ...] = (
             _number("sweep_timeout_s", "Settle timeout", STABILITY_TIMEOUT_S, minimum=1.0, unit="s"),
             TICK,
         ),
-        requires=("fluidics", "corrections", "idle"),
+        requires=("fluidics", "corrections", "idle", "safe"),
         protocol="Characterise",
         starts_protocol=True,
         run=_protocol("Characterise"),
@@ -612,7 +650,7 @@ OPERATIONS: tuple[Operation, ...] = (
                    maximum=GRAVIMETRIC_REPLICATES),
             TICK,
         ),
-        requires=("fluidics", "corrections", "idle"),
+        requires=("fluidics", "corrections", "idle", "safe"),
         protocol="Gravimetry",
         starts_protocol=True,
         run=_protocol("Gravimetry"),
@@ -630,7 +668,7 @@ OPERATIONS: tuple[Operation, ...] = (
             _number("run_aqueous_total_flow_ul_min", "Total aqueous flow", 80.0, unit="uL/min"),
             TICK,
         ),
-        requires=("project", "fluidics", "corrections", "idle"),
+        requires=("project", "fluidics", "corrections", "idle", "safe"),
         protocol="Drop-Seq",
         starts_protocol=True,
         run=_protocol("Drop-Seq"),
@@ -642,14 +680,15 @@ OPERATIONS: tuple[Operation, ...] = (
         kind=START,
         params=(TICK,),
         raw={"steps": STEP_LIST_SCHEMA},
-        requires=("fluidics", "corrections", "idle"),
+        requires=("fluidics", "corrections", "idle", "safe"),
         starts_protocol=True,
         run=_run_steps,
     ),
     Operation("pause_protocol", "Pause protocol", "Hold the protocol and zero the channels.",
               requires=("running",), uses=("pause_protocol",), run=_pipeline_control("pause_protocol")),
     Operation("resume_protocol", "Resume protocol", "Carry on from a pause.",
-              requires=("running",), uses=("resume_protocol",), run=_pipeline_control("resume_protocol")),
+              requires=("running", "safe"), uses=("resume_protocol",),
+              run=_pipeline_control("resume_protocol")),
     Operation("stop_protocol", "Stop protocol", "End the protocol and release the channels.",
               requires=("running",), uses=("stop_protocol",), run=_pipeline_control("stop_protocol")),
     Operation("confirm_protocol", "Confirm step", "Answer a step that is waiting for the operator.",

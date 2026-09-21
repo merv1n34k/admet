@@ -111,7 +111,7 @@ class TargetTests(unittest.TestCase):
 # its acceptance run. They break the verb-first law -- observe is a bare verb,
 # protocol_events is a noun phrase -- and are exceptions rather than a reason to
 # weaken the law for everything else.
-SPECIFIED_NAMES = {"observe", "protocol_events"}
+SPECIFIED_NAMES = {"observe", "protocol_events", "emergency_stop"}
 
 
 class NamingTests(unittest.TestCase):
@@ -121,7 +121,7 @@ class NamingTests(unittest.TestCase):
         verbs = (
             "connect", "disconnect", "apply", "set", "stop", "start", "pause",
             "resume", "confirm", "skip", "run", "read", "list", "create", "open",
-            "add", "verify", "calibrate", "shutdown",
+            "add", "verify", "calibrate", "shutdown", "reset",
         )
         for op in OPERATIONS:
             if op.id in SPECIFIED_NAMES:
@@ -142,7 +142,7 @@ class NamingTests(unittest.TestCase):
     def test_the_exceptions_to_the_law_are_only_the_specified_ones(self):
         # If this grows, the law is being eroded rather than excepted.
         self.assertEqual(SPECIFIED_NAMES & {op.id for op in OPERATIONS}, SPECIFIED_NAMES)
-        self.assertEqual(len(SPECIFIED_NAMES), 2)
+        self.assertEqual(len(SPECIFIED_NAMES), 3)
 
     def test_every_operation_says_what_calling_it_does(self):
         for op in OPERATIONS:
@@ -177,7 +177,7 @@ class StepTests(unittest.TestCase):
         op = operation("run_steps")
 
         self.assertEqual(op.kind, START)
-        self.assertEqual(set(op.requires), {"fluidics", "corrections", "idle"})
+        self.assertEqual(set(op.requires), {"fluidics", "corrections", "idle", "safe"})
         self.assertIn("steps", op.raw)
 
     def test_describe_says_what_each_trigger_takes(self):
@@ -258,6 +258,7 @@ class GuardTests(unittest.TestCase):
         "camera": False,
         "corrections": False,
         "running": False,
+        "tripped": False,
     }
 
     def test_a_guard_refuses_and_says_what_to_do(self):

@@ -125,14 +125,35 @@ def serve(
             response = handle(server, request)
             if response is not None:
                 _respond(sink, response)
-        return 0
+    except BaseException as exc:
+        # Includes KeyboardInterrupt, which is not an Exception. A rig left
+        # flowing because the operator pressed Ctrl-C is the worst case here.
+        _shut_down(server, publisher, f"{type(exc).__name__}: {exc}")
+        raise
+    else:
+        _shut_down(server, publisher, "stdin closed")
     finally:
-        # Reached on end of stream, on an exception, and on interrupt. The
-        # runtime must not be left saying running after this process is gone.
-        if publisher is not None:
-            publisher.stop(state="stopped", reason="server shut down")
+        # Reached however the loop ended. The runtime must not be left saying
+        # running after this process is gone.
         if owner is not None:
             owner.release()
+    return 0
+
+
+def _shut_down(server: AdmetServer, publisher: Any, reason: str) -> None:
+    """Leave the rig safe, then say so.
+
+    The instrument comes first and the telemetry second: if publishing fails
+    the channels are still at zero, whereas the other order could leave a rig
+    flowing because a file could not be written.
+    """
+    try:
+        stopped = server.admet.emergency_stop(f"server shutting down ({reason})")
+        _warn(f"admet stopped the rig: {stopped.get('errors') or 'no errors'}")
+    except Exception as exc:
+        _warn(f"admet could not stop the rig cleanly: {exc}")
+    if publisher is not None:
+        publisher.stop(state="stopped", reason=reason)
 
 
 def _claim_runtime(
