@@ -6,6 +6,7 @@ import time
 from collections import deque
 from dataclasses import asdict
 from queue import Queue
+from statistics import mean, stdev
 from typing import Any, Callable
 
 from admet.core.engine import READ, ActionSpec, ParamSchema, validate_action_settings
@@ -772,15 +773,19 @@ class AcquisitionEngine:
         state = self.hardware.state
         snapshot = self._acquisition.latest_snapshot() if self._acquisition else None
         recent = self._acquisition.recent_snapshots() if self._acquisition else []
+        recording = self._recording_observation()
+        camera = self._camera.observation()
+        camera["recording"] = recording["active"] and bool(recording["video"])
+        camera["recording_path"] = recording["video"]
         return {
             "connection": {
                 "fluidics": bool(state.connected),
                 "simulated": bool(state.simulated),
             },
             "polling": self.polling_active,
-            "recording": self._recording_observation(),
+            "recording": recording,
             "channels": self._channel_observations(snapshot, recent),
-            "camera": self._camera.observation(),
+            "camera": camera,
             "protocol": self._protocol_observation(),
             "safety": self.watchdog.describe(),
         }
@@ -987,8 +992,8 @@ def _measured(
     def at(values: Any, index: int) -> Any:
         return values[index] if 0 <= index < len(values) else None
 
-    pressure_stats = at(snapshot.pressure_stats, pressure_index)
-    flow_stats = at(snapshot.flow_stats, sensor_index)
+    pressure_stats = _window_stats(recent, "pressures", pressure_index)
+    flow_stats = _window_stats(recent, "flows", sensor_index)
     flow = at(snapshot.flows, sensor_index)
     pressure = at(snapshot.pressures, pressure_index)
     flow_error = (
@@ -999,14 +1004,14 @@ def _measured(
         "flow_ul_min": flow,
         "volume_ul": at(snapshot.volumes_ul, sensor_index),
         "stable": at(snapshot.stability, sensor_index),
-        "pressure_mean_mbar": getattr(pressure_stats, "mean", None),
-        "pressure_std_mbar": getattr(pressure_stats, "std", None),
-        "flow_mean_ul_min": getattr(flow_stats, "mean", None),
-        "flow_std_ul_min": getattr(flow_stats, "std", None),
-        "flow_min_ul_min": getattr(flow_stats, "min", None),
-        "flow_max_ul_min": getattr(flow_stats, "max", None),
-        "pressure_min_mbar": getattr(pressure_stats, "min", None),
-        "pressure_max_mbar": getattr(pressure_stats, "max", None),
+        "pressure_mean_mbar": pressure_stats["mean"],
+        "pressure_std_mbar": pressure_stats["std"],
+        "flow_mean_ul_min": flow_stats["mean"],
+        "flow_std_ul_min": flow_stats["std"],
+        "flow_min_ul_min": flow_stats["min"],
+        "flow_max_ul_min": flow_stats["max"],
+        "pressure_min_mbar": pressure_stats["min"],
+        "pressure_max_mbar": pressure_stats["max"],
         "sample_count": len(recent),
         "window_duration_s": (
             recent[-1].elapsed_s - recent[0].elapsed_s if len(recent) > 1 else 0.0
@@ -1034,6 +1039,22 @@ def _measured(
             else None
         ),
         "stability_rule": _stability_rule(),
+    }
+
+
+def _window_stats(snapshots: list[Any], field: str, index: int) -> dict[str, float | None]:
+    values = [
+        values[index]
+        for snapshot in snapshots
+        if (values := getattr(snapshot, field, ())) is not None and 0 <= index < len(values)
+    ]
+    if not values:
+        return {"mean": None, "std": None, "min": None, "max": None}
+    return {
+        "mean": mean(values),
+        "std": stdev(values) if len(values) > 1 else 0.0,
+        "min": min(values),
+        "max": max(values),
     }
 
 
