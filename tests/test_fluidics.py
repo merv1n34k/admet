@@ -129,7 +129,10 @@ class HardwareManagerTests(unittest.TestCase):
         self.assertEqual(len([call for call in sdk.calls if call[0] == "create_sim"]), len(SIM_INSTRUMENTS))
         self.assertEqual(state.sensor_channels[0].smax, 5000.0)
         self.assertEqual(state.sensor_channels[1].smax, 80.0)
-        self.assertIn(("init", None), sdk.calls)
+        self.assertIn(
+            ("init", [instrument["serial"] for instrument in SIM_INSTRUMENTS]),
+            sdk.calls,
+        )
         self.assertTrue(any(call[0] == "custom_scale" for call in sdk.calls))
 
         manager.disconnect()
@@ -161,7 +164,10 @@ class HardwareManagerTests(unittest.TestCase):
 
         self.assertTrue(state.connected)
         self.assertTrue(state.simulated)
-        self.assertIn(("init", None), sdk.calls)
+        self.assertIn(
+            ("init", [instrument["serial"] for instrument in SIM_INSTRUMENTS]),
+            sdk.calls,
+        )
 
 
 class ChannelManagerTests(unittest.TestCase):

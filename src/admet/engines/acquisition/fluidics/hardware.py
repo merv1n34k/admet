@@ -56,7 +56,12 @@ class HardwareManager:
                     )
                 created_simulated = True
 
-            self._sdk.init()
+            instruments = (
+                [instrument["serial"] for instrument in SIM_INSTRUMENTS]
+                if simulated
+                else None
+            )
+            self._sdk.init(instruments)
             self._detect_channels()
             if not self.state.pressure_channels and not self.state.sensor_channels:
                 raise FluigentConnectionError(

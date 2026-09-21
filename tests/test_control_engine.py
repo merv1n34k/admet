@@ -8,6 +8,7 @@ from admet.core.run import RunJob
 from admet.engines.acquisition.camera import Camera, CameraAvailability
 from admet.engines.acquisition import AcquisitionEngine
 from admet.engines.acquisition.fluidics import PressureChannelInfo, SensorChannelInfo
+from admet.engines.acquisition.fluidics.config import SIM_INSTRUMENTS
 from admet.engines.acquisition.pipeline import (
     ProtocolStep,
     PipelineEngine,
@@ -253,7 +254,10 @@ class AcquisitionEngineTests(unittest.TestCase):
         self.assertEqual(metadata["sensor_channels"], 2)
         self.assertEqual(len(engine.channel_manager.channels), 2)
         self.assertFalse(metadata["polling_active"])
-        self.assertIn(("init", None), sdk.calls)
+        self.assertIn(
+            ("init", [instrument["serial"] for instrument in SIM_INSTRUMENTS]),
+            sdk.calls,
+        )
 
         run_engine(engine, "disconnect_fluidics", {})
         self.assertFalse(engine.hardware.connected)
