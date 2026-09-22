@@ -129,6 +129,21 @@ class ConnectedTests(unittest.TestCase):
         self.assertEqual(channels[0]["label"], "Oil L")
         self.assertEqual(channels[0]["index"], 0)
 
+    def test_fluid_configuration_reports_applied_corrections(self):
+        configuration = self.admet.do("observe")["fluidics_configuration"]
+
+        self.assertTrue(configuration["corrections_applied"])
+        self.assertEqual(
+            [channel["key"] for channel in configuration["channels"]],
+            ["oil_l", "cells_m", "beads_m"],
+        )
+        oil = configuration["channels"][0]
+        self.assertEqual(oil["flow_unit"], "L")
+        self.assertEqual(oil["calibration"], "H2O")
+        self.assertEqual(oil["scale"], 1.0)
+        self.assertEqual(oil["offset"], 0.0)
+        self.assertEqual(oil["quadratic"], 0.0)
+
     def test_a_channel_carries_what_the_instrument_says_it_is(self):
         # The operator confirms the oil mapping against this, so it comes from
         # the instrument rather than from the configured order.

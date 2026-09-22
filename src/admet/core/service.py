@@ -730,6 +730,13 @@ class Admet:
         """Remember something the hardware does not report, such as corrections."""
         self._marks[name] = value
 
+    def fluidics_configuration(self) -> dict[str, Any]:
+        """Configured channel mapping and the last correction set sent to the rig."""
+        return {
+            "corrections_applied": bool(self._marks.get("corrections", False)),
+            "correction_settings": deepcopy(self._marks.get("correction_settings")),
+        }
+
     def engine_action(self, engine_id: str, action: str, settings: dict[str, Any]):
         """An engine primitive, for operations only."""
         return self.run(engine_id, action, settings)

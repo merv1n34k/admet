@@ -25,6 +25,8 @@ from pathlib import Path
 from admet.core.clock import now_iso
 from admet.core.engine import READ, START, WRITE, Param, ParamKind, ParamOption
 from admet.engines.acquisition.fluidics.config import (
+    FLUIDIC_CHANNELS,
+    FLUIDIC_CHANNEL_UNITS,
     GRAVIMETRIC_REPLICATES,
     STABILITY_DURATION_S,
     STABILITY_TIMEOUT_S,
@@ -89,6 +91,8 @@ class Runner(Protocol):
     def analyze(self, *, engine: str, cache: str) -> dict[str, Any]: ...
 
     def planned_protocols(self, plan_id: str = "") -> dict[str, Any]: ...
+
+    def fluidics_configuration(self) -> dict[str, Any]: ...
 
 
 # ---- requirements ----------------------------------------------------------
@@ -307,6 +311,7 @@ def _observe(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
         "observed_at": now_iso(),
         "project": runner.describe_project(),
         **observation,
+        "fluidics_configuration": _fluidics_configuration(runner),
         # Every condition an operation can be refused on, read from the same
         # place the refusal reads it. Without this, a caller told "corrections
         # have not been applied" cannot see that from observe.
@@ -319,6 +324,29 @@ def _observe(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
         "safety": runner.safety_state(),
         "planned_protocols": runner.planned_protocols()["plans"],
     }
+
+
+def _fluidics_configuration(runner: Runner) -> dict[str, Any]:
+    state = runner.fluidics_configuration()
+    settings = state.get("correction_settings") or {}
+    applied = bool(state.get("corrections_applied"))
+    channels = []
+    for index, (key, label, *_defaults) in enumerate(FLUIDIC_CHANNELS):
+        has_settings = bool(settings)
+        channels.append(
+            {
+                "index": index,
+                "key": key,
+                "label": label,
+                "flow_unit": FLUIDIC_CHANNEL_UNITS[key],
+                "corrections_applied": applied,
+                "calibration": settings.get(f"{key}_calibration") if has_settings else None,
+                "scale": settings.get(f"{key}_scale") if has_settings else None,
+                "offset": settings.get(f"{key}_offset") if has_settings else None,
+                "quadratic": settings.get(f"{key}_quadratic") if has_settings else None,
+            }
+        )
+    return {"corrections_applied": applied, "channels": channels}
 
 
 def _protocol_events(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:

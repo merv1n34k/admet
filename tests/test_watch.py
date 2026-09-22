@@ -47,6 +47,14 @@ def _state(**overrides):
                 "stable": True, "pressure_mean_mbar": 741.8, "pressure_std_mbar": 2.1,
                 "flow_mean_ul_min": 98.2, "flow_std_ul_min": 1.4,
             }],
+            "fluidics_configuration": {
+                "corrections_applied": True,
+                "channels": [{
+                    "index": 0, "key": "oil_l", "label": "Oil L", "flow_unit": "L",
+                    "corrections_applied": True, "calibration": "IPA",
+                    "scale": 2.25, "offset": 0.1, "quadratic": 0.002,
+                }],
+            },
         },
     }
     for section, values in overrides.items():
@@ -101,12 +109,15 @@ class SafetyOfTheMonitorTests(unittest.TestCase):
 class HonestyTests(unittest.TestCase):
     def test_an_absent_reading_is_a_dash_rather_than_a_zero(self):
         # A zero here would be indistinguishable from a channel sitting still.
-        frame = render(_state(channels=[{
-            "index": 0, "label": "Oil L", "mode": "off",
-            "requested_flow_ul_min": None, "requested_pressure_mbar": None,
-            "pressure_mbar": None, "flow_ul_min": None, "volume_ul": None,
-            "stable": None, "pressure_std_mbar": None, "flow_std_ul_min": None,
-        }]))
+        frame = render(_state(
+            channels=[{
+                "index": 0, "label": "Oil L", "mode": "off",
+                "requested_flow_ul_min": None, "requested_pressure_mbar": None,
+                "pressure_mbar": None, "flow_ul_min": None, "volume_ul": None,
+                "stable": None, "pressure_std_mbar": None, "flow_std_ul_min": None,
+            }],
+            fluidics_configuration={"corrections_applied": False, "channels": []},
+        ))
 
         self.assertIn("—", frame)
         self.assertNotIn("0.00", frame)
@@ -146,6 +157,16 @@ class HonestyTests(unittest.TestCase):
 
 
 class ContentTests(unittest.TestCase):
+    def test_fluid_configuration_and_corrections_are_visible(self):
+        frame = render(_state())
+
+        self.assertIn("FLUID CONFIGURATION", frame)
+        self.assertIn("corrections APPLIED", frame)
+        self.assertIn("oil_l", frame)
+        self.assertIn("IPA", frame)
+        self.assertIn("2.25", frame)
+        self.assertIn("0.002", frame)
+
     def test_the_mode_is_unmissable(self):
         self.assertIn("SIMULATED", render(_state()))
 

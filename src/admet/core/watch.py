@@ -111,6 +111,8 @@ def render(
         RULE,
         *_session(runtime, observation, paint),
         RULE,
+        *_fluidics_configuration(observation, paint),
+        RULE,
         *_channels(observation, paint),
         RULE,
         *_camera(observation, paint),
@@ -238,6 +240,33 @@ def _channels(observation: dict[str, Any], paint: _Paint) -> list[str]:
             f"{_number(channel.get('volume_ul'), '.2f'):>9}{age:>8}  {stability}"
         )
     return rows
+
+
+def _fluidics_configuration(observation: dict[str, Any], paint: _Paint) -> list[str]:
+    configuration = observation.get("fluidics_configuration") or {}
+    channels = configuration.get("channels") or []
+    applied = configuration.get("corrections_applied")
+    status = paint("APPLIED", GREEN) if applied else paint("NOT APPLIED", YELLOW)
+    lines = [f"  FLUID CONFIGURATION · corrections {status}"]
+    lines.append(
+        paint(
+            f"  {'CH':<4}{'KEY':<10}{'LABEL':<11}{'UNIT':<6}{'CALIBRATION':<13}"
+            f"{'SCALE':>10}{'OFFSET':>11}{'QUADRATIC':>12}",
+            DIM,
+        )
+    )
+    if not channels:
+        return [*lines, paint("  configuration unavailable", DIM)]
+    for channel in channels:
+        lines.append(
+            f"  {str(channel.get('index', '?')):<4}{str(channel.get('key') or ''):<10}"
+            f"{str(channel.get('label') or ''):<11}{str(channel.get('flow_unit') or ''):<6}"
+            f"{str(channel.get('calibration') or '—'):<13}"
+            f"{_number(channel.get('scale'), '.6g'):>10}"
+            f"{_number(channel.get('offset'), '.6g'):>11}"
+            f"{_number(channel.get('quadratic'), '.6g'):>12}"
+        )
+    return lines
 
 
 def _camera(observation: dict[str, Any], paint: _Paint) -> list[str]:
