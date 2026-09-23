@@ -46,7 +46,7 @@ class SurfaceTests(unittest.TestCase):
 
         planning = {
             "plan_protocol", "planned_protocols", "execute_protocol_plan",
-            "cancel_protocol_plan",
+            "cancel_protocol_plan", "wait_protocol_event",
         }
         self.assertEqual(self.names - {"describe"} - planning, set(BY_ID))
 
@@ -83,6 +83,14 @@ class SurfaceTests(unittest.TestCase):
         self.assertEqual(lease["default"], 10.0)
         self.assertEqual(lease["minimum"], 1.0)
         self.assertEqual(lease["maximum"], 60.0)
+
+    def test_protocol_wait_has_a_bounded_cursor_schema(self):
+        tools = {tool["name"]: tool for tool in self.server.tools()}
+        schema = tools["wait_protocol_event"]["inputSchema"]
+
+        self.assertEqual(schema["properties"]["after_sequence"]["minimum"], 0)
+        self.assertEqual(schema["properties"]["timeout_s"]["minimum"], 0.1)
+        self.assertEqual(schema["properties"]["timeout_s"]["maximum"], 60.0)
 
 
 
@@ -206,6 +214,7 @@ class PlanningBoundaryTests(unittest.TestCase):
 
         result, is_error = _call(self.server, "execute_protocol_plan", {"plan_id": plan["plan_id"]})
         self.assertFalse(is_error, result)
+        self.assertEqual(json.loads(result)["yield"]["reason"], "protocol_started")
         self.server.admet.wait_for_protocol(timeout_s=2.0, poll_s=0.01)
         self.assertEqual(
             self.server.admet.planned_protocols(plan["plan_id"])["plans"][0]["state"],
@@ -216,6 +225,68 @@ class PlanningBoundaryTests(unittest.TestCase):
         )
         self.assertTrue(is_error)
         self.assertIn("completed", refused)
+
+    def test_wait_yields_gate_step_outcomes_and_protocol_completion(self):
+        plan = self.server.admet.plan_protocol("run_steps", {
+            "steps": [
+                {
+                    "name": "operator gate",
+                    "trigger_type": "confirmation",
+                    "trigger_params": {"message": "Proceed?"},
+                    "on_complete": "zero",
+                },
+                {
+                    "name": "brief pulse",
+                    "sensor_setpoints": {"0": 1.0},
+                    "trigger_type": "time",
+                    "trigger_params": {"duration_s": 0.02},
+                    "on_complete": "zero",
+                },
+            ],
+            "tick_s": 0.005,
+        })
+        started = self.server.admet.execute_protocol_plan(plan["plan_id"])["yield"]
+
+        gate = self.server.admet.wait_protocol_event(
+            after_sequence=started["next_sequence"], timeout_s=1.0
+        )
+        self.assertEqual(gate["reason"], "confirmation_required")
+        self.server.admet.do("confirm_protocol")
+        first_step = self.server.admet.wait_protocol_event(
+            after_sequence=gate["next_sequence"], timeout_s=1.0
+        )
+        second_step = self.server.admet.wait_protocol_event(
+            after_sequence=first_step["next_sequence"], timeout_s=1.0
+        )
+        completed = self.server.admet.wait_protocol_event(
+            after_sequence=second_step["next_sequence"], timeout_s=1.0
+        )
+
+        self.assertEqual(first_step["reason"], "step_completed")
+        self.assertEqual(second_step["reason"], "step_completed")
+        self.assertEqual(completed["reason"], "protocol_completed")
+        cursors = [started, gate, first_step, second_step, completed]
+        self.assertEqual(
+            [item["next_sequence"] for item in cursors],
+            sorted(item["next_sequence"] for item in cursors),
+        )
+
+    def test_wait_times_out_without_returning_progress_as_a_milestone(self):
+        plan = self.server.admet.plan_protocol("run_steps", self.settings(duration_s=2.0))
+        started = self.server.admet.execute_protocol_plan(plan["plan_id"])["yield"]
+
+        result = self.server.admet.wait_protocol_event(
+            after_sequence=started["next_sequence"], timeout_s=0.1
+        )
+
+        self.assertEqual(result["status"], "timeout")
+        self.assertEqual(result["reason"], "timeout")
+        self.assertGreaterEqual(result["next_sequence"], started["next_sequence"])
+        self.server.admet.do("stop_protocol")
+
+    def test_wait_rejects_an_unbounded_timeout(self):
+        with self.assertRaisesRegex(ValueError, "between 0.1 and 60"):
+            self.server.admet.wait_protocol_event(timeout_s=61.0)
 
     def test_cancelled_and_stale_plans_are_refused(self):
         first = self.server.admet.plan_protocol("run_steps", self.settings())

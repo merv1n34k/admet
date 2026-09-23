@@ -93,6 +93,11 @@ class AdmetServer:
             return self.admet.planned_protocols(str(arguments.get("plan_id") or ""))
         if name == "execute_protocol_plan":
             return self.admet.execute_protocol_plan(str(arguments.get("plan_id") or ""))
+        if name == "wait_protocol_event":
+            return self.admet.wait_protocol_event(
+                after_sequence=int(arguments.get("after_sequence", 0) or 0),
+                timeout_s=float(arguments.get("timeout_s", 10.0) or 10.0),
+            )
         if name == "cancel_protocol_plan":
             return self.admet.cancel_protocol_plan(str(arguments.get("plan_id") or ""))
         operation = find_operation(name)

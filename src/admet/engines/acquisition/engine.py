@@ -153,6 +153,7 @@ class AcquisitionEngine:
         self._event_sequence = 0
         self._event_history: deque = deque(maxlen=2000)
         self._event_lock = threading.Lock()
+        self._event_condition = threading.Condition(self._event_lock)
         self.data_queue: Queue = Queue(maxsize=50)
         self.pipeline_queue: Queue = Queue(maxsize=50)
         self._camera = CameraController()
@@ -854,8 +855,9 @@ class AcquisitionEngine:
             return self._event_sequence
 
     def record_event(self, event: Any) -> None:
-        with self._event_lock:
+        with self._event_condition:
             self._event_history.append(event)
+            self._event_condition.notify_all()
 
     def latest_event(self) -> Any:
         with self._event_lock:
@@ -867,6 +869,27 @@ class AcquisitionEngine:
             events = list(self._event_history)
         newer = [event for event in events if event.sequence > sequence]
         return newer[: max(0, limit)] if limit else newer
+
+    def wait_for_event(
+        self,
+        sequence: int,
+        predicate: Any,
+        timeout_s: float,
+    ) -> tuple[Any | None, int]:
+        """Wait for a matching event while advancing over non-milestone events."""
+        deadline = time.monotonic() + timeout_s
+        cursor = sequence
+        with self._event_condition:
+            while True:
+                newer = [event for event in self._event_history if event.sequence > cursor]
+                for event in newer:
+                    cursor = event.sequence
+                    if predicate(event):
+                        return event, cursor
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None, cursor
+                self._event_condition.wait(remaining)
 
     def polling_started_monotonic(self) -> float:
         return self._acquisition.started_monotonic if self._acquisition else 0.0

@@ -112,11 +112,41 @@ PLAN_TOOLS = [
     },
     {
         "name": "execute_protocol_plan",
-        "description": "Execute exactly one previously validated plan by ID.",
+        "description": (
+            "Execute exactly one previously validated plan by ID and return its start yield. "
+            "Continue with wait_protocol_event until the protocol ends."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"plan_id": {"type": "string", "description": "Immutable plan ID"}},
             "required": ["plan_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "wait_protocol_event",
+        "description": (
+            "Wait for the next protocol milestone: start, confirmation gate, step outcome, "
+            "protocol outcome, or a bounded timeout. Reuse next_sequence as after_sequence."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "after_sequence": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Last event sequence already consumed",
+                },
+                "timeout_s": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "maximum": 60.0,
+                    "default": 10.0,
+                    "description": "Maximum seconds to wait",
+                },
+            },
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -149,4 +179,3 @@ def operation_tools() -> list[dict[str, Any]]:
             }
         )
     return tools
-

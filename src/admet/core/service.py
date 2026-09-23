@@ -62,6 +62,30 @@ def _describe_event(event: Any) -> dict[str, Any]:
     }
 
 
+def _protocol_yield_reason(event: Any) -> str | None:
+    outcome = str(event.outcome)
+    state = str(event.state)
+    if str(event.confirmation_message or "").strip():
+        return "confirmation_required"
+    if event.step_name and outcome != "running":
+        return {
+            "completed": "step_completed",
+            "timed_out": "step_timed_out",
+            "skipped": "step_skipped",
+            "cancelled": "step_cancelled",
+            "error": "step_failed",
+        }.get(outcome)
+    if not event.step_name and outcome != "running":
+        return {
+            "completed": "protocol_completed",
+            "cancelled": "protocol_cancelled",
+            "error": "protocol_failed",
+        }.get(outcome)
+    if state == "running" and event.current_step < 0:
+        return "protocol_started"
+    return None
+
+
 def _describe_param(param: Any) -> dict[str, Any]:
     return {
         "name": param.name,
@@ -449,6 +473,9 @@ class Admet:
             plan["state"] = "replaced"
             raise RuntimeError(f"protocol plan {plan_id} is stale because the rig context changed")
         op = find_operation(plan["operation_id"])
+        engine = self._engines.get("acquisition")
+        latest = engine.latest_event() if engine is not None else None
+        before_sequence = latest.sequence if latest else 0
         op.check(self.state())
         plan["state"] = "executing"
         plan["executed_at"] = _now_iso()
@@ -460,7 +487,13 @@ class Admet:
             plan["error"] = str(exc)
             self._executing_plan_id = None
             raise
-        return {**result, "plan_id": plan_id, "plan_state": plan["state"]}
+        started = self.wait_protocol_event(after_sequence=before_sequence, timeout_s=1.0)
+        return {
+            **result,
+            "plan_id": plan_id,
+            "plan_state": plan["state"],
+            "yield": started,
+        }
 
     def cancel_protocol_plan(self, plan_id: str) -> dict[str, Any]:
         plan = self._protocol_plans.get(plan_id)
@@ -729,6 +762,45 @@ class Admet:
         if engine is None:
             return []
         return [_describe_event(event) for event in engine.events_after(after_sequence, limit)]
+
+    def wait_protocol_event(
+        self,
+        *,
+        after_sequence: int = 0,
+        timeout_s: float = 10.0,
+    ) -> dict[str, Any]:
+        """Long-poll until a protocol milestone or a bounded timeout."""
+        if timeout_s < 0.1 or timeout_s > 60.0:
+            raise ValueError("timeout_s must be between 0.1 and 60 seconds")
+        engine = self._engines.get("acquisition")
+        if engine is None:
+            return {
+                "status": "idle",
+                "reason": "no_acquisition_session",
+                "after_sequence": after_sequence,
+                "next_sequence": after_sequence,
+                "event": None,
+            }
+        event, cursor = engine.wait_for_event(
+            after_sequence,
+            lambda candidate: _protocol_yield_reason(candidate) is not None,
+            timeout_s,
+        )
+        if event is None:
+            return {
+                "status": "timeout",
+                "reason": "timeout",
+                "after_sequence": after_sequence,
+                "next_sequence": cursor,
+                "event": None,
+            }
+        return {
+            "status": "event",
+            "reason": _protocol_yield_reason(event),
+            "after_sequence": after_sequence,
+            "next_sequence": cursor,
+            "event": _describe_event(event),
+        }
 
     def mark(self, name: str, value: Any) -> None:
         """Remember something the hardware does not report, such as corrections."""

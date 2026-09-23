@@ -184,7 +184,9 @@ class PipelineEngine(threading.Thread):
         self._latest_event: PipelineEvent | None = None
         self._recent_events: deque[PipelineEvent] = deque(maxlen=recent_events)
         self._observation_lock = threading.Lock()
-        self._current_step_idx = 0
+        # -1 makes the first emitted event unambiguously about protocol start,
+        # before the first step becomes current.
+        self._current_step_idx = -1
         self._step_start_volumes: dict[int, float] = {}
 
         self._stop_event = threading.Event()
