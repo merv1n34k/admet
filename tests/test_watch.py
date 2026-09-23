@@ -242,11 +242,59 @@ class ContentTests(unittest.TestCase):
             }],
         }]))
 
-        self.assertIn("ch0=100.0uL/m", frame)
+        self.assertIn("UNIT", frame)
+        self.assertIn("CONTROL", frame)
+        self.assertIn("ch0", frame)
+        self.assertIn("flow", frame)
+        self.assertIn("100.0 uL/min", frame)
         self.assertIn("volume", frame)
         self.assertIn("50.0 uL", frame)
         self.assertIn("30.0s", frame)
         self.assertNotIn("a name that is less important", frame)
+
+    def test_simultaneous_channels_are_one_aligned_control_row_per_unit(self):
+        frame = render(_state(planned_protocols=[{
+            "plan_id": "plan_parallel", "operation_id": "run_steps", "state": "planned",
+            "created_at": "2026-09-21T12:00:00+03:00", "step_count": 1,
+            "expected_duration_s": 30.0,
+            "armed_safety_limits": {"pressure_mbar": {}},
+            "required_confirmations": [], "warnings": [], "assumptions": [],
+            "unmet_guards": [], "digest": "abcdef0123456789",
+            "steps": [{
+                "number": 1, "name": "all channels",
+                "flow_setpoints_ul_min": {"0": 100.0, "1": 50.0},
+                "pressure_setpoints_mbar": {"2": 400.0},
+                "trigger_type": "time", "trigger_params": {"duration_s": 30.0},
+                "timeout_s": None, "expected_duration_s": 30.0,
+                "on_complete": "zero", "confirmation": None,
+            }],
+        }]))
+        step_lines = [line for line in frame.splitlines() if "ch0" in line or "ch1" in line or "ch2" in line]
+
+        self.assertTrue(any("ch0" in line and "flow" in line and "100.0 uL/min" in line for line in step_lines))
+        self.assertTrue(any("ch1" in line and "flow" in line and "50.0 uL/min" in line for line in step_lines))
+        self.assertTrue(any("ch2" in line and "pressure" in line and "400.0 mbar" in line for line in step_lines))
+        self.assertTrue(all(len(line) <= len(RULE) for line in step_lines))
+
+    def test_confirmation_trigger_is_shortened_to_confirm(self):
+        frame = render(_state(planned_protocols=[{
+            "plan_id": "plan_confirm", "operation_id": "run_steps", "state": "planned",
+            "created_at": "2026-09-21T12:00:00+03:00", "step_count": 1,
+            "expected_duration_s": 0.0,
+            "armed_safety_limits": {"pressure_mbar": {}},
+            "required_confirmations": ["Check mapping"], "warnings": [],
+            "assumptions": [], "unmet_guards": [], "digest": "abcdef0123456789",
+            "steps": [{
+                "number": 1, "name": "confirm", "flow_setpoints_ul_min": {},
+                "pressure_setpoints_mbar": {}, "trigger_type": "confirmation",
+                "trigger_params": {"message": "Check mapping"}, "timeout_s": None,
+                "expected_duration_s": 0.0, "on_complete": "zero",
+                "confirmation": "Check mapping",
+            }],
+        }]))
+
+        self.assertIn("confirm", frame)
+        self.assertNotIn("confirmation", frame)
 
     def test_plan_labels_explain_duration_and_pressure_limit(self):
         frame = render(_state(planned_protocols=[{
