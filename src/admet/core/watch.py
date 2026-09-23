@@ -1,10 +1,9 @@
-"""A read-only window onto the process that owns the instrument.
+"""A telemetry window onto the process that owns the instrument.
 
 This reads two files and draws them. It opens no SDK, constructs no engine, and
-has no way to command anything -- the only key it answers to is the one that
-quits. That is not a limitation to be lifted later: a monitor that could also
-act is a second controller, and the whole arrangement depends on there being
-one.
+never becomes a second instrument controller. Its only mutations are process
+signals to the published owner PID: emergency stop and graceful shutdown. The
+owner remains solely responsible for zeroing and releasing hardware.
 
 Everything here is standard library and ANSI escapes. The renderer is a pure
 function of the two files' contents, so what the eye sees can be asserted
@@ -16,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import sys
 import textwrap
 import time
@@ -88,6 +88,9 @@ def render(
     directory: str = "",
     colour: bool = False,
     now: float | None = None,
+    width: int = len(RULE),
+    interactive: bool = False,
+    notice: str = "",
 ) -> str:
     """One frame, from the published files alone."""
     paint = _Paint(colour)
@@ -101,32 +104,33 @@ def render(
                 paint("Start the controller with:", DIM),
                 paint(f"  admet --runtime {directory or 'PATH'} serve --simulated", DIM),
                 "",
-                _footer(paint),
+                _footer(paint, interactive=interactive, notice=notice),
             ]
         )
 
     runtime = state.get("runtime") or {}
     observation = state.get("observation") or {}
+    rule = "─" * max(1, width)
     lines = [
         _header(runtime, paint, now),
-        RULE,
+        rule,
         *_session(runtime, observation, paint),
-        RULE,
+        rule,
         *_fluidics_configuration(observation, paint),
-        RULE,
+        rule,
         *_channels(observation, paint),
-        RULE,
+        rule,
         *_camera(observation, paint),
-        RULE,
-        *_plans(observation, paint, now),
-        RULE,
-        *_protocol(observation, paint),
-        RULE,
+        rule,
+        *_plans(observation, paint, now, width),
+        rule,
+        *_protocol(observation, paint, width),
+        rule,
         *_validation(observation, paint),
-        RULE,
+        rule,
         *_history(events or [], paint),
-        RULE,
-        _footer(paint),
+        rule,
+        _footer(paint, interactive=interactive, notice=notice),
     ]
     return "\n".join(lines)
 
@@ -299,7 +303,9 @@ def _camera(observation: dict[str, Any], paint: _Paint) -> list[str]:
     ]
 
 
-def _plans(observation: dict[str, Any], paint: _Paint, now: float | None) -> list[str]:
+def _plans(
+    observation: dict[str, Any], paint: _Paint, now: float | None, width: int
+) -> list[str]:
     plans = observation.get("planned_protocols") or []
     lines = [paint("  PLANNED PROTOCOLS", DIM)]
     if not plans:
@@ -329,15 +335,15 @@ def _plans(observation: dict[str, Any], paint: _Paint, now: float | None) -> lis
         limit_text = ", ".join(
             f"ch{channel}={_number(value)} mbar" for channel, value in limits.items()
         ) or "UNARMED"
-        lines.extend(_fold_plan_note("PRESSURE LIMIT: ", limit_text, paint, RED if not limits else DIM))
-        lines.extend(_fold_plan_note("DIGEST: ", str(plan.get("digest") or "")[:12], paint, DIM))
+        lines.extend(_fold_plan_note("PRESSURE LIMIT: ", limit_text, paint, width, RED if not limits else DIM))
+        lines.extend(_fold_plan_note("DIGEST: ", str(plan.get("digest") or "")[:12], paint, width, DIM))
         for warning in plan.get("warnings") or []:
-            lines.extend(_fold_plan_note("WARNING: ", str(warning), paint, YELLOW))
+            lines.extend(_fold_plan_note("WARNING: ", str(warning), paint, width, YELLOW))
         for assumption in plan.get("assumptions") or []:
-            lines.extend(_fold_plan_note("NOTE: ", str(assumption), paint, DIM))
+            lines.extend(_fold_plan_note("NOTE: ", str(assumption), paint, width, DIM))
         if plan.get("unmet_guards"):
             lines.extend(
-                _fold_plan_note("UNMET: ", ", ".join(plan["unmet_guards"]), paint, YELLOW)
+                _fold_plan_note("UNMET: ", ", ".join(plan["unmet_guards"]), paint, width, YELLOW)
             )
     lines.append(paint(f"  STEPS · {selected.get('plan_id')}", DIM))
     lines.append(
@@ -369,17 +375,19 @@ def _plans(observation: dict[str, Any], paint: _Paint, now: float | None) -> lis
             )
         if step.get("confirmation"):
             lines.extend(
-                _fold_plan_note("CONFIRM: ", str(step["confirmation"]), paint, BOLD, YELLOW)
+                _fold_plan_note("CONFIRM: ", str(step["confirmation"]), paint, width, BOLD, YELLOW)
             )
     return lines
 
 
-def _fold_plan_note(prefix: str, value: str, paint: _Paint, *codes: str) -> list[str]:
+def _fold_plan_note(
+    prefix: str, value: str, paint: _Paint, width: int, *codes: str
+) -> list[str]:
     indent = "    "
     continuation = " " * len(prefix)
     wrapped = textwrap.wrap(
         prefix + value,
-        width=len(RULE) - len(indent),
+        width=max(1, width - len(indent)),
         subsequent_indent=continuation,
         break_long_words=True,
         break_on_hyphens=False,
@@ -434,7 +442,7 @@ def _iso_age(created_at: Any, now: float | None) -> float | None:
         return None
 
 
-def _protocol(observation: dict[str, Any], paint: _Paint) -> list[str]:
+def _protocol(observation: dict[str, Any], paint: _Paint, width: int) -> list[str]:
     protocol = observation.get("protocol") or {}
     state = str(protocol.get("state") or "idle")
     step_index = protocol.get("step_index")
@@ -450,7 +458,7 @@ def _protocol(observation: dict[str, Any], paint: _Paint) -> list[str]:
     if protocol.get("confirmation_message"):
         lines.extend(
             _fold_plan_note(
-                "WAITING: ", str(protocol["confirmation_message"]), paint, BOLD, YELLOW
+                "WAITING: ", str(protocol["confirmation_message"]), paint, width, BOLD, YELLOW
             )
         )
         lines.extend(
@@ -459,6 +467,7 @@ def _protocol(observation: dict[str, Any], paint: _Paint) -> list[str]:
                 "confirm_protocol=proceed · skip_protocol=zero+skip · "
                 "pause_protocol=zero+pause · stop_protocol=zero+abort",
                 paint,
+                width,
                 DIM,
             )
         )
@@ -519,27 +528,49 @@ def _summarise(entry: dict[str, Any]) -> str:
     return " ".join(f"{k}={v}" for k, v in list(interesting.items())[:4]) or "—"
 
 
-def _footer(paint: _Paint) -> str:
+def _footer(paint: _Paint, *, interactive: bool = False, notice: str = "") -> str:
+    if notice:
+        return paint(f"  {notice}", BOLD, YELLOW)
+    if interactive:
+        return paint(
+            "  [q] QUIT TUI   [E] EMERGENCY STOP   [X] KILL SERVER   physical E-stop authoritative",
+            DIM,
+        )
     return paint(
-        "  read-only monitor · it cannot stop the rig · "
-        "the physical emergency stop remains authoritative · q to quit",
+        "  read-only telemetry snapshot · physical emergency stop remains authoritative",
         DIM,
     )
 
 
-def _frame(directory: str, colour: bool) -> str:
+def _frame(
+    directory: str,
+    colour: bool,
+    *,
+    width: int = len(RULE),
+    interactive: bool = False,
+    notice: str = "",
+) -> str:
     return render(
         read_state(directory),
         read_events(directory, limit=20),
         directory=str(directory),
         colour=colour,
+        width=width,
+        interactive=interactive,
+        notice=notice,
     )
 
 
 def _fit_frame(frame: str, columns: int, rows: int) -> str:
     """Keep a live frame inside the terminal so redraws cannot scroll it."""
     available_rows = max(1, rows)
-    lines = frame.splitlines()[:available_rows]
+    source = frame.splitlines()
+    if len(source) <= available_rows:
+        lines = source
+    elif available_rows == 1:
+        lines = [source[-1]]
+    else:
+        lines = [*source[: available_rows - 1], source[-1]]
     return "\n".join(_clip_ansi(line, max(1, columns)) for line in lines)
 
 
@@ -580,13 +611,31 @@ def watch(
         out.flush()
         return 0
 
-    with _quit_key(out) as pressed_quit:
+    notice = ""
+    with _watch_keys(out) as pressed:
         out.write("\x1b[?1049h\x1b[?25l")
         try:
             next_refresh = time.monotonic()
-            while not pressed_quit():
+            while True:
+                key = pressed()
+                if key in {"q", "Q"}:
+                    break
+                if key == "E":
+                    notice = _signal_owner(directory, signal.SIGUSR1, "emergency stop requested")
+                elif key == "X":
+                    notice = _signal_owner(directory, signal.SIGTERM, "server shutdown requested")
                 size = shutil.get_terminal_size(fallback=(80, 24))
-                frame = _fit_frame(_frame(directory, colour), size.columns, size.lines)
+                frame = _fit_frame(
+                    _frame(
+                        directory,
+                        colour,
+                        width=size.columns,
+                        interactive=True,
+                        notice=notice,
+                    ),
+                    size.columns,
+                    size.lines,
+                )
                 out.write("\x1b[H" + frame.replace("\n", "\x1b[K\n") + "\x1b[J")
                 out.flush()
                 next_refresh += interval_s
@@ -599,14 +648,32 @@ def watch(
     return 0
 
 
+def _signal_owner(directory: str, signum: int, success: str) -> str:
+    state = read_state(directory)
+    runtime = (state or {}).get("runtime") or {}
+    pid = runtime.get("pid")
+    age = heartbeat_age_s(state)
+    if not isinstance(pid, int) or pid <= 1:
+        return "REFUSED: runtime has no valid owner PID"
+    if runtime.get("state") != "running":
+        return "REFUSED: runtime owner is not running"
+    if age is None or age > STALE_AFTER_S:
+        return "REFUSED: runtime heartbeat is stale; PID identity is not trusted"
+    try:
+        os.kill(pid, signum)
+    except (OSError, ValueError) as exc:
+        return f"FAILED: {exc}"
+    return success
+
+
 def _wants_colour(stream: TextIO) -> bool:
     if os.environ.get("NO_COLOR"):
         return False
     return bool(getattr(stream, "isatty", lambda: False)())
 
 
-class _quit_key:
-    """Answer to q, and leave the terminal exactly as it was found.
+class _watch_keys:
+    """Read one-key lifecycle controls and restore the terminal afterwards.
 
     If stdin is not a terminal there is nothing to read and nothing to restore,
     so this becomes a loop that only Ctrl-C ends.
@@ -633,13 +700,16 @@ class _quit_key:
             return lambda: False
         return self._pressed
 
-    def _pressed(self) -> bool:
+    def _pressed(self) -> str | None:
         import select
 
         ready, _, _ = select.select([sys.stdin], [], [], 0)
         if not ready:
-            return False
-        return sys.stdin.read(1).lower() == "q"
+            return None
+        if self._fd is None:
+            return None
+        value = os.read(self._fd, 1)
+        return value.decode(errors="ignore") if value else None
 
     def __exit__(self, *_exc: Any) -> None:
         if self._settings is not None and self._fd is not None:

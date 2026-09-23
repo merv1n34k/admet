@@ -1,10 +1,9 @@
-"""The read-only monitor.
+"""The telemetry monitor and its owner lifecycle controls.
 
-Two things are being protected here. One is that the monitor cannot act: it
-reads files, and if it could ever construct an engine it would be a second
-process reaching for an instrument another process owns. The other is that it
-cannot mislead -- a stale screen must announce itself, and an absent reading
-must not be drawn as a zero.
+The monitor never constructs an engine or becomes a second instrument owner.
+Emergency and shutdown keys send signals only to a fresh published owner PID.
+It also cannot mislead: stale screens are announced and absent readings are not
+drawn as zero.
 
 The renderer is a pure function of the file contents, so the frame a person
 would see is asserted against directly.
@@ -12,12 +11,13 @@ would see is asserted against directly.
 
 import io
 import json
+import signal
 import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
 
-from admet.core.watch import RULE, STALE_AFTER_S, _fit_frame, render, watch
+from admet.core.watch import RULE, STALE_AFTER_S, _fit_frame, _signal_owner, render, watch
 
 
 def _state(**overrides):
@@ -63,7 +63,6 @@ def _state(**overrides):
 
 
 class SafetyOfTheMonitorTests(unittest.TestCase):
-    """It reads. That is the whole of what it can do."""
 
     def test_it_imports_nothing_that_could_touch_the_instrument(self):
         # Checked against the import graph rather than the text, so a display
@@ -95,15 +94,40 @@ class SafetyOfTheMonitorTests(unittest.TestCase):
         self.assertNotIn("engine_action", source)
         self.assertNotIn("do(", source)
 
-    def test_it_says_it_cannot_stop_the_rig(self):
-        # The person watching must never believe this screen is a way out.
-        frame = render(_state())
+    def test_interactive_footer_offers_exact_lifecycle_controls(self):
+        frame = render(_state(), interactive=True)
 
-        self.assertIn("read-only", frame)
-        self.assertIn("physical emergency stop remains authoritative", frame)
+        self.assertIn("[q] QUIT TUI", frame)
+        self.assertIn("[E] EMERGENCY STOP", frame)
+        self.assertIn("[X] KILL SERVER", frame)
+        self.assertIn("physical E-stop authoritative", frame)
 
-    def test_the_only_key_it_offers_is_quit(self):
-        self.assertIn("q to quit", render(_state()))
+    def test_emergency_and_kill_signal_only_a_fresh_published_owner(self):
+        from datetime import datetime
+
+        state = _state()
+        state["runtime"]["heartbeat"] = datetime.now().astimezone().isoformat()
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "state.json").write_text(json.dumps(state))
+            with unittest.mock.patch("admet.core.watch.os.kill") as kill:
+                emergency = _signal_owner(tmp, signal.SIGUSR1, "emergency")
+                shutdown = _signal_owner(tmp, signal.SIGTERM, "shutdown")
+
+        self.assertEqual(emergency, "emergency")
+        self.assertEqual(shutdown, "shutdown")
+        self.assertEqual(
+            kill.call_args_list,
+            [unittest.mock.call(4242, signal.SIGUSR1), unittest.mock.call(4242, signal.SIGTERM)],
+        )
+
+    def test_a_stale_runtime_pid_is_never_signalled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "state.json").write_text(json.dumps(_state()))
+            with unittest.mock.patch("admet.core.watch.os.kill") as kill:
+                result = _signal_owner(tmp, signal.SIGTERM, "shutdown")
+
+        self.assertIn("REFUSED", result)
+        kill.assert_not_called()
 
 
 class HonestyTests(unittest.TestCase):
@@ -423,6 +447,12 @@ class LayoutTests(unittest.TestCase):
 
         self.assertEqual(len(fitted.splitlines()), 5)
         self.assertTrue(all(len(line) <= 12 for line in fitted.splitlines()))
+        self.assertEqual(fitted.splitlines()[-1], "line 19 is d")
+
+    def test_render_uses_the_live_terminal_width_for_section_rules(self):
+        frame = render(_state(), width=120)
+
+        self.assertIn("─" * 120, frame)
 
     def test_clipping_counts_visible_width_not_colour_sequences(self):
         fitted = _fit_frame("\x1b[31mabcdefghijk\x1b[0m", columns=5, rows=1)

@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--project", default=argparse.SUPPRESS)
     serve.add_argument("--create-project", action="store_true", default=argparse.SUPPRESS)
 
-    watch = sub.add_parser("watch", help="read-only monitor of a serving process")
+    watch = sub.add_parser("watch", help="telemetry monitor with owner safety controls")
     watch.add_argument("--runtime", required=True, help="the serving process's runtime directory")
     watch.add_argument("--once", action="store_true", help="draw one frame and exit")
 

@@ -143,7 +143,10 @@ The human/AI workflow is deliberately two-phase:
 4. The AI stops and waits for explicit human approval.
 5. The human reviews the read-only TUI and confirms the physical setup.
 6. Only after approval does the AI call `execute_protocol_plan` with the `plan_id` alone.
-7. The AI continuously monitors `observe` and `protocol_events` until completion.
+7. `execute_protocol_plan` returns the protocol-start yield. The AI then calls
+   `wait_protocol_event`, passing each returned `next_sequence` back as
+   `after_sequence`, until the protocol completes or fails. `observe` remains
+   available for complete telemetry between milestones.
 8. The physical emergency stop remains authoritative.
 
 Planning performs no hardware action: it starts no acquisition, recording,
@@ -165,6 +168,26 @@ Call that object as the arguments to `plan_protocol`, review the returned
 ```json
 {"plan_id": "plan_…"}
 ```
+
+Execution returns a `yield` with `reason: "protocol_started"`. Continue with a
+bounded long-poll:
+
+```json
+{"after_sequence": 17, "timeout_s": 10}
+```
+
+Call those arguments with `wait_protocol_event`. It returns for a protocol
+start, confirmation gate, step completion/timeout/skip/cancellation/failure,
+protocol completion/cancellation/failure, or the requested timeout. Progress
+samples do not masquerade as milestones. Always reuse `next_sequence`; cursors
+remain monotonic across protocols and reading does not remove events.
+
+The live `watch` TUI adapts its rules and wrapped blocks to the terminal width.
+Its lifecycle keys are `q` to quit only the TUI, uppercase `E` to send the
+owner an immediate software emergency-stop signal, and uppercase `X` to ask
+the owner to zero the rig, release hardware, and shut down gracefully. Signals
+are refused when the published heartbeat is stale. The physical emergency stop
+remains authoritative.
 
 **`observe`** is the one read. Unguarded, no arguments, and it takes nothing
 from anyone:
