@@ -17,7 +17,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from admet.core.watch import STALE_AFTER_S, _fit_frame, render, watch
+from admet.core.watch import RULE, STALE_AFTER_S, _fit_frame, render, watch
 
 
 def _state(**overrides):
@@ -219,9 +219,70 @@ class ContentTests(unittest.TestCase):
         self.assertIn("PLANNED PROTOCOLS", frame)
         self.assertIn("plan_abc123", frame)
         self.assertIn("validate_oil_capacity", frame)
-        self.assertIn("confirm oil mapping", frame)
+        self.assertIn("TRIGGER", frame)
+        self.assertIn("CONDITION", frame)
         self.assertIn("CONFIRM: Confirm Oil-L", frame)
         self.assertIn("0123456789ab", frame)
+
+    def test_step_table_prioritises_setpoints_trigger_condition_and_duration(self):
+        frame = render(_state(planned_protocols=[{
+            "plan_id": "plan_values", "operation_id": "run_steps", "state": "planned",
+            "created_at": "2026-09-21T12:00:00+03:00", "step_count": 1,
+            "expected_duration_s": 30.0,
+            "armed_safety_limits": {"pressure_mbar": {}},
+            "required_confirmations": [], "warnings": [], "assumptions": [],
+            "unmet_guards": [], "digest": "abcdef0123456789",
+            "steps": [{
+                "number": 1, "name": "a name that is less important than values",
+                "flow_setpoints_ul_min": {"0": 100.0}, "pressure_setpoints_mbar": {},
+                "trigger_type": "volume",
+                "trigger_params": {"sensor_index": 0, "target_volume_ul": 50.0},
+                "timeout_s": None, "expected_duration_s": 30.0,
+                "on_complete": "zero", "confirmation": None,
+            }],
+        }]))
+
+        self.assertIn("ch0=100.0uL/m", frame)
+        self.assertIn("volume", frame)
+        self.assertIn("50.0 uL", frame)
+        self.assertIn("30.0s", frame)
+        self.assertNotIn("a name that is less important", frame)
+
+    def test_plan_labels_explain_duration_and_pressure_limit(self):
+        frame = render(_state(planned_protocols=[{
+            "plan_id": "plan_safe", "operation_id": "run_steps", "state": "planned",
+            "created_at": "2026-09-21T12:00:00+03:00", "step_count": 1,
+            "expected_duration_s": None,
+            "armed_safety_limits": {"pressure_mbar": {}},
+            "required_confirmations": [], "warnings": [], "assumptions": [],
+            "unmet_guards": [], "digest": "abcdef0123456789", "steps": [],
+        }]))
+
+        self.assertIn("EST. DURATION", frame)
+        self.assertIn("PRESSURE LIMIT: UNARMED", frame)
+
+    def test_long_plan_notes_are_folded_inside_the_monitor_width(self):
+        prompt = "Confirm " + "a very long physical mapping description " * 4
+        frame = render(_state(planned_protocols=[{
+            "plan_id": "plan_long", "operation_id": "run_steps", "state": "planned",
+            "created_at": "2026-09-21T12:00:00+03:00", "step_count": 1,
+            "expected_duration_s": None,
+            "armed_safety_limits": {"pressure_mbar": {}},
+            "required_confirmations": [prompt], "warnings": [prompt],
+            "assumptions": [prompt], "unmet_guards": [],
+            "digest": "abcdef0123456789",
+            "steps": [{
+                "number": 1, "name": "confirm mapping",
+                "flow_setpoints_ul_min": {}, "pressure_setpoints_mbar": {},
+                "trigger_type": "time", "timeout_s": None,
+                "expected_duration_s": 0.0, "on_complete": "zero",
+                "confirmation": prompt,
+            }],
+        }]))
+        plan_lines = frame.split("  PLANNED PROTOCOLS", 1)[1].split(RULE, 1)[0].splitlines()
+
+        self.assertTrue(all(len(line) <= len(RULE) for line in plan_lines))
+        self.assertGreater(sum("physical mapping" in line for line in plan_lines), 1)
 
     def test_the_running_step_and_its_progress_are_shown(self):
         frame = render(_state(protocol={
@@ -244,6 +305,9 @@ class ContentTests(unittest.TestCase):
 
         self.assertIn("Is channel 0 the oil line?", frame)
         self.assertIn("confirm_protocol", frame)
+        self.assertIn("skip_protocol", frame)
+        self.assertIn("pause_protocol", frame)
+        self.assertIn("stop_protocol", frame)
 
     def test_an_error_is_shown(self):
         frame = render(_state(protocol={

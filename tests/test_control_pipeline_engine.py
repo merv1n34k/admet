@@ -10,6 +10,7 @@ from admet.engines.acquisition.pipeline import (
     StepStatus,
 )
 from admet.engines.acquisition.triggers import (
+    ConfirmationTrigger,
     TimeTrigger,
 )
 
@@ -125,6 +126,72 @@ class PipelineEngineTests(unittest.TestCase):
         self.assertEqual(engine.state, PipelineState.COMPLETED)
         self.assertEqual(step.status, StepStatus.SKIPPED)
         self.assertNotIn(("set", 0, 1.0), manager.calls)
+        self.assertIn(("zero_all",), manager.calls)
+        self.assertEqual(manager.calls[-1], ("release_all",))
+
+    def test_pause_and_abort_zero_immediately_at_a_confirmation_gate(self):
+        for action in ("pause", "stop"):
+            with self.subTest(action=action):
+                manager = FakeChannelManager()
+                events: Queue[PipelineEvent] = Queue()
+                step = PipelineStep(
+                    "operator check", {}, TimeTrigger(0.0), confirm_message="Proceed?"
+                )
+                engine = PipelineEngine(
+                    [step], manager, FakeAcquisition(), events, {0: 0}, tick_s=0.001
+                )
+                engine.start()
+                self.assertTrue(_wait_for_confirmation(events, "Proceed?"))
+
+                getattr(engine, action)()
+
+                self.assertIn(("zero_all",), manager.calls)
+                engine.stop()
+                engine.join(timeout=1.0)
+
+    def test_proceed_while_paused_cannot_apply_setpoints_until_resumed(self):
+        manager = FakeChannelManager()
+        events: Queue[PipelineEvent] = Queue()
+        step = PipelineStep(
+            "operator check", {0: 5.0}, TimeTrigger(0.0), confirm_message="Proceed?"
+        )
+        engine = PipelineEngine(
+            [step], manager, FakeAcquisition(), events, {0: 0}, tick_s=0.001
+        )
+        engine.start()
+        self.assertTrue(_wait_for_confirmation(events, "Proceed?"))
+
+        engine.pause()
+        engine.confirm_pending()
+        time.sleep(0.02)
+        self.assertNotIn(("set", 0, 5.0), manager.calls)
+
+        engine.resume()
+        engine.join(timeout=1.0)
+        self.assertIn(("set", 0, 5.0), manager.calls)
+
+    def test_confirmation_trigger_needs_exactly_one_operator_answer(self):
+        manager = FakeChannelManager()
+        events: Queue[PipelineEvent] = Queue()
+        step = PipelineStep(
+            "operator check",
+            {},
+            ConfirmationTrigger("Check the mapping"),
+            confirm_message="Check the mapping",
+            on_complete="zero",
+        )
+        engine = PipelineEngine(
+            [step], manager, FakeAcquisition(), events, {0: 0}, tick_s=0.001
+        )
+
+        engine.start()
+        self.assertTrue(_wait_for_confirmation(events, "Check the mapping"))
+        engine.confirm_pending()
+        engine.join(timeout=1.0)
+
+        self.assertFalse(engine.is_alive())
+        self.assertEqual(engine.state, PipelineState.COMPLETED)
+        self.assertEqual(step.status, StepStatus.COMPLETED)
         self.assertEqual(manager.calls[-1], ("release_all",))
 
     def test_pressure_step_applies_and_zeros_pressure(self):

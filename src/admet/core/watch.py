@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import sys
+import textwrap
 import time
 from typing import Any, TextIO
 
@@ -305,8 +306,8 @@ def _plans(observation: dict[str, Any], paint: _Paint, now: float | None) -> lis
         return [*lines, paint("  none", DIM)]
     lines.append(
         paint(
-            f"  {'PLAN ID':<22}{'OPERATION':<24}{'STATE':<11}{'AGE':>7}"
-            f"{'STEPS':>7}{'DURATION':>11}{'LIMIT':>9}  DIGEST",
+            f"  {'PLAN ID':<16}{'OPERATION':<22}{'STATE':<10}{'AGE':>9}"
+            f"{'STEPS':>6}{'EST. DURATION':>13}",
             DIM,
         )
     )
@@ -315,47 +316,121 @@ def _plans(observation: dict[str, Any], paint: _Paint, now: float | None) -> lis
     selected = selected or plans[-1]
     for plan in plans:
         age = _iso_age(plan.get("created_at"), now)
+        age_text = _elapsed(age) if age is not None else "—"
         limits = ((plan.get("armed_safety_limits") or {}).get("pressure_mbar") or {})
-        limit = next(iter(limits.values()), None)
+        duration = plan.get("expected_duration_s")
+        duration_text = f"{_number(duration)}s" if duration is not None else "open-ended"
         lines.append(
-            f"  {str(plan.get('plan_id') or ''):<22.22}{str(plan.get('operation_id') or ''):<24.24}"
-            f"{str(plan.get('state') or ''):<11}{_number(age):>6}s"
-            f"{_number(plan.get('step_count'), '.0f'):>7}"
-            f"{_number(plan.get('expected_duration_s')):>10}s"
-            f"{_number(limit):>9}  {str(plan.get('digest') or '')[:12]}"
+            f"  {str(plan.get('plan_id') or ''):<16.16}{str(plan.get('operation_id') or ''):<22.22}"
+            f"{str(plan.get('state') or ''):<10}{age_text:>9}"
+            f"{_number(plan.get('step_count'), '.0f'):>6}"
+            f"{duration_text:>13}"
         )
+        limit_text = ", ".join(
+            f"ch{channel}={_number(value)} mbar" for channel, value in limits.items()
+        ) or "UNARMED"
+        lines.extend(_fold_plan_note("PRESSURE LIMIT: ", limit_text, paint, RED if not limits else DIM))
+        lines.extend(_fold_plan_note("DIGEST: ", str(plan.get("digest") or "")[:12], paint, DIM))
         for warning in plan.get("warnings") or []:
-            lines.append(f"    {paint('warning: ' + str(warning), YELLOW)}")
+            lines.extend(_fold_plan_note("WARNING: ", str(warning), paint, YELLOW))
+        for assumption in plan.get("assumptions") or []:
+            lines.extend(_fold_plan_note("NOTE: ", str(assumption), paint, DIM))
         if plan.get("unmet_guards"):
-            lines.append(f"    unmet: {', '.join(plan['unmet_guards'])}")
+            lines.extend(
+                _fold_plan_note("UNMET: ", ", ".join(plan["unmet_guards"]), paint, YELLOW)
+            )
     lines.append(paint(f"  STEPS · {selected.get('plan_id')}", DIM))
     lines.append(
-        paint(f"  {'#':<4}{'NAME':<28}{'SETPOINTS':<30}{'TRIGGER':<22}{'END':<8}", DIM)
+        paint(
+            f"  {'#':<3}{'FLOW TARGET':<16}{'PRESSURE TARGET':<16}{'TRIGGER':<10}"
+            f"{'CONDITION':<13}{'EST.':<8}{'END':<8}",
+            DIM,
+        )
     )
     for step in selected.get("steps") or []:
-        setpoints = _plan_setpoints(step)
+        flow = _plan_flow_setpoints(step)
+        pressure = _plan_pressure_setpoints(step)
         trigger = str(step.get("trigger_type") or "")
         timeout = step.get("timeout_s")
-        if timeout is not None:
-            trigger += f" ≤{_number(timeout)}s"
-        lines.append(
-            f"  {str(step.get('number') or ''):<4}{str(step.get('name') or ''):<28.28}"
-            f"{setpoints:<30.30}{trigger:<22.22}{str(step.get('on_complete') or ''):<8}"
-        )
+        condition = _plan_trigger_condition(step)
+        if timeout is not None and "timeout" not in condition:
+            condition += f" ≤{_number(timeout)}s"
+        expected = step.get("expected_duration_s")
+        expected_text = f"{_number(expected)}s" if expected is not None else "—"
+        flow_lines = _table_cell_lines(flow, 16)
+        pressure_lines = _table_cell_lines(pressure, 16)
+        for row in range(max(len(flow_lines), len(pressure_lines))):
+            first = row == 0
+            lines.append(
+                f"  {(str(step.get('number') or '') if first else ''):<3}"
+                f"{(flow_lines[row] if row < len(flow_lines) else ''):<16}"
+                f"{(pressure_lines[row] if row < len(pressure_lines) else ''):<16}"
+                f"{(trigger if first else ''):<10.10}{(condition if first else ''):<13.13}"
+                f"{(expected_text if first else ''):<8.8}"
+                f"{(str(step.get('on_complete') or '') if first else ''):<8.8}"
+            )
         if step.get("confirmation"):
-            lines.append(f"      {paint('CONFIRM: ' + str(step['confirmation']), BOLD, YELLOW)}")
+            lines.extend(
+                _fold_plan_note("CONFIRM: ", str(step["confirmation"]), paint, BOLD, YELLOW)
+            )
     return lines
 
 
-def _plan_setpoints(step: dict[str, Any]) -> str:
-    flow = ", ".join(
+def _fold_plan_note(prefix: str, value: str, paint: _Paint, *codes: str) -> list[str]:
+    indent = "    "
+    continuation = " " * len(prefix)
+    wrapped = textwrap.wrap(
+        prefix + value,
+        width=len(RULE) - len(indent),
+        subsequent_indent=continuation,
+        break_long_words=True,
+        break_on_hyphens=False,
+    ) or [prefix]
+    return [indent + paint(line, *codes) for line in wrapped]
+
+
+def _plan_flow_setpoints(step: dict[str, Any]) -> str:
+    return ", ".join(
         f"ch{k}={_number(v)}uL/m" for k, v in (step.get("flow_setpoints_ul_min") or {}).items()
-    )
-    pressure = ", ".join(
+    ) or "—"
+
+
+def _plan_pressure_setpoints(step: dict[str, Any]) -> str:
+    return ", ".join(
         f"ch{k}={_number(v)}mbar"
         for k, v in (step.get("pressure_setpoints_mbar") or {}).items()
-    )
-    return ", ".join(value for value in (flow, pressure) if value) or "—"
+    ) or "—"
+
+
+def _plan_trigger_condition(step: dict[str, Any]) -> str:
+    trigger = str(step.get("trigger_type") or "")
+    params = step.get("trigger_params") or {}
+    if trigger == "volume":
+        return f"{_number(params.get('target_volume_ul'))} uL"
+    if trigger == "time":
+        return f"{_number(params.get('duration_s'))} s"
+    if trigger == "confirmation":
+        return "operator"
+    if trigger == "stability":
+        tolerance = _number(params.get("tolerance_ul_min"))
+        window = _number(params.get("window_s"))
+        return f"±{tolerance}, {window}s"
+    if trigger == "threshold":
+        return f"target {_number(params.get('target'))}"
+    if trigger == "condition":
+        minimum = _number(params.get("min_value"))
+        maximum = _number(params.get("max_value"))
+        return f"{minimum}..{maximum}"
+    return "—"
+
+
+def _table_cell_lines(value: str, width: int) -> list[str]:
+    return textwrap.wrap(
+        value,
+        width=width,
+        break_long_words=False,
+        break_on_hyphens=False,
+    ) or ["—"]
 
 
 def _iso_age(created_at: Any, now: float | None) -> float | None:
@@ -385,10 +460,19 @@ def _protocol(observation: dict[str, Any], paint: _Paint) -> list[str]:
         f"{paint('outcome ' + str(protocol.get('outcome') or '—'), DIM)}",
     ]
     if protocol.get("confirmation_message"):
-        lines.append(
-            f"  {'waiting':<11}"
-            + paint(str(protocol["confirmation_message"]), BOLD, YELLOW)
-            + paint("  (answer with confirm_protocol over MCP)", DIM)
+        lines.extend(
+            _fold_plan_note(
+                "WAITING: ", str(protocol["confirmation_message"]), paint, BOLD, YELLOW
+            )
+        )
+        lines.extend(
+            _fold_plan_note(
+                "MCP: ",
+                "confirm_protocol=proceed · skip_protocol=zero+skip · "
+                "pause_protocol=zero+pause · stop_protocol=zero+abort",
+                paint,
+                DIM,
+            )
         )
     if protocol.get("error"):
         lines.append(f"  {'error':<11}" + paint(str(protocol["error"]), BOLD, RED))

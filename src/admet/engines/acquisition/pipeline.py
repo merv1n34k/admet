@@ -21,7 +21,7 @@ from queue import Queue
 from typing import Any, Protocol
 
 from admet.core.clock import now_iso
-from admet.engines.acquisition.triggers import Trigger, create_trigger
+from admet.engines.acquisition.triggers import ConfirmationTrigger, Trigger, create_trigger
 
 log = logging.getLogger(__name__)
 
@@ -226,12 +226,14 @@ class PipelineEngine(threading.Thread):
 
     def stop(self) -> None:
         log.info("Pipeline stop requested")
+        self._channel_manager.pipeline_zero_all()
         self._state = PipelineState.STOPPING
         self._stop_event.set()
         self._pause_event.set()
         self._confirm_event.set()
 
     def skip_step(self) -> None:
+        self._channel_manager.pipeline_zero_all()
         self._skip_event.set()
         self._confirm_event.set()
         log.info("Skip requested for step %d", self._current_step_idx)
@@ -276,6 +278,27 @@ class PipelineEngine(threading.Thread):
     def _execute_step(self, step: PipelineStep) -> None:
         step.status = StepStatus.RUNNING
 
+        if isinstance(step.trigger, ConfirmationTrigger):
+            self._confirm_event.clear()
+            message = step.confirm_message or step.trigger.message
+            self._emit_event(confirmation_message=message)
+            while not self._stop_event.is_set() and not self._skip_event.is_set():
+                if self._confirm_event.wait(timeout=self._tick_s):
+                    break
+            if self._stop_event.is_set():
+                step.status = StepStatus.CANCELLED
+                self._emit_event(outcome=StepOutcome.CANCELLED)
+                return
+            if self._skip_event.is_set():
+                self._skip_event.clear()
+                step.status = StepStatus.SKIPPED
+                self._emit_event(outcome=StepOutcome.SKIPPED)
+                return
+            step.status = StepStatus.COMPLETED
+            self._apply_on_complete(step)
+            self._emit_event(outcome=StepOutcome.COMPLETED, progress=1.0)
+            return
+
         if step.confirm_message:
             self._confirm_event.clear()
             self._emit_event(confirmation_message=step.confirm_message)
@@ -290,6 +313,12 @@ class PipelineEngine(threading.Thread):
                 self._skip_event.clear()
                 step.status = StepStatus.SKIPPED
                 self._emit_event(outcome=StepOutcome.SKIPPED)
+                return
+
+            self._pause_event.wait()
+            if self._stop_event.is_set():
+                step.status = StepStatus.CANCELLED
+                self._emit_event(outcome=StepOutcome.CANCELLED)
                 return
 
         self._step_start_volumes.clear()

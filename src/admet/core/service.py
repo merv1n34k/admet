@@ -99,8 +99,16 @@ def _planned_step(index: int, step: Any) -> dict[str, Any]:
     params = deepcopy(step.trigger_params)
     timeout = params.get("timeout_s")
     expected = params.get("duration_s")
+    if expected is None and step.trigger_type == "confirmation":
+        expected = 0.0
     if expected is None and step.trigger_type == "stability":
         expected = timeout
+    if expected is None and step.trigger_type == "volume":
+        sensor_index = int(params["sensor_index"])
+        requested_flow = step.sensor_setpoints.get(sensor_index)
+        target_volume = params.get("target_volume_ul")
+        if requested_flow is not None and requested_flow > 0 and target_volume is not None:
+            expected = float(target_volume) / float(requested_flow) * 60.0
     return {
         "number": index,
         "name": step.name,
@@ -419,10 +427,6 @@ class Admet:
             "rig_fingerprint": self._rig_fingerprint(),
             "error": "",
         }
-        for previous in self._protocol_plans.values():
-            if previous["operation_id"] == operation_id and previous["state"] == "planned":
-                previous["state"] = "replaced"
-                previous["replaced_at"] = plan["created_at"]
         self._protocol_plans[plan_id] = deepcopy(plan)
         return deepcopy(plan)
 

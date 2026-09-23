@@ -152,8 +152,52 @@ class PlanningBoundaryTests(unittest.TestCase):
         plan = json.loads(text)
         self.assertEqual(plan["state"], "planned")
         self.assertEqual(plan["steps"][0]["flow_setpoints_ul_min"], {"0": 1.0})
+
+    def test_volume_step_reports_nominal_duration_from_its_requested_flow(self):
+        plan = self.server.admet.plan_protocol("run_steps", {
+            "steps": [{
+                "name": "meter oil",
+                "sensor_setpoints": {"0": 100.0},
+                "trigger_type": "volume",
+                "trigger_params": {"sensor_index": 0, "target_volume_ul": 50.0},
+                "on_complete": "zero",
+            }],
+        })
+
+        self.assertEqual(plan["steps"][0]["expected_duration_s"], 30.0)
+        self.assertEqual(plan["expected_duration_s"], 30.0)
         self.assertEqual(self.server.admet.state()["running"], False)
         self.assertFalse(self.server.admet.engine("acquisition").recording_active)
+
+    def test_confirmation_wait_is_excluded_from_calculated_active_duration(self):
+        plan = self.server.admet.plan_protocol("run_steps", {
+            "steps": [
+                {
+                    "name": "check mapping",
+                    "trigger_type": "confirmation",
+                    "trigger_params": {"message": "Proceed?"},
+                    "on_complete": "zero",
+                },
+                {
+                    "name": "meter oil",
+                    "sensor_setpoints": {"0": 100.0},
+                    "trigger_type": "volume",
+                    "trigger_params": {"sensor_index": 0, "target_volume_ul": 50.0},
+                    "on_complete": "zero",
+                },
+            ],
+        })
+
+        self.assertEqual(plan["steps"][0]["expected_duration_s"], 0.0)
+        self.assertEqual(plan["expected_duration_s"], 30.0)
+
+    def test_multiple_plans_for_the_same_operation_remain_available(self):
+        first = self.server.admet.plan_protocol("run_steps", self.settings())
+        second = self.server.admet.plan_protocol("run_steps", self.settings())
+
+        plans = self.server.admet.planned_protocols()["plans"]
+        self.assertEqual([plan["plan_id"] for plan in plans], [first["plan_id"], second["plan_id"]])
+        self.assertEqual([plan["state"] for plan in plans], ["planned", "planned"])
 
     def test_execute_accepts_only_the_plan_id_and_cannot_run_twice(self):
         plan = json.loads(_call(self.server, "plan_protocol", {
