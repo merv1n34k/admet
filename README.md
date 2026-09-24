@@ -142,11 +142,13 @@ The human/AI workflow is deliberately two-phase:
 3. The AI explains every ordered step, safety limit, confirmation, and abort condition.
 4. The AI stops and waits for explicit human approval.
 5. The human reviews the read-only TUI and confirms the physical setup.
-6. Only after approval does the AI call `execute_protocol_plan` with the `plan_id` alone.
-7. `execute_protocol_plan` returns the protocol-start yield. The AI then calls
-   `wait_protocol_event`, passing each returned `next_sequence` back as
-   `after_sequence`, until the protocol completes or fails. `observe` remains
-   available for complete telemetry between milestones.
+6. Only after approval does the AI call `control_protocol` with action `execute`
+   and the immutable `plan_id`.
+7. Every subsequent interaction uses that same tool. An action such as `confirm`,
+   `skip`, `pause`, `resume`, or `abort` is applied and the call waits for the next
+   meaningful protocol milestone or its bounded timeout. `wait` advances without
+   applying an action. `observe` remains available for complete telemetry between
+   milestones.
 8. The physical emergency stop remains authoritative.
 
 Planning performs no hardware action: it starts no acquisition, recording,
@@ -166,17 +168,17 @@ Call that object as the arguments to `plan_protocol`, review the returned
 `unmet_guards`, and `digest`, then execute with:
 
 ```json
-{"plan_id": "plan_…"}
+{"action": "execute", "plan_id": "plan_…", "timeout_s": 10}
 ```
 
 Execution returns a `yield` with `reason: "protocol_started"`. Continue with a
 bounded long-poll:
 
 ```json
-{"after_sequence": 17, "timeout_s": 10}
+{"action": "wait", "after_sequence": 17, "timeout_s": 10}
 ```
 
-Call those arguments with `wait_protocol_event`. It returns for a protocol
+Call those arguments with `control_protocol`. It returns for a protocol
 start, confirmation gate, step completion/timeout/skip/cancellation/failure,
 protocol completion/cancellation/failure, or the requested timeout. Progress
 samples do not masquerade as milestones. Always reuse `next_sequence`; cursors
@@ -185,7 +187,8 @@ remain monotonic across protocols and reading does not remove events.
 The live `watch` TUI adapts its rules and wrapped blocks to the terminal width.
 Use the arrow keys or `j`/`k` to scroll one line, Page Up/Page Down to scroll a
 page, and Home/End to jump to either edge; the control footer remains pinned.
-Its lifecycle keys are `q` to quit only the TUI, uppercase `E` to send the owner
+Press `L` to open the complete event log; `q` or Escape returns to the dashboard.
+On the dashboard, `q` or Escape quits only the TUI. Uppercase `E` sends the owner
 an immediate software emergency-stop signal, and uppercase `X` to ask the owner
 to zero the rig, release hardware, and shut down gracefully. Signals are
 refused when the published heartbeat is stale. The physical emergency stop
@@ -239,7 +242,9 @@ the point is to stop short of it rather than go looking for it.
 
 Nothing flows until the operator answers a question quoting what the
 *instrument* reports about channel 0, not what the configuration claims. Answer
-with `confirm_protocol`.
+with `control_protocol(action="confirm", after_sequence=<gate sequence>)`. The call
+does not return immediately after applying the confirmation: it waits for the next
+step or protocol milestone, up to its bounded `timeout_s`.
 
 It returns as soon as it starts; poll `observe` while it runs. The summary lands
 in the project under `records/checks/` with per-target mean/std/min/max flow and

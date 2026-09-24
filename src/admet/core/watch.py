@@ -12,6 +12,7 @@ against without a terminal.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -533,7 +534,7 @@ def _footer(paint: _Paint, *, interactive: bool = False, notice: str = "") -> st
         return paint(f"  {notice}", BOLD, YELLOW)
     if interactive:
         return paint(
-            "  [q] QUIT  [↑↓/Pg] SCROLL  [E] E-STOP  [X] KILL  · PHYSICAL E-STOP WINS",
+            "  [q/Esc] QUIT  [L] LOGS  [↑↓/Pg] SCROLL  [E] E-STOP  [X] KILL",
             DIM,
         )
     return paint(
@@ -559,6 +560,26 @@ def _frame(
         interactive=interactive,
         notice=notice,
     )
+
+
+def _log_frame(directory: str, colour: bool, *, width: int) -> str:
+    paint = _Paint(colour)
+    lines = [paint("ADMET · FULL EVENT LOG", BOLD), "─" * max(1, width)]
+    events = read_events(directory, limit=0)
+    if not events:
+        lines.append(paint("  no events yet", DIM))
+    for entry in events:
+        at = str(entry.get("at") or "")
+        prefix = f"  {entry.get('seq', '?'):>5}  {at}  {entry.get('type') or 'event'}"
+        detail = entry.get("detail")
+        rendered = json.dumps(detail, sort_keys=True, ensure_ascii=False, default=str)
+        lines.append(prefix)
+        lines.extend(f"    {line}" for line in textwrap.wrap(rendered, width=max(10, width - 4)))
+    lines.extend([
+        "─" * max(1, width),
+        paint("  [q/Esc] BACK  [↑↓/Pg] SCROLL", DIM),
+    ])
+    return "\n".join(lines)
 
 
 def _fit_frame(frame: str, columns: int, rows: int, *, offset: int = 0) -> str:
@@ -618,17 +639,12 @@ def watch(
 
     notice = ""
     scroll_offset = 0
+    view = "main"
     with _watch_keys(out) as pressed:
         out.write("\x1b[?1049h\x1b[?25l")
         try:
             size = shutil.get_terminal_size(fallback=(80, 24))
-            raw_frame = _frame(
-                directory,
-                colour,
-                width=size.columns,
-                interactive=True,
-                notice=notice,
-            )
+            raw_frame = _frame(directory, colour, width=size.columns, interactive=True, notice=notice)
             next_refresh = time.monotonic() + interval_s
             frame = _fit_frame(raw_frame, size.columns, size.lines, offset=scroll_offset)
             out.write("\x1b[H" + frame.replace("\n", "\x1b[K\n") + "\x1b[J")
@@ -642,13 +658,23 @@ def watch(
                     # remaining bytes immediately instead of waiting for the
                     # next telemetry refresh.
                     continue
-                if key in {"q", "Q"}:
-                    break
-                refresh = now >= next_refresh
-                if key == "E":
+                if key in {"q", "Q", "escape"}:
+                    if view == "logs":
+                        view = "main"
+                        scroll_offset = 0
+                        refresh = True
+                    else:
+                        break
+                else:
+                    refresh = now >= next_refresh
+                if key in {"l", "L"} and view == "main":
+                    view = "logs"
+                    scroll_offset = 0
+                    refresh = True
+                if key == "E" and view == "main":
                     notice = _signal_owner(directory, signal.SIGUSR1, "emergency stop requested")
                     refresh = True
-                elif key == "X":
+                elif key == "X" and view == "main":
                     notice = _signal_owner(directory, signal.SIGTERM, "server shutdown requested")
                     refresh = True
                 latest_size = shutil.get_terminal_size(fallback=(80, 24))
@@ -656,12 +682,13 @@ def watch(
                     size = latest_size
                     refresh = True
                 if refresh:
-                    raw_frame = _frame(
-                        directory,
-                        colour,
-                        width=size.columns,
-                        interactive=True,
-                        notice=notice,
+                    raw_frame = (
+                        _log_frame(directory, colour, width=size.columns)
+                        if view == "logs"
+                        else _frame(
+                            directory, colour, width=size.columns,
+                            interactive=True, notice=notice,
+                        )
                     )
                     next_refresh = now + interval_s
                 body_rows = max(0, len(raw_frame.splitlines()) - 1)
@@ -731,6 +758,7 @@ class _watch_keys:
         self._settings: Any = None
         self._fd: int | None = None
         self._buffer = b""
+        self._escape_started: float | None = None
 
     def __enter__(self):
         try:
@@ -759,12 +787,22 @@ class _watch_keys:
         buffered = self._pop_buffered_key()
         if buffered is not None:
             return buffered
-        ready, _, _ = select.select([sys.stdin], [], [], max(0.0, timeout_s))
+        wait_s = max(0.0, timeout_s)
+        if self._buffer == b"\x1b" and self._escape_started is not None:
+            wait_s = min(wait_s, max(0.0, 0.03 - (time.monotonic() - self._escape_started)))
+        ready, _, _ = select.select([sys.stdin], [], [], wait_s)
         if not ready:
+            if self._buffer == b"\x1b" and self._escape_started is not None:
+                if time.monotonic() - self._escape_started >= 0.03:
+                    self._buffer = b""
+                    self._escape_started = None
+                    return "escape"
             return None
         if self._fd is None:
             return None
         self._buffer += os.read(self._fd, 16)
+        if self._buffer == b"\x1b" and self._escape_started is None:
+            self._escape_started = time.monotonic()
         return self._pop_buffered_key()
 
     def _pop_buffered_key(self) -> str | None:
@@ -779,12 +817,14 @@ class _watch_keys:
         for sequence, name in keys.items():
             if self._buffer.startswith(sequence):
                 self._buffer = self._buffer[len(sequence) :]
+                self._escape_started = None
                 return name
         if self._buffer.startswith(b"\x1b") and any(
             sequence.startswith(self._buffer) for sequence in keys
         ):
             return None
         value, self._buffer = self._buffer[:1], self._buffer[1:]
+        self._escape_started = None
         return value.decode(errors="ignore") if value else None
 
     def __exit__(self, *_exc: Any) -> None:

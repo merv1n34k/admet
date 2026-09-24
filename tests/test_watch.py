@@ -21,6 +21,7 @@ from admet.core.watch import (
     RULE,
     STALE_AFTER_S,
     _fit_frame,
+    _log_frame,
     _signal_owner,
     _watch_keys,
     render,
@@ -105,11 +106,11 @@ class SafetyOfTheMonitorTests(unittest.TestCase):
     def test_interactive_footer_offers_exact_lifecycle_controls(self):
         frame = render(_state(), interactive=True)
 
-        self.assertIn("[q] QUIT", frame)
+        self.assertIn("[q/Esc] QUIT", frame)
+        self.assertIn("[L] LOGS", frame)
         self.assertIn("[↑↓/Pg] SCROLL", frame)
         self.assertIn("[E] E-STOP", frame)
         self.assertIn("[X] KILL", frame)
-        self.assertIn("PHYSICAL E-STOP WINS", frame)
 
     def test_emergency_and_kill_signal_only_a_fresh_published_owner(self):
         from datetime import datetime
@@ -505,6 +506,36 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(first, "down")
         self.assertEqual(second, "q")
         self.assertEqual(selected.call_count, 1)
+
+    def test_escape_is_returned_as_a_key_after_arrow_grace_period(self):
+        keys = _watch_keys(io.StringIO())
+        keys._fd = 10
+        with (
+            unittest.mock.patch("select.select", side_effect=[([object()], [], []), ([], [], [])]),
+            unittest.mock.patch("admet.core.watch.os.read", return_value=b"\x1b"),
+            unittest.mock.patch(
+                "admet.core.watch.time.monotonic", side_effect=[1.0, 1.04, 1.04]
+            ),
+        ):
+            first = keys._pressed(0.5)
+            second = keys._pressed(0.5)
+
+        self.assertIsNone(first)
+        self.assertEqual(second, "escape")
+
+    def test_full_log_view_renders_all_events_and_back_controls(self):
+        events = [
+            {"seq": index, "at": "2026-09-21T12:00:00+03:00", "type": "protocol",
+             "detail": {"outcome": "running", "step": index}}
+            for index in range(30)
+        ]
+        with unittest.mock.patch("admet.core.watch.read_events", return_value=events) as read:
+            frame = _log_frame("/runtime", False, width=80)
+
+        read.assert_called_once_with("/runtime", limit=0)
+        self.assertIn("FULL EVENT LOG", frame)
+        self.assertIn("   29", frame)
+        self.assertIn("[q/Esc] BACK", frame)
 
     def test_clipping_counts_visible_width_not_colour_sequences(self):
         fitted = _fit_frame("\x1b[31mabcdefghijk\x1b[0m", columns=5, rows=1)
