@@ -183,10 +183,12 @@ samples do not masquerade as milestones. Always reuse `next_sequence`; cursors
 remain monotonic across protocols and reading does not remove events.
 
 The live `watch` TUI adapts its rules and wrapped blocks to the terminal width.
-Its lifecycle keys are `q` to quit only the TUI, uppercase `E` to send the
-owner an immediate software emergency-stop signal, and uppercase `X` to ask
-the owner to zero the rig, release hardware, and shut down gracefully. Signals
-are refused when the published heartbeat is stale. The physical emergency stop
+Use the arrow keys or `j`/`k` to scroll one line, Page Up/Page Down to scroll a
+page, and Home/End to jump to either edge; the control footer remains pinned.
+Its lifecycle keys are `q` to quit only the TUI, uppercase `E` to send the owner
+an immediate software emergency-stop signal, and uppercase `X` to ask the owner
+to zero the rig, release hardware, and shut down gracefully. Signals are
+refused when the published heartbeat is stale. The physical emergency stop
 remains authoritative.
 
 **`observe`** is the one read. Unguarded, no arguments, and it takes nothing

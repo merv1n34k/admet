@@ -17,7 +17,15 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from admet.core.watch import RULE, STALE_AFTER_S, _fit_frame, _signal_owner, render, watch
+from admet.core.watch import (
+    RULE,
+    STALE_AFTER_S,
+    _fit_frame,
+    _signal_owner,
+    _watch_keys,
+    render,
+    watch,
+)
 
 
 def _state(**overrides):
@@ -97,10 +105,11 @@ class SafetyOfTheMonitorTests(unittest.TestCase):
     def test_interactive_footer_offers_exact_lifecycle_controls(self):
         frame = render(_state(), interactive=True)
 
-        self.assertIn("[q] QUIT TUI", frame)
-        self.assertIn("[E] EMERGENCY STOP", frame)
-        self.assertIn("[X] KILL SERVER", frame)
-        self.assertIn("physical E-stop authoritative", frame)
+        self.assertIn("[q] QUIT", frame)
+        self.assertIn("[↑↓/Pg] SCROLL", frame)
+        self.assertIn("[E] E-STOP", frame)
+        self.assertIn("[X] KILL", frame)
+        self.assertIn("PHYSICAL E-STOP WINS", frame)
 
     def test_emergency_and_kill_signal_only_a_fresh_published_owner(self):
         from datetime import datetime
@@ -453,6 +462,26 @@ class LayoutTests(unittest.TestCase):
         frame = render(_state(), width=120)
 
         self.assertIn("─" * 120, frame)
+
+    def test_vertical_offset_scrolls_the_body_but_pins_the_footer(self):
+        frame = "\n".join([*(f"body {index}" for index in range(8)), "controls"])
+
+        fitted = _fit_frame(frame, columns=20, rows=4, offset=3)
+
+        self.assertEqual(fitted.splitlines(), ["body 3", "body 4", "body 5", "controls"])
+
+    def test_arrow_sequences_are_buffered_even_when_the_terminal_splits_them(self):
+        keys = _watch_keys(io.StringIO())
+        keys._fd = 10
+        with (
+            unittest.mock.patch("select.select", return_value=([object()], [], [])),
+            unittest.mock.patch("admet.core.watch.os.read", side_effect=[b"\x1b", b"[B"]),
+        ):
+            first = keys._pressed()
+            second = keys._pressed()
+
+        self.assertIsNone(first)
+        self.assertEqual(second, "down")
 
     def test_clipping_counts_visible_width_not_colour_sequences(self):
         fitted = _fit_frame("\x1b[31mabcdefghijk\x1b[0m", columns=5, rows=1)

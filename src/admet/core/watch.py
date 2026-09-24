@@ -533,7 +533,7 @@ def _footer(paint: _Paint, *, interactive: bool = False, notice: str = "") -> st
         return paint(f"  {notice}", BOLD, YELLOW)
     if interactive:
         return paint(
-            "  [q] QUIT TUI   [E] EMERGENCY STOP   [X] KILL SERVER   physical E-stop authoritative",
+            "  [q] QUIT  [↑↓/Pg] SCROLL  [E] E-STOP  [X] KILL  · PHYSICAL E-STOP WINS",
             DIM,
         )
     return paint(
@@ -561,16 +561,21 @@ def _frame(
     )
 
 
-def _fit_frame(frame: str, columns: int, rows: int) -> str:
-    """Keep a live frame inside the terminal so redraws cannot scroll it."""
+def _fit_frame(frame: str, columns: int, rows: int, *, offset: int = 0) -> str:
+    """Draw a body viewport and keep its controls pinned on the last row."""
     available_rows = max(1, rows)
     source = frame.splitlines()
-    if len(source) <= available_rows:
-        lines = source
+    if not source:
+        lines = []
     elif available_rows == 1:
         lines = [source[-1]]
+    elif len(source) <= available_rows:
+        lines = source
     else:
-        lines = [*source[: available_rows - 1], source[-1]]
+        body = source[:-1]
+        body_rows = available_rows - 1
+        start = min(max(0, offset), max(0, len(body) - body_rows))
+        lines = [*body[start : start + body_rows], source[-1]]
     return "\n".join(_clip_ansi(line, max(1, columns)) for line in lines)
 
 
@@ -612,29 +617,47 @@ def watch(
         return 0
 
     notice = ""
+    scroll_offset = 0
     with _watch_keys(out) as pressed:
         out.write("\x1b[?1049h\x1b[?25l")
         try:
             next_refresh = time.monotonic()
             while True:
+                size = shutil.get_terminal_size(fallback=(80, 24))
+                raw_frame = _frame(
+                    directory,
+                    colour,
+                    width=size.columns,
+                    interactive=True,
+                    notice=notice,
+                )
+                body_rows = max(0, len(raw_frame.splitlines()) - 1)
+                viewport_rows = max(0, size.lines - 1)
+                max_scroll = max(0, body_rows - viewport_rows)
                 key = pressed()
                 if key in {"q", "Q"}:
                     break
+                if key in {"down", "j"}:
+                    scroll_offset = min(max_scroll, scroll_offset + 1)
+                elif key in {"up", "k"}:
+                    scroll_offset = max(0, scroll_offset - 1)
+                elif key == "page_down":
+                    scroll_offset = min(max_scroll, scroll_offset + max(1, viewport_rows - 1))
+                elif key == "page_up":
+                    scroll_offset = max(0, scroll_offset - max(1, viewport_rows - 1))
+                elif key == "home":
+                    scroll_offset = 0
+                elif key == "end":
+                    scroll_offset = max_scroll
                 if key == "E":
                     notice = _signal_owner(directory, signal.SIGUSR1, "emergency stop requested")
                 elif key == "X":
                     notice = _signal_owner(directory, signal.SIGTERM, "server shutdown requested")
-                size = shutil.get_terminal_size(fallback=(80, 24))
                 frame = _fit_frame(
-                    _frame(
-                        directory,
-                        colour,
-                        width=size.columns,
-                        interactive=True,
-                        notice=notice,
-                    ),
+                    raw_frame,
                     size.columns,
                     size.lines,
+                    offset=scroll_offset,
                 )
                 out.write("\x1b[H" + frame.replace("\n", "\x1b[K\n") + "\x1b[J")
                 out.flush()
@@ -683,6 +706,7 @@ class _watch_keys:
         self._out = out
         self._settings: Any = None
         self._fd: int | None = None
+        self._buffer = b""
 
     def __enter__(self):
         try:
@@ -708,7 +732,24 @@ class _watch_keys:
             return None
         if self._fd is None:
             return None
-        value = os.read(self._fd, 1)
+        keys = {
+            b"\x1b[A": "up",
+            b"\x1b[B": "down",
+            b"\x1b[5~": "page_up",
+            b"\x1b[6~": "page_down",
+            b"\x1b[H": "home",
+            b"\x1b[F": "end",
+        }
+        self._buffer += os.read(self._fd, 16)
+        for sequence, name in keys.items():
+            if self._buffer.startswith(sequence):
+                self._buffer = self._buffer[len(sequence) :]
+                return name
+        if self._buffer.startswith(b"\x1b") and any(
+            sequence.startswith(self._buffer) for sequence in keys
+        ):
+            return None
+        value, self._buffer = self._buffer[:1], self._buffer[1:]
         return value.decode(errors="ignore") if value else None
 
     def __exit__(self, *_exc: Any) -> None:
