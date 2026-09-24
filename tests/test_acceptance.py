@@ -185,7 +185,7 @@ class AcceptanceRun(unittest.TestCase):
         ))
 
         # 5. Execution accepts only the immutable plan id and returns while it runs.
-        started = self.call("execute_protocol_plan", plan_id=plan["plan_id"])
+        started = self.call("control_protocol", action="execute", plan_id=plan["plan_id"])
         self.assertTrue(started["validation_id"])
         self.assertTrue(started["fluidics_csv"])
 
@@ -197,7 +197,11 @@ class AcceptanceRun(unittest.TestCase):
         asked = self.call("observe")
         self.assertIn("physically the oil line", asked["protocol"]["confirmation_message"])
         self.assertEqual(asked["channels"][0]["mode"], "off")
-        self.call("confirm_protocol")
+        gate_sequence = asked["protocol"]["event_sequence"]
+        self.call(
+            "control_protocol", action="confirm",
+            after_sequence=gate_sequence, timeout_s=10.0,
+        )
 
         # 7. Polled through the same surface while it runs, without taking
         #    anything from anyone.
@@ -218,7 +222,9 @@ class AcceptanceRun(unittest.TestCase):
         self.assertEqual({c["mode"] for c in finished["channels"]}, {"off"})
         completed_plan = self.call("planned_protocols", plan_id=plan["plan_id"])["plans"][0]
         self.assertEqual(completed_plan["state"], "completed")
-        refused = self._call_error("execute_protocol_plan", plan_id=plan["plan_id"])
+        refused = self._call_error(
+            "control_protocol", action="execute", plan_id=plan["plan_id"]
+        )
         self.assertIn("completed", refused)
 
         summary_path = Path(finished["validation"]["artifacts"]["summary"])
@@ -242,7 +248,7 @@ class AcceptanceRun(unittest.TestCase):
         })
         self.call("cancel_protocol_plan", plan_id=cancelled["plan_id"])
         self.assertIn("cancelled", self._call_error(
-            "execute_protocol_plan", plan_id=cancelled["plan_id"]
+            "control_protocol", action="execute", plan_id=cancelled["plan_id"]
         ))
 
         # 10. The manifest lists what was produced, and nothing that was not.

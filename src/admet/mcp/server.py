@@ -30,7 +30,7 @@ import traceback
 from typing import Any, TextIO
 
 from admet.core.service import Admet
-from admet.mcp.tools import DESCRIBE_TOOL, PLAN_TOOLS, operation_tools
+from admet.mcp.tools import DESCRIBE_TOOL, MCP_PROTOCOL_CONTROLS, PLAN_TOOLS, operation_tools
 from admet.workflows.operations import operation as find_operation
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -91,20 +91,24 @@ class AdmetServer:
             )
         if name == "planned_protocols":
             return self.admet.planned_protocols(str(arguments.get("plan_id") or ""))
-        if name == "execute_protocol_plan":
-            return self.admet.execute_protocol_plan(str(arguments.get("plan_id") or ""))
-        if name == "wait_protocol_event":
-            return self.admet.wait_protocol_event(
-                after_sequence=int(arguments.get("after_sequence", 0) or 0),
+        if name == "control_protocol":
+            return self.admet.control_protocol(
+                action=str(arguments.get("action") or ""),
+                plan_id=str(arguments.get("plan_id") or ""),
+                after_sequence=arguments.get("after_sequence"),
                 timeout_s=float(arguments.get("timeout_s", 10.0) or 10.0),
             )
         if name == "cancel_protocol_plan":
             return self.admet.cancel_protocol_plan(str(arguments.get("plan_id") or ""))
+        if name in MCP_PROTOCOL_CONTROLS:
+            raise RuntimeError(
+                f"{name} is not callable over MCP; use control_protocol with an action"
+            )
         operation = find_operation(name)
         if operation.starts_protocol:
             raise RuntimeError(
                 f"{name} cannot start directly over MCP; use plan_protocol, review the plan, "
-                "then execute_protocol_plan with its plan_id"
+                "then control_protocol with action='execute' and its plan_id"
             )
         result = self.admet.do(name, self._simulated(name, arguments))
         if name == "set_channel_flow":

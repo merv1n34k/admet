@@ -45,10 +45,15 @@ class SurfaceTests(unittest.TestCase):
         from admet.workflows.operations import BY_ID
 
         planning = {
-            "plan_protocol", "planned_protocols", "execute_protocol_plan",
-            "cancel_protocol_plan", "wait_protocol_event",
+            "plan_protocol", "planned_protocols", "control_protocol",
+            "cancel_protocol_plan",
         }
-        self.assertEqual(self.names - {"describe"} - planning, set(BY_ID))
+        hidden_controls = {
+            "pause_protocol", "resume_protocol", "stop_protocol",
+            "confirm_protocol", "skip_protocol",
+        }
+        self.assertEqual(self.names - {"describe"} - planning, set(BY_ID) - hidden_controls)
+        self.assertFalse(self.names & hidden_controls)
 
     def test_a_tool_says_what_it_needs_first(self):
         tools = {tool["name"]: tool for tool in self.server.tools()}
@@ -84,10 +89,13 @@ class SurfaceTests(unittest.TestCase):
         self.assertEqual(lease["minimum"], 1.0)
         self.assertEqual(lease["maximum"], 60.0)
 
-    def test_protocol_wait_has_a_bounded_cursor_schema(self):
+    def test_protocol_control_has_actions_and_a_bounded_cursor_schema(self):
         tools = {tool["name"]: tool for tool in self.server.tools()}
-        schema = tools["wait_protocol_event"]["inputSchema"]
+        schema = tools["control_protocol"]["inputSchema"]
 
+        self.assertEqual(schema["required"], ["action"])
+        self.assertIn("confirm", schema["properties"]["action"]["enum"])
+        self.assertIn("execute", schema["properties"]["action"]["enum"])
         self.assertEqual(schema["properties"]["after_sequence"]["minimum"], 0)
         self.assertEqual(schema["properties"]["timeout_s"]["minimum"], 0.1)
         self.assertEqual(schema["properties"]["timeout_s"]["maximum"], 60.0)
@@ -119,7 +127,7 @@ class GuardTests(unittest.TestCase):
         text, is_error = _call(self.server, "run_priming", {"prime_oil_volume_ul": 2.0, "tick_s": 0.1})
 
         self.assertTrue(is_error, text)
-        self.assertIn("execute_protocol_plan", text)
+        self.assertIn("control_protocol", text)
         _call(self.server, "disconnect_fluidics")
 
     def test_a_setting_the_operation_does_not_have_is_refused(self):
@@ -212,7 +220,9 @@ class PlanningBoundaryTests(unittest.TestCase):
             "operation_id": "run_steps", "settings": self.settings(),
         })[0])
 
-        result, is_error = _call(self.server, "execute_protocol_plan", {"plan_id": plan["plan_id"]})
+        result, is_error = _call(self.server, "control_protocol", {
+            "action": "execute", "plan_id": plan["plan_id"],
+        })
         self.assertFalse(is_error, result)
         self.assertEqual(json.loads(result)["yield"]["reason"], "protocol_started")
         self.server.admet.wait_for_protocol(timeout_s=2.0, poll_s=0.01)
@@ -221,7 +231,7 @@ class PlanningBoundaryTests(unittest.TestCase):
             "completed",
         )
         refused, is_error = _call(
-            self.server, "execute_protocol_plan", {"plan_id": plan["plan_id"]}
+            self.server, "control_protocol", {"action": "execute", "plan_id": plan["plan_id"]}
         )
         self.assertTrue(is_error)
         self.assertIn("completed", refused)
@@ -245,22 +255,27 @@ class PlanningBoundaryTests(unittest.TestCase):
             ],
             "tick_s": 0.005,
         })
-        started = self.server.admet.execute_protocol_plan(plan["plan_id"])["yield"]
+        started = self.server.admet.control_protocol(
+            action="execute", plan_id=plan["plan_id"], timeout_s=1.0
+        )["yield"]
 
-        gate = self.server.admet.wait_protocol_event(
+        gate = self.server.admet.control_protocol(
+            action="wait",
             after_sequence=started["next_sequence"], timeout_s=1.0
-        )
+        )["yield"]
         self.assertEqual(gate["reason"], "confirmation_required")
-        self.server.admet.do("confirm_protocol")
-        first_step = self.server.admet.wait_protocol_event(
+        first_step = self.server.admet.control_protocol(
+            action="confirm",
             after_sequence=gate["next_sequence"], timeout_s=1.0
-        )
-        second_step = self.server.admet.wait_protocol_event(
+        )["yield"]
+        second_step = self.server.admet.control_protocol(
+            action="wait",
             after_sequence=first_step["next_sequence"], timeout_s=1.0
-        )
-        completed = self.server.admet.wait_protocol_event(
+        )["yield"]
+        completed = self.server.admet.control_protocol(
+            action="wait",
             after_sequence=second_step["next_sequence"], timeout_s=1.0
-        )
+        )["yield"]
 
         self.assertEqual(first_step["reason"], "step_completed")
         self.assertEqual(second_step["reason"], "step_completed")
@@ -273,11 +288,14 @@ class PlanningBoundaryTests(unittest.TestCase):
 
     def test_wait_times_out_without_returning_progress_as_a_milestone(self):
         plan = self.server.admet.plan_protocol("run_steps", self.settings(duration_s=2.0))
-        started = self.server.admet.execute_protocol_plan(plan["plan_id"])["yield"]
+        started = self.server.admet.control_protocol(
+            action="execute", plan_id=plan["plan_id"]
+        )["yield"]
 
-        result = self.server.admet.wait_protocol_event(
+        result = self.server.admet.control_protocol(
+            action="wait",
             after_sequence=started["next_sequence"], timeout_s=0.1
-        )
+        )["yield"]
 
         self.assertEqual(result["status"], "timeout")
         self.assertEqual(result["reason"], "timeout")
@@ -286,7 +304,7 @@ class PlanningBoundaryTests(unittest.TestCase):
 
     def test_wait_rejects_an_unbounded_timeout(self):
         with self.assertRaisesRegex(ValueError, "between 0.1 and 60"):
-            self.server.admet.wait_protocol_event(timeout_s=61.0)
+            self.server.admet.control_protocol(action="wait", timeout_s=61.0)
 
     def test_cancelled_and_stale_plans_are_refused(self):
         first = self.server.admet.plan_protocol("run_steps", self.settings())

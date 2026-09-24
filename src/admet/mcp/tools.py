@@ -111,32 +111,27 @@ PLAN_TOOLS = [
         },
     },
     {
-        "name": "execute_protocol_plan",
+        "name": "control_protocol",
         "description": (
-            "Execute exactly one previously validated plan by ID and return its start yield. "
-            "Continue with wait_protocol_event until the protocol ends."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"plan_id": {"type": "string", "description": "Immutable plan ID"}},
-            "required": ["plan_id"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "wait_protocol_event",
-        "description": (
-            "Wait for the next protocol milestone: start, confirmation gate, step outcome, "
-            "protocol outcome, or a bounded timeout. Reuse next_sequence as after_sequence."
+            "Apply one protocol action and wait for the next meaningful protocol milestone "
+            "or a bounded timeout. This is the only MCP control surface for a planned run."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["execute", "wait", "confirm", "skip", "pause", "resume", "abort"],
+                    "description": "Action to apply before waiting; execute also requires plan_id",
+                },
+                "plan_id": {
+                    "type": "string",
+                    "description": "Immutable plan ID; required only for execute",
+                },
                 "after_sequence": {
                     "type": "integer",
                     "minimum": 0,
-                    "default": 0,
-                    "description": "Last event sequence already consumed",
+                    "description": "Last consumed event; defaults to the event current before the action",
                 },
                 "timeout_s": {
                     "type": "number",
@@ -146,7 +141,7 @@ PLAN_TOOLS = [
                     "description": "Maximum seconds to wait",
                 },
             },
-            "required": [],
+            "required": ["action"],
             "additionalProperties": False,
         },
     },
@@ -162,12 +157,22 @@ PLAN_TOOLS = [
     },
 ]
 
+MCP_PROTOCOL_CONTROLS = {
+    "pause_protocol",
+    "resume_protocol",
+    "stop_protocol",
+    "confirm_protocol",
+    "skip_protocol",
+}
+
 
 def operation_tools() -> list[dict[str, Any]]:
     from admet.workflows.operations import OPERATIONS
 
     tools = []
     for op in OPERATIONS:
+        if op.id in MCP_PROTOCOL_CONTROLS:
+            continue
         needs = f" Needs: {', '.join(op.requires)}." if op.requires else ""
         belongs = f"[{op.target}]"
         waits = " Returns once started; the protocol runs on." if op.starts_protocol else ""

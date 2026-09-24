@@ -67,6 +67,8 @@ def _protocol_yield_reason(event: Any) -> str | None:
     state = str(event.state)
     if str(event.confirmation_message or "").strip():
         return "confirmation_required"
+    if state == "paused":
+        return "protocol_paused"
     if event.step_name and outcome != "running":
         return {
             "completed": "step_completed",
@@ -801,6 +803,52 @@ class Admet:
             "next_sequence": cursor,
             "event": _describe_event(event),
         }
+
+    def control_protocol(
+        self,
+        *,
+        action: str,
+        plan_id: str = "",
+        after_sequence: int | None = None,
+        timeout_s: float = 10.0,
+    ) -> dict[str, Any]:
+        """Apply one MCP protocol action and return at its next bounded yield."""
+        actions = {
+            "confirm": "confirm_protocol",
+            "skip": "skip_protocol",
+            "pause": "pause_protocol",
+            "resume": "resume_protocol",
+            "abort": "stop_protocol",
+        }
+        if action not in {"execute", "wait", *actions}:
+            raise ValueError(
+                "action must be execute, wait, confirm, skip, pause, resume, or abort"
+            )
+        if timeout_s < 0.1 or timeout_s > 60.0:
+            raise ValueError("timeout_s must be between 0.1 and 60 seconds")
+        engine = self._engines.get("acquisition")
+        latest = engine.latest_event() if engine is not None else None
+        cursor = latest.sequence if latest else 0
+        if after_sequence is not None:
+            cursor = int(after_sequence)
+            if cursor < 0:
+                raise ValueError("after_sequence must be at least 0")
+
+        if action == "execute":
+            if not plan_id:
+                raise ValueError("plan_id is required for execute")
+            started = self.execute_protocol_plan(plan_id)
+            return {
+                "action": action,
+                **{key: value for key, value in started.items() if key != "yield"},
+                "yield": started["yield"],
+            }
+        if plan_id:
+            raise ValueError("plan_id is accepted only for execute")
+        if action != "wait":
+            self.do(actions[action])
+        yielded = self.wait_protocol_event(after_sequence=cursor, timeout_s=timeout_s)
+        return {"action": action, "yield": yielded}
 
     def mark(self, name: str, value: Any) -> None:
         """Remember something the hardware does not report, such as corrections."""
