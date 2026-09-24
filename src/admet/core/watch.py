@@ -621,7 +621,18 @@ def watch(
     with _watch_keys(out) as pressed:
         out.write("\x1b[?1049h\x1b[?25l")
         try:
-            next_refresh = time.monotonic()
+            size = shutil.get_terminal_size(fallback=(80, 24))
+            raw_frame = _frame(
+                directory,
+                colour,
+                width=size.columns,
+                interactive=True,
+                notice=notice,
+            )
+            next_refresh = time.monotonic() + interval_s
+            frame = _fit_frame(raw_frame, size.columns, size.lines, offset=scroll_offset)
+            out.write("\x1b[H" + frame.replace("\n", "\x1b[K\n") + "\x1b[J")
+            out.flush()
             while True:
                 wait_s = max(0.0, next_refresh - time.monotonic())
                 key = pressed(wait_s)
@@ -633,18 +644,26 @@ def watch(
                     continue
                 if key in {"q", "Q"}:
                     break
+                refresh = now >= next_refresh
                 if key == "E":
                     notice = _signal_owner(directory, signal.SIGUSR1, "emergency stop requested")
+                    refresh = True
                 elif key == "X":
                     notice = _signal_owner(directory, signal.SIGTERM, "server shutdown requested")
-                size = shutil.get_terminal_size(fallback=(80, 24))
-                raw_frame = _frame(
-                    directory,
-                    colour,
-                    width=size.columns,
-                    interactive=True,
-                    notice=notice,
-                )
+                    refresh = True
+                latest_size = shutil.get_terminal_size(fallback=(80, 24))
+                if latest_size != size:
+                    size = latest_size
+                    refresh = True
+                if refresh:
+                    raw_frame = _frame(
+                        directory,
+                        colour,
+                        width=size.columns,
+                        interactive=True,
+                        notice=notice,
+                    )
+                    next_refresh = now + interval_s
                 body_rows = max(0, len(raw_frame.splitlines()) - 1)
                 viewport_rows = max(0, size.lines - 1)
                 max_scroll = max(0, body_rows - viewport_rows)
@@ -668,8 +687,6 @@ def watch(
                 )
                 out.write("\x1b[H" + frame.replace("\n", "\x1b[K\n") + "\x1b[J")
                 out.flush()
-                if now >= next_refresh:
-                    next_refresh = now + interval_s
         except KeyboardInterrupt:
             pass
         finally:
@@ -721,7 +738,7 @@ class _watch_keys:
             import tty
 
             if not sys.stdin.isatty():
-                return lambda: False
+                return self._wait_without_input
             self._fd = sys.stdin.fileno()
             self._termios = termios
             self._settings = termios.tcgetattr(self._fd)
@@ -731,14 +748,26 @@ class _watch_keys:
             return lambda: False
         return self._pressed
 
+    @staticmethod
+    def _wait_without_input(timeout_s: float = 0.0) -> None:
+        time.sleep(max(0.0, timeout_s))
+        return None
+
     def _pressed(self, timeout_s: float = 0.0) -> str | None:
         import select
 
+        buffered = self._pop_buffered_key()
+        if buffered is not None:
+            return buffered
         ready, _, _ = select.select([sys.stdin], [], [], max(0.0, timeout_s))
         if not ready:
             return None
         if self._fd is None:
             return None
+        self._buffer += os.read(self._fd, 16)
+        return self._pop_buffered_key()
+
+    def _pop_buffered_key(self) -> str | None:
         keys = {
             b"\x1b[A": "up",
             b"\x1b[B": "down",
@@ -747,7 +776,6 @@ class _watch_keys:
             b"\x1b[H": "home",
             b"\x1b[F": "end",
         }
-        self._buffer += os.read(self._fd, 16)
         for sequence, name in keys.items():
             if self._buffer.startswith(sequence):
                 self._buffer = self._buffer[len(sequence) :]

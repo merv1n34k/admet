@@ -492,6 +492,20 @@ class LayoutTests(unittest.TestCase):
         self.assertIsNone(result)
         selected.assert_called_once_with([unittest.mock.ANY], [], [], 0.125)
 
+    def test_buffered_key_after_an_arrow_is_returned_without_waiting_again(self):
+        keys = _watch_keys(io.StringIO())
+        keys._fd = 10
+        with (
+            unittest.mock.patch("select.select", return_value=([object()], [], [])) as selected,
+            unittest.mock.patch("admet.core.watch.os.read", return_value=b"\x1b[Bq"),
+        ):
+            first = keys._pressed(0.5)
+            second = keys._pressed(0.5)
+
+        self.assertEqual(first, "down")
+        self.assertEqual(second, "q")
+        self.assertEqual(selected.call_count, 1)
+
     def test_clipping_counts_visible_width_not_colour_sequences(self):
         fitted = _fit_frame("\x1b[31mabcdefghijk\x1b[0m", columns=5, rows=1)
 
