@@ -224,7 +224,7 @@ class PlanningBoundaryTests(unittest.TestCase):
             "action": "execute", "plan_id": plan["plan_id"],
         })
         self.assertFalse(is_error, result)
-        self.assertEqual(json.loads(result)["yield"]["reason"], "protocol_started")
+        self.assertEqual(json.loads(result)["yield"]["reason"], "step_completed")
         self.server.admet.wait_for_protocol(timeout_s=2.0, poll_s=0.01)
         self.assertEqual(
             self.server.admet.planned_protocols(plan["plan_id"])["plans"][0]["state"],
@@ -255,14 +255,10 @@ class PlanningBoundaryTests(unittest.TestCase):
             ],
             "tick_s": 0.005,
         })
-        started = self.server.admet.control_protocol(
+        gate = self.server.admet.control_protocol(
             action="execute", plan_id=plan["plan_id"], timeout_s=1.0
         )["yield"]
 
-        gate = self.server.admet.control_protocol(
-            action="wait",
-            after_sequence=started["next_sequence"], timeout_s=1.0
-        )["yield"]
         self.assertEqual(gate["reason"], "confirmation_required")
         first_step = self.server.admet.control_protocol(
             action="confirm",
@@ -280,26 +276,21 @@ class PlanningBoundaryTests(unittest.TestCase):
         self.assertEqual(first_step["reason"], "step_completed")
         self.assertEqual(second_step["reason"], "step_completed")
         self.assertEqual(completed["reason"], "protocol_completed")
-        cursors = [started, gate, first_step, second_step, completed]
+        cursors = [gate, first_step, second_step, completed]
         self.assertEqual(
             [item["next_sequence"] for item in cursors],
             sorted(item["next_sequence"] for item in cursors),
         )
 
-    def test_wait_times_out_without_returning_progress_as_a_milestone(self):
+    def test_execute_times_out_without_returning_progress_as_a_milestone(self):
         plan = self.server.admet.plan_protocol("run_steps", self.settings(duration_s=2.0))
-        started = self.server.admet.control_protocol(
-            action="execute", plan_id=plan["plan_id"]
-        )["yield"]
-
         result = self.server.admet.control_protocol(
-            action="wait",
-            after_sequence=started["next_sequence"], timeout_s=0.1
+            action="execute", plan_id=plan["plan_id"], timeout_s=0.1
         )["yield"]
 
         self.assertEqual(result["status"], "timeout")
         self.assertEqual(result["reason"], "timeout")
-        self.assertGreaterEqual(result["next_sequence"], started["next_sequence"])
+        self.assertGreater(result["next_sequence"], 0)
         self.server.admet.do("stop_protocol")
 
     def test_wait_rejects_an_unbounded_timeout(self):

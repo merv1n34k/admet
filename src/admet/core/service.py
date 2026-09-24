@@ -838,10 +838,15 @@ class Admet:
             if not plan_id:
                 raise ValueError("plan_id is required for execute")
             started = self.execute_protocol_plan(plan_id)
+            start_yield = started["yield"]
+            yielded = self.wait_protocol_event(
+                after_sequence=start_yield["next_sequence"],
+                timeout_s=timeout_s,
+            )
             return {
                 "action": action,
                 **{key: value for key, value in started.items() if key != "yield"},
-                "yield": started["yield"],
+                "yield": yielded,
             }
         if plan_id:
             raise ValueError("plan_id is accepted only for execute")

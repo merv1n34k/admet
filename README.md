@@ -171,15 +171,16 @@ Call that object as the arguments to `plan_protocol`, review the returned
 {"action": "execute", "plan_id": "plan_…", "timeout_s": 10}
 ```
 
-Execution returns a `yield` with `reason: "protocol_started"`. Continue with a
-bounded long-poll:
+Execution consumes its internal start event and remains blocked until the next
+external milestone, normally a confirmation gate, step outcome, protocol
+outcome, or bounded timeout. When a timeout is returned, continue with:
 
 ```json
 {"action": "wait", "after_sequence": 17, "timeout_s": 10}
 ```
 
 Call those arguments with `control_protocol`. It returns for a protocol
-start, confirmation gate, step completion/timeout/skip/cancellation/failure,
+confirmation gate, step completion/timeout/skip/cancellation/failure,
 protocol completion/cancellation/failure, or the requested timeout. Progress
 samples do not masquerade as milestones. Always reuse `next_sequence`; cursors
 remain monotonic across protocols and reading does not remove events.
