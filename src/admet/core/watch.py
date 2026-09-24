@@ -623,6 +623,20 @@ def watch(
         try:
             next_refresh = time.monotonic()
             while True:
+                wait_s = max(0.0, next_refresh - time.monotonic())
+                key = pressed(wait_s)
+                now = time.monotonic()
+                if key is None and now < next_refresh:
+                    # An incomplete terminal escape sequence arrived. Read its
+                    # remaining bytes immediately instead of waiting for the
+                    # next telemetry refresh.
+                    continue
+                if key in {"q", "Q"}:
+                    break
+                if key == "E":
+                    notice = _signal_owner(directory, signal.SIGUSR1, "emergency stop requested")
+                elif key == "X":
+                    notice = _signal_owner(directory, signal.SIGTERM, "server shutdown requested")
                 size = shutil.get_terminal_size(fallback=(80, 24))
                 raw_frame = _frame(
                     directory,
@@ -634,9 +648,6 @@ def watch(
                 body_rows = max(0, len(raw_frame.splitlines()) - 1)
                 viewport_rows = max(0, size.lines - 1)
                 max_scroll = max(0, body_rows - viewport_rows)
-                key = pressed()
-                if key in {"q", "Q"}:
-                    break
                 if key in {"down", "j"}:
                     scroll_offset = min(max_scroll, scroll_offset + 1)
                 elif key in {"up", "k"}:
@@ -649,10 +660,6 @@ def watch(
                     scroll_offset = 0
                 elif key == "end":
                     scroll_offset = max_scroll
-                if key == "E":
-                    notice = _signal_owner(directory, signal.SIGUSR1, "emergency stop requested")
-                elif key == "X":
-                    notice = _signal_owner(directory, signal.SIGTERM, "server shutdown requested")
                 frame = _fit_frame(
                     raw_frame,
                     size.columns,
@@ -661,8 +668,8 @@ def watch(
                 )
                 out.write("\x1b[H" + frame.replace("\n", "\x1b[K\n") + "\x1b[J")
                 out.flush()
-                next_refresh += interval_s
-                time.sleep(max(0.0, next_refresh - time.monotonic()))
+                if now >= next_refresh:
+                    next_refresh = now + interval_s
         except KeyboardInterrupt:
             pass
         finally:
@@ -724,10 +731,10 @@ class _watch_keys:
             return lambda: False
         return self._pressed
 
-    def _pressed(self) -> str | None:
+    def _pressed(self, timeout_s: float = 0.0) -> str | None:
         import select
 
-        ready, _, _ = select.select([sys.stdin], [], [], 0)
+        ready, _, _ = select.select([sys.stdin], [], [], max(0.0, timeout_s))
         if not ready:
             return None
         if self._fd is None:
