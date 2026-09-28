@@ -111,7 +111,7 @@ entered readings, including incomplete rows. Previous check records can be loade
 from the history table; a historical result is not a fresh validation of the setup.
 The pressure budget here is a calculation input, not an armed hardware limit.
 
-The Experiment selector includes **Template · gravimetry** and
+The Experiment selector includes **Template · dropseq**, **Template · gravimetry** and
 **Template · pressure flow check**. These are ordinary JSON documents: open,
 edit targets/steps, save under your own name, then Plan and Execute. They add no
 fixed workflow stages and use the same recording, safety and confirmation path.
@@ -121,6 +121,34 @@ its stability trigger observes Oil L only, with a 30-second timeout per step.
 Both examples default to trips off and zero outputs at step completion. Add
 `pressure_limits_mbar` to the JSON to configure per-channel trips.
 They are starting examples, not approval for a physical setup.
+
+### Drop-Seq starting protocol
+
+In **Experiment 1**, select **Template · dropseq → Open**. Use **Save JSON** to
+keep it in the current project, then **Plan** to review it. Alternatively import
+[`dropseq.json`](../src/admet/workflows/templates/dropseq.json) on the Windows PC.
+Priming and Wash remain separate existing stages; this template does not repeat
+them or change correction factors or camera settings.
+
+The template follows the existing Drop-Seq defaults for one set and one replicate:
+
+| Unit ID | Control | Target |
+|---|---|---|
+| 0 — Oil L | Flow | 300 µL/min |
+| 1 — Cells M1 | Flow | 40 µL/min |
+| 2 — Beads M2 | Flow | 40 µL/min |
+
+All three run simultaneously after the inline start confirmation. The collection
+ends at **150 µL measured on Oil L**, then commands all three outputs to zero.
+Nominal active duration is **30 seconds**; the hard timeout is **120 seconds**.
+The final inline confirmation closes the run and its fluidics recording. Operator
+waiting time is additional. At target flows, each aqueous channel contributes
+about 20 µL; 150 µL is **not** the total emulsion volume or an independent aqueous
+volume target. Actual amounts depend on measured flow.
+
+Pressure trips default **Off**. These are repository defaults, not proof that the
+current oil path can sustain 300 µL/min. Review/edit the JSON before executing;
+camera video is not automatically recorded by JSON protocols.
 
 Results remain in the normal protocol recordings. The Checkup calculator accepts
 entered measurements or historical check records; it does not automatically infer

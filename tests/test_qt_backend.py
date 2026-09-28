@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from admet.core.run import RunJob
 from admet.ui.backend import DesktopBackend
-from admet.workflows.json_protocol import loads
+from admet.workflows.json_protocol import loads, template_documents
 
 
 def definition(duration=0.15):
@@ -86,6 +86,44 @@ class DesktopBackendTests(unittest.TestCase):
         self.assertEqual(reopened.call("list_protocols")["protocols"][0]["name"], "desktop_test")
         self.assertEqual(reopened.call("planned_protocols")["plans"], [])
         self.assertTrue(reopened.service.project.session.files)
+
+    def test_dropseq_template_simulated_collection_gates_and_artifacts(self):
+        self.connect()
+        document = template_documents()["dropseq"]
+        saved = self.backend.call("save_protocol", {"protocol": document})
+        plan = self.backend.plan_file(saved["path"])
+        observed = self.backend.call("observe")
+        self.assertFalse(observed["recording"]["active"])
+        self.assertEqual({c["mode"] for c in observed["channels"]}, {"off"})
+        started = self.backend.call("control_protocol", {
+            "action": "execute", "plan_id": plan["plan_id"], "timeout_s": 1,
+        })
+        self.assertEqual(started["yield"]["reason"], "confirmation_required")
+        self.assertFalse(self.backend.call("observe")["safety"]["armed"])
+        self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 0.1})
+        deadline = time.monotonic() + 45
+        running_targets_seen = False
+        while time.monotonic() < deadline:
+            observed = self.backend.call("observe")
+            running_targets_seen |= [c["requested_flow_ul_min"] for c in observed["channels"]] == [300, 40, 40]
+            if observed["protocol"]["confirmation_message"] == document["steps"][1]["confirm_message"]:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("simulated Drop-Seq did not reach the completion gate")
+        self.assertTrue(running_targets_seen)
+        self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0) for c in observed["channels"]))
+        self.assertTrue(observed["recording"]["active"])
+        self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 1})
+        self.wait_completed(plan["plan_id"])
+        self.assertFalse(self.backend.call("observe")["recording"]["active"])
+        directory = Path(self.backend.workdir) / "records" / "protocols" / plan["plan_id"]
+        summary = json.loads((directory / "summary.json").read_text())
+        self.assertEqual(json.loads((directory / "protocol.json").read_text()), document)
+        self.assertTrue(Path(summary["artifacts"]["fluidics_csv"]).is_file())
+        events = self.backend.call("protocol_events", {"limit": 1000})["events"]
+        completed = next(e for e in events if e["step_name"] == "Run set01_rep01" and e["outcome"] == "completed")
+        self.assertGreaterEqual(float(completed["step_volumes"][0]), 150)
 
     def test_planning_never_invokes_engine_run(self):
         self.connect()

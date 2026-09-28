@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from admet.mcp.server import AdmetServer
-from admet.workflows.json_protocol import normalize, validate_channels
+from admet.workflows.json_protocol import normalize, template_documents, validate_channels
 
 
 DOCUMENT = {
@@ -22,6 +22,31 @@ DOCUMENT = {
 
 
 class JsonProtocolTests(unittest.TestCase):
+    def test_dropseq_template_preserves_existing_recipe_with_bounded_execution(self):
+        from admet.workflows.operations import operation
+        from admet.workflows.protocols import build_dropseq_protocol
+
+        settings = {p.name: p.default for p in operation("run_dropseq").params}
+        recipe = build_dropseq_protocol(settings)
+        document = template_documents()["dropseq"]
+        self.assertEqual(document["pressure_limits_mbar"], {})
+        self.assertEqual(len(document["steps"]), len(recipe))
+        for step, declared in zip(document["steps"], recipe, strict=True):
+            self.assertEqual(step["sensor_setpoints"], {str(k): v for k, v in declared.sensor_setpoints.items()})
+            self.assertEqual(step["trigger_type"], declared.trigger_type)
+            self.assertEqual(step["trigger_params"], declared.trigger_params)
+            self.assertEqual(step["on_complete"], "zero")
+            self.assertTrue(step["confirm_message"])
+        self.assertEqual(document["steps"][0]["timeout_s"], 120)
+        server = AdmetServer(simulated=True)
+        with patch.object(server.admet, "engine_action", side_effect=AssertionError("planning actuated")):
+            plan = server.call("plan_protocol", {
+                "operation_id": "run_json_protocol", "settings": {"protocol": document},
+            })
+        self.assertEqual(plan["expected_duration_s"], 30)
+        self.assertEqual(plan["steps"][0]["flow_setpoints_ul_min"], {"0": 300, "1": 40, "2": 40})
+        self.assertEqual(plan["armed_safety_limits"]["pressure_mbar"], {})
+
     def test_normalization_is_detached_and_rejects_unknown_fields(self):
         document = deepcopy(DOCUMENT)
         result = normalize(document)

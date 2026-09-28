@@ -1,0 +1,21 @@
+{
+  "name": "dropseq",
+  "steps": [
+    {
+      "name": "Run set01_rep01",
+      "sensor_setpoints": {"0": 300, "1": 40, "2": 40},
+      "trigger_type": "volume",
+      "trigger_params": {"sensor_index": 0, "target_volume_ul": 150},
+      "timeout_s": 120,
+      "on_complete": "zero",
+      "confirm_message": "Confirm 0 = Oil L, 1 = Cells M1, 2 = Beads M2 and collection is ready. Start all three at 300/40/40 uL/min until Oil L measures 150 uL?"
+    },
+    {
+      "name": "Confirm set01_rep01",
+      "trigger_type": "time",
+      "trigger_params": {"duration_s": 0},
+      "on_complete": "zero",
+      "confirm_message": "Collection complete; all channels commanded to zero. Confirm to finish this run."
+    }
+  ]
+}

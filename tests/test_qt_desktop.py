@@ -278,7 +278,7 @@ class DesktopWindowTests(unittest.TestCase):
 
     def test_templates_are_editable_json_not_fixed_stages(self):
         self.window._select_stage(self.experiment_index)
-        for name in ("gravimetry", "pressure_flow_check"):
+        for name in ("dropseq", "gravimetry", "pressure_flow_check"):
             self.panel.library.setCurrentIndex(self.panel.library.findData("@" + name))
             with patch.object(self.backend.engine, "run", side_effect=AssertionError("template actuated")):
                 self.panel.open_saved()
