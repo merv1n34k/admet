@@ -218,7 +218,7 @@ def relative_density(
 def density_protocol(oil_id):
     """Ordinary JSON steps; no acquisition or device access."""
     def zero():
-        return {"name": "M1 off", "pressure_setpoints": {"1": 0},
+        return {"name": "M1 zero flow", "sensor_setpoints": {"1": 0},
                 "trigger_type": "time", "trigger_params": {"duration_s": 0}, "on_complete": "zero"}
 
     steps = [zero()]
@@ -257,6 +257,14 @@ def normalize_analysis(value, steps):
     points = result["points"]
     if not isinstance(points, list) or len(points) != 21:
         raise ValueError("density needs 3 scout points and two passes of 3 heights × 3 points")
+
+    def zero_step(step):
+        # Accept archived pressure-zero runs for analysis; new recipes use flow zero.
+        return (step["trigger_params"].get("duration_s") == 0 and (
+            (step["sensor_setpoints"] == {"1": 0} and not step["pressure_setpoints"])
+            or (step["pressure_setpoints"] == {"1": 0} and not step["sensor_setpoints"])
+        ))
+
     for step in steps:
         if step.get("repeat", 1) != 1 or step.get("group"):
             raise ValueError("density steps must be explicit, without repeat/group expansion")
@@ -265,15 +273,14 @@ def normalize_analysis(value, steps):
         if step["sensor_setpoints"]:
             if set(step["sensor_setpoints"]) != {"1"} or step["pressure_setpoints"]:
                 raise ValueError("density may control channel 1 only")
-        elif step["pressure_setpoints"] != {"1": 0} or step["trigger_params"].get("duration_s") != 0:
-            raise ValueError("density non-sampling steps must set only M1 pressure to zero")
+        elif not zero_step(step):
+            raise ValueError("density non-sampling steps must zero only M1")
     first = steps[0]
-    if (first["sensor_setpoints"] or first["pressure_setpoints"] != {"1": 0}
-            or first["trigger_params"].get("duration_s") != 0):
+    if not zero_step(first):
         raise ValueError("density must start with a zero-output step")
-    acquisition_steps = [i + 1 for i, step in enumerate(steps) if step["sensor_setpoints"]]
-    if len(acquisition_steps) != len(points) or steps[-1]["pressure_setpoints"] != {"1": 0}:
-        raise ValueError("density must map every sample and finish with M1 pressure zero")
+    acquisition_steps = [i + 1 for i, step in enumerate(steps) if not zero_step(step)]
+    if len(acquisition_steps) != len(points) or not zero_step(steps[-1]):
+        raise ValueError("density must map every sample and finish with M1 zero")
     for index, point in enumerate(points):
         if not isinstance(point, dict) or set(point) != {"step", "pass", "height_cm", "settle_s"}:
             raise ValueError("density point requires step, pass, height_cm and settle_s")
@@ -301,23 +308,23 @@ def normalize_analysis(value, steps):
         if len(set(targets)) != 3 or targets != sorted(targets, reverse=group[0]["pass"] == 2):
             raise ValueError("density sweep needs three distinct ordered flow targets")
         point = group[0]
-        if steps[point["step"] - 2]["pressure_setpoints"] != {"1": 0}:
-            raise ValueError("density height gates require M1 pressure zero immediately beforehand")
+        if not zero_step(steps[point["step"] - 2]):
+            raise ValueError("density height gates require M1 zero immediately beforehand")
         review = "Review scout pressure/flow: continue only if settled and expected. " if group_index == 1 else ""
         steps[point["step"] - 1]["confirm_message"] = (
             f"{review}{oil}: confirm oil is routed through M1 (channel 1). "
             f"Set outlet {point['height_cm']:g} cm ABOVE the current reservoir oil surface "
             f"({'scout' if point['pass'] == 0 else 'pass ' + str(point['pass'])}). "
             "Confirm only when this height is measured and correct; keep it constant during this sweep. "
-            "Abort for unexpected pressure or unstable flow. Zero output is not physical isolation."
+            "Abort for unexpected pressure or unstable flow. Zero flow may retain pressure; verify no oil-column retreat."
         )
     forward = [group[0]["height_cm"] for group in groups[1:4]]
     reverse = [group[0]["height_cm"] for group in groups[4:]]
     if len(set(forward)) != 3 or forward != sorted(forward) or reverse != list(reversed(forward)):
         raise ValueError("density needs three increasing heights, then the same heights in reverse")
     scout_review_step = points[1]["step"] - 1
-    if steps[scout_review_step - 1]["pressure_setpoints"] != {"1": 0}:
-        raise ValueError("density scout review requires M1 pressure zero beforehand")
+    if not zero_step(steps[scout_review_step - 1]):
+        raise ValueError("density scout review requires M1 zero beforehand")
     steps[scout_review_step]["confirm_message"] = (
         "First M1 scout point finished. Review measured pressure and flow before increasing. "
         "Confirm only if stable and pressure is appropriate for this open path; otherwise abort."

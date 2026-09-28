@@ -18,7 +18,9 @@ minutes plus operator waits. Nominal consumption is **93.3 µL per oil** (280 µ
 for all three), excluding priming and transitions. Without oil-specific flow
 calibration this is not a reliable actual-volume budget.
 
-M1 pressure is set to zero before each height gate and at completion. There is an
+M1 flow is set to zero before each height gate and at completion. The controller
+may retain nonzero pressure to balance the oil column; this is not depressurization
+or physical isolation. Verify the meniscus stays at the outlet. There is an
 extra review gate after the first scout point. Review the full scout at the first
 main-pass gate. Confirm channel mapping and measured height before proceeding.
 Height is relative to the **current oil surface**, not the reservoir bottom or

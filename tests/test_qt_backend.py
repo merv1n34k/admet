@@ -167,7 +167,9 @@ class DesktopBackendTests(unittest.TestCase):
         # Only the clock trigger is accelerated; device access remains simulated.
         from admet.engines.acquisition import triggers
 
-        with patch.object(triggers.TimeTrigger, "check", return_value=True):
+        with patch.object(triggers.TimeTrigger, "check", return_value=True), patch.object(
+            channels._sdk, "set_pressure", wraps=channels._sdk.set_pressure,
+        ) as set_pressure:
             self.backend.call("control_protocol", {
                 "action": "execute", "plan_id": plan["plan_id"], "timeout_s": 0.1,
             })
@@ -179,7 +181,8 @@ class DesktopBackendTests(unittest.TestCase):
                 if protocol["confirmation_message"] and protocol["step_index"] != last_gate:
                     last_gate = protocol["step_index"]
                     gates.append(last_gate)
-                    self.assertEqual(observed["channels"][1]["requested_pressure_mbar"], 0)
+                    self.assertEqual(observed["channels"][1]["requested_flow_ul_min"], 0)
+                    self.assertEqual(observed["channels"][1]["mode"], "flow")
                     self.assertEqual([observed["channels"][i]["requested_pressure_mbar"] for i in (0, 2)], [13, 17])
                     self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 0.1})
                 completed = self.backend.call("planned_protocols", {"plan_id": plan["plan_id"]})["plans"][0]
@@ -188,6 +191,7 @@ class DesktopBackendTests(unittest.TestCase):
                 time.sleep(0.01)
             else:
                 self.fail("accelerated density run did not finish")
+            set_pressure.assert_not_called()
         self.assertEqual(len(gates), 8)
         self.assertNotIn("analysis_result", completed)
         from admet.workflows.calculations import calculate_run

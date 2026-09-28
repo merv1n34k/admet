@@ -111,8 +111,17 @@ class RecordedDensityTests(unittest.TestCase):
             self.assertLessEqual(set(step["sensor_setpoints"]) | set(step["pressure_setpoints"]), {"1"})
         for step_index, step in enumerate(document["steps"]):
             if step.get("confirm_message"):
-                self.assertEqual(document["steps"][step_index - 1]["pressure_setpoints"], {"1": 0})
-        self.assertEqual(document["steps"][-1]["pressure_setpoints"], {"1": 0})
+                self.assertEqual(document["steps"][step_index - 1]["sensor_setpoints"], {"1": 0})
+        self.assertEqual(document["steps"][-1]["sensor_setpoints"], {"1": 0})
+        self.assertTrue(all(not s["pressure_setpoints"] for s in document["steps"]))
+
+    def test_archived_pressure_zero_protocols_remain_analyzable(self):
+        document = density_protocol("dsurf")
+        for step in document["steps"]:
+            if step["sensor_setpoints"] == {"1": 0}:
+                step.pop("sensor_setpoints")
+                step["pressure_setpoints"] = {"1": 0}
+        self.assertEqual(len(normalize(document)["analysis"]["points"]), 21)
 
     def test_measured_windows_remove_settling_gates_resistance_and_constant_offsets(self):
         with tempfile.TemporaryDirectory() as directory:
