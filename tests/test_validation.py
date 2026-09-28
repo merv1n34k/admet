@@ -475,6 +475,15 @@ class RunTests(unittest.TestCase):
         self.assertTrue(observed["safety"]["tripped"])
         self.assertEqual({c["mode"] for c in observed["channels"]}, {"off"})
         self.assertFalse(admet.state()["running"])
+        # Zero is a requested output, not an instantaneous pressure measurement.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            pressure = admet.do("observe")["channels"][0]["pressure_mbar"]
+            if pressure is not None and pressure < 60.0:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("simulated pressure did not fall below the reset limit")
         admet.do("reset_safety")
 
     def test_the_summary_survives_the_project_being_reopened(self):
