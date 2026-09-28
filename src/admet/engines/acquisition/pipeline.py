@@ -21,7 +21,9 @@ from queue import Queue
 from typing import Any, Protocol
 
 from admet.core.clock import now_iso
-from admet.engines.acquisition.triggers import ConfirmationTrigger, Trigger, create_trigger
+from admet.engines.acquisition.triggers import (
+    ConfirmationTrigger, Trigger, BoundedTrigger, create_trigger,
+)
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +43,7 @@ class ProtocolStep:
     confirm_message: str = ""
     repeat: int = 1
     group: str = ""
+    timeout_s: float | None = None
 
 
 def expand_protocol_steps(steps: list[ProtocolStep]) -> list[ProtocolStep]:
@@ -354,6 +357,9 @@ class PipelineEngine(threading.Thread):
                 # the two happened is the difference between a settle and a
                 # timeout wearing a settle's clothes.
                 timed_out = bool(getattr(step.trigger, "timed_out", False))
+                if timed_out and isinstance(step.trigger, BoundedTrigger):
+                    self._channel_manager.pipeline_zero_all()
+                    raise TimeoutError(f"step {step.name} timed out")
                 step.status = StepStatus.TIMED_OUT if timed_out else StepStatus.COMPLETED
                 self._apply_on_complete(step)
                 self._emit_event(
@@ -484,7 +490,11 @@ def build_pipeline_steps(steps: list[ProtocolStep]) -> list[PipelineStep]:
         PipelineStep(
             name=step.name,
             sensor_setpoints=dict(step.sensor_setpoints),
-            trigger=create_trigger(step.trigger_type, step.trigger_params),
+            trigger=(
+                BoundedTrigger(create_trigger(step.trigger_type, step.trigger_params), step.timeout_s)
+                if step.timeout_s is not None
+                else create_trigger(step.trigger_type, step.trigger_params)
+            ),
             pressure_setpoints=dict(step.pressure_setpoints),
             on_complete=step.on_complete,
             confirm_message=step.confirm_message,

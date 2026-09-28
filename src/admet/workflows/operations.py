@@ -504,6 +504,7 @@ STEP_LIST_SCHEMA = {
             },
             "repeat": {"type": "integer", "minimum": 1},
             "group": {"type": "string", "description": "Steps sharing a group repeat together"},
+            "timeout_s": {"type": "number", "exclusiveMinimum": 0},
         },
         "required": ["name", "trigger_type"],
         "additionalProperties": False,
@@ -555,6 +556,7 @@ def _step_from(entry: dict[str, Any], index: int) -> ProtocolStep:
         confirm_message=str(entry.get("confirm_message") or ""),
         repeat=int(entry.get("repeat") or 1),
         group=str(entry.get("group") or ""),
+        timeout_s=float(entry["timeout_s"]) if entry.get("timeout_s") is not None else None,
     )
 
 
@@ -564,6 +566,13 @@ def build_protocol_steps(
     """Build a protocol without starting acquisition or touching hardware."""
     if not operation.starts_protocol:
         raise Refused(f"{operation.id} does not produce a protocol")
+    if operation.id == "run_json_protocol":
+        from admet.workflows.json_protocol import normalize, validate_channels
+
+        document = normalize(settings.get("protocol"))
+        validate_channels(document, channels)
+        settings["protocol"] = document
+        return [_step_from(entry, index) for index, entry in enumerate(document["steps"])]
     if operation.id == "run_steps":
         declared = settings.get("steps") or []
         if not declared:
@@ -582,7 +591,21 @@ def build_protocol_steps(
     return protocols.build_protocol(operation.protocol, settings)
 
 
+def _run_json_protocol(runner, settings):
+    from admet.workflows.json_protocol import normalize
+
+    document = normalize(settings["protocol"])
+    runner.arm_pressure_limits({int(k): v for k, v in document["pressure_limits_mbar"].items()})
+    return _run_steps(runner, {"steps": document["steps"], "tick_s": settings["tick_s"]})
+
+
 OPERATIONS: tuple[Operation, ...] = (
+    Operation(
+        "run_json_protocol", "Run a JSON protocol", "Plan a reusable JSON protocol.",
+        kind=START, params=(TICK,), raw={"protocol": {"type": "object"}},
+        requires=("project", "fluidics", "corrections", "idle", "safe"),
+        starts_protocol=True, run=_run_json_protocol,
+    ),
     Operation(
         "create_project",
         "Create a project",

@@ -43,6 +43,33 @@ class Trigger(ABC):
     def description(self) -> str:
         ...
 
+class BoundedTrigger(Trigger):
+    def __init__(self, inner: Trigger, timeout_s: float):
+        self.inner = inner
+        self.timeout_s = timeout_s
+        self.started = 0.0
+        self.timed_out = False
+
+    def reset(self):
+        self.started = time.monotonic()
+        self.timed_out = False
+        self.inner.reset()
+
+    def check(self, get_flow, get_volume):
+        self.timed_out = time.monotonic() - self.started >= self.timeout_s
+        if self.timed_out:
+            return True
+        done = self.inner.check(get_flow, get_volume)
+        self.timed_out = bool(getattr(self.inner, "timed_out", False))
+        return done
+
+    def progress(self):
+        return self.inner.progress()
+
+    def description(self):
+        return self.inner.description()
+
+
 class TimeTrigger(Trigger):
     def __init__(self, duration_s: float):
         self._duration_s = duration_s

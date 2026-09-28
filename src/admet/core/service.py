@@ -123,7 +123,7 @@ def _fill_defaults(operation: Any, settings: dict[str, Any]) -> dict[str, Any]:
 
 def _planned_step(index: int, step: Any) -> dict[str, Any]:
     params = deepcopy(step.trigger_params)
-    timeout = params.get("timeout_s")
+    timeout = step.timeout_s if step.timeout_s is not None else params.get("timeout_s")
     expected = params.get("duration_s")
     if expected is None and step.trigger_type == "confirmation":
         expected = 0.0
@@ -417,6 +417,8 @@ class Admet:
             if operation_id == "validate_oil_capacity"
             else {}
         )
+        if operation_id == "run_json_protocol":
+            pressure_limits = normalized["protocol"]["pressure_limits_mbar"]
         plan = {
             "plan_id": plan_id,
             "operation_id": operation_id,

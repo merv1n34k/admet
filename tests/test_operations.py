@@ -348,7 +348,7 @@ class DescribeTests(unittest.TestCase):
         # Two build their steps rather than naming one of this build's
         # protocols: run_steps runs what the caller wrote, and
         # validate_oil_capacity composes its own from the targets it is given.
-        builds_its_own = {"run_steps", "validate_oil_capacity"}
+        builds_its_own = {"run_steps", "run_json_protocol", "validate_oil_capacity"}
         for op in OPERATIONS:
             if op.id in builds_its_own:
                 continue
