@@ -1,5 +1,36 @@
 # admet
 
+## Standalone Windows Qt branch
+
+`feat/windows-qt-protocols` restores the previous Qt device/camera window and
+adds the validated JSON protocol workflow. No agent, MCP connection, terminal
+interface, or server setup is needed.
+
+```powershell
+uv sync --locked --extra control
+.\start-admet.cmd
+```
+
+The desktop controls real devices; there is no live/simulated switch.
+Devices remain disconnected until you click Connect. Create/open an
+`.admetp` project, connect devices, apply corrections, then use the original
+TOC: **Priming → Experiment steps → Wash**. Add experiments with **+ Protocol
+step**. Select/import JSON and review the plan directly between the existing
+action bar and graphs/camera; use **Plan** and **Execute** in that action bar.
+Confirmation gates, pause/skip/abort, emergency stop, and run artifacts use the
+existing backend. Closing the window stops and disconnects; it does not detach.
+Execute uses the protocol's own confirmation gates, without an extra approval prompt.
+
+See [Windows desktop setup and workflow](docs/windows-qt.md). Desktop operation
+is covered by offscreen Qt, simulated fluidics, and mocked camera tests on macOS;
+Windows drivers and physical devices still need acceptance testing on the target PC.
+
+## Inherited headless interface
+
+The existing headless implementation below is retained for compatibility and
+regression testing. It is not part of the standalone desktop launch path.
+Never run the desktop and a headless owner against the same instrument.
+
 Microfluidics acquisition and analysis, arranged around one rule: **one process
 owns the instrument.**
 

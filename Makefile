@@ -1,7 +1,10 @@
-.PHONY: setup serve serve-live describe build test test-all test-core test-analyze test-control lint fmt clean
+.PHONY: setup dev serve serve-live describe build test test-all test-core test-analyze test-control test-desktop lint fmt clean
 
 setup:
 	uv sync --all-extras
+
+dev:
+	uv run --extra control admet-qt
 
 # MCP on stdio. Simulated by default: connecting is forced simulated and a
 # request for real hardware is refused.
@@ -19,7 +22,7 @@ build:
 
 test: test-core
 
-test-all: test-core test-analyze test-control
+test-all: test-core test-analyze test-control test-desktop
 
 test-core:
 	uv run -m unittest discover -s tests
@@ -29,6 +32,9 @@ test-analyze:
 
 test-control:
 	uv run -m unittest discover -s tests -p '*control*.py'
+
+test-desktop:
+	uv run --extra control -m unittest tests.test_qt_backend tests.test_qt_desktop
 
 lint:
 	uv run ruff check .
