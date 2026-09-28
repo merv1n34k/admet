@@ -461,7 +461,7 @@ class PreflightPanel(QWidget):
             self._segment_inputs[channel] = rows
 
         # Built before the scheme: it colours its pipes against this budget.
-        self.pressure_limit = _spin(1.0, 1900.0, 1900.0, " mbar", decimals=0)
+        self.pressure_limit = _spin(1.0, 1_000_000_000.0, 2000.0, " mbar", decimals=0)
         self.pressure_limit.valueChanged.connect(self.recalculate)
 
         self.outlet_length = _spin(0.0, 10000.0, 20.0, " cm")

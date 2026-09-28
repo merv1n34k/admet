@@ -20,7 +20,6 @@ from admet.workflows.validation import (
     CAPACITY_LIMITED,
     FIRST_TARGET_CEILING_UL_MIN,
     INVALID,
-    MAX_TRIP_MBAR,
     OIL_CHANNEL,
     PASS,
     UNSTABLE,
@@ -306,11 +305,7 @@ class RefusalTests(unittest.TestCase):
         self.assertEqual(operation("validate_oil_capacity").kind, "start")
         self.assertTrue(operation("validate_oil_capacity").starts_protocol)
 
-    def test_a_trip_limit_above_the_cap_is_refused(self):
-        # The controller tops out at 2000 and the point is to stop short of it.
-        # Declared as the parameter's maximum, so it is refused by the schema
-        # and a model reading the schema is told before it asks. Guards are
-        # checked before settings, so the session has to be real to get here.
+    def test_a_trip_limit_above_detected_hardware_range_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.admet.create_project(Path(tmp) / "rig.admetp")
             self.admet.do("connect_fluidics", {"simulated": True})
@@ -321,15 +316,16 @@ class RefusalTests(unittest.TestCase):
                 self.admet.do("validate_oil_capacity", {
                     "configuration": "bypass_chip",
                     "flow_targets_ul_min": [50.0],
-                    "oil_pressure_trip_mbar": MAX_TRIP_MBAR + 1,
+                    "oil_pressure_trip_mbar": 2001,
                 })
 
-            self.assertIn("1900", str(caught.exception))
+            self.assertIn("detected maximum", str(caught.exception))
 
-    def test_the_cap_is_in_the_schema_a_client_reads(self):
+    def test_software_trip_defaults_off_without_fixed_schema_cap(self):
         declared = {p["name"]: p for p in Admet().describe("validate_oil_capacity")["params"]}
 
-        self.assertEqual(declared["oil_pressure_trip_mbar"]["maximum"], MAX_TRIP_MBAR)
+        self.assertIsNone(declared["oil_pressure_trip_mbar"]["maximum"])
+        self.assertIsNone(declared["oil_pressure_trip_mbar"]["default"])
 
     def test_an_unknown_configuration_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -437,6 +433,15 @@ class RunTests(unittest.TestCase):
             self.assertGreater(target["samples"], 0)
             self.assertIsNotNone(target["flow_ul_min"]["mean"])
             self.assertIsNotNone(target["pressure_mbar"]["max"])
+
+    def test_disabled_trip_is_preserved_in_run_and_summary(self):
+        admet = self._run(oil_pressure_trip_mbar=None)
+        self.assertFalse(admet.do("observe")["safety"]["armed"])
+        validation = self._finish(admet)
+        self.assertEqual(validation["classification"], PASS)
+        summary = json.loads(Path(validation["artifacts"]["summary"]).read_text())
+        self.assertIsNone(summary["settings"]["oil_pressure_trip_mbar"])
+        self.assertIn("trip was off", summary["classification_reason"])
 
     def test_the_summary_keeps_what_the_run_was_measured_under(self):
         admet = self._run()

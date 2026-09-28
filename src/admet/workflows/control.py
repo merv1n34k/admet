@@ -115,8 +115,8 @@ def protocol_stage(stage_id, label, *, builtin=""):
             from dataclasses import replace
 
             params = tuple(replace(p, default=1800.0) if p.name == "wash_pressure_mbar" else p for p in params)
-        params += (Param("desktop_pressure_limit_mbar", "Pressure trip (mbar)", ParamKind.FLOAT,
-                         default=1900.0, minimum=1.0, maximum=1900.0),)
+        params += (Param("desktop_pressure_limit_mbar", "Pressure trip (mbar, optional)", ParamKind.FLOAT,
+                         default=None, minimum=1.0),)
     options = {"builtin": builtin, "main": tuple(p.name for p in params)}
     return Stage(
         stage_id, label, pipeline=True,
@@ -154,7 +154,8 @@ def builtin_document(kind, values):
         })
     return normalize({
         "name": kind,
-        "pressure_limits_mbar": {str(i): values["desktop_pressure_limit_mbar"] for i in range(3)},
+        "pressure_limits_mbar": ({str(i): values["desktop_pressure_limit_mbar"] for i in range(3)}
+                                 if values.get("desktop_pressure_limit_mbar") is not None else {}),
         "steps": steps,
     })
 

@@ -242,9 +242,7 @@ def _validate_oil_capacity(runner: Runner, settings: dict[str, Any]) -> dict[str
             f"configuration must be one of: {', '.join(validation.CONFIGURATIONS)}; "
             f"got {configuration!r}"
         )
-    # The cap is the parameter's declared maximum, so it is refused by the
-    # schema before this runs and is visible to anything reading the schema.
-    trip_mbar = float(settings["oil_pressure_trip_mbar"])
+    trip_mbar = settings["oil_pressure_trip_mbar"]
     targets = [float(t) for t in (settings.get("flow_targets_ul_min") or [])]
     if not targets:
         raise Refused("validate_oil_capacity needs at least one flow target")
@@ -262,9 +260,8 @@ def _validate_oil_capacity(runner: Runner, settings: dict[str, Any]) -> dict[str
     prepared = {**settings, "flow_targets_ul_min": targets, "configuration": configuration}
     steps, plan = validation.build_steps(prepared, channels[validation.OIL_CHANNEL])
 
-    # Armed before anything flows, and before the recording, so there is no
-    # moment where oil is moving with nothing watching the pressure.
-    runner.arm_pressure_limits({validation.OIL_CHANNEL: trip_mbar})
+    # Apply this run's explicit limits (or disarm old limits) before actuation.
+    runner.arm_pressure_limits({validation.OIL_CHANNEL: trip_mbar} if trip_mbar is not None else {})
 
     check_id = f"oilcap_{configuration}_{now_iso()[:19].replace(':', '').replace('-', '')}"
     started = runner.do(
@@ -592,9 +589,14 @@ def build_protocol_steps(
 
 
 def _run_json_protocol(runner, settings):
-    from admet.workflows.json_protocol import normalize
+    from admet.workflows.json_protocol import normalize, validate_channels
 
     document = normalize(settings["protocol"])
+    observed = runner.engine_action("acquisition", "read_observation", {}).metadata
+    channels = observed.get("channels") or []
+    if not channels:
+        raise Refused("no fluidics channels are available for execution")
+    validate_channels(document, channels)
     runner.arm_pressure_limits({int(k): v for k, v in document["pressure_limits_mbar"].items()})
     return _run_steps(runner, {"steps": document["steps"], "tick_s": settings["tick_s"]})
 
@@ -736,11 +738,10 @@ OPERATIONS: tuple[Operation, ...] = (
                 "oil_pressure_trip_mbar",
                 "Oil pressure trip",
                 ParamKind.FLOAT,
-                default=1900.0,
+                default=None,
                 minimum=1.0,
-                maximum=1900.0,
-                description="Measured pressure that stops the run (mbar); capped well "
-                "under the controller's 2000",
+                description="Optional measured-pressure trip (mbar); omitted means off. "
+                "Must not exceed the detected controller range.",
             ),
             _number("minimum_flow_fraction", "Minimum flow fraction", 0.85, minimum=0.0),
             Param(

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from admet.mcp.server import AdmetServer
-from admet.workflows.json_protocol import normalize
+from admet.workflows.json_protocol import normalize, validate_channels
 
 
 DOCUMENT = {
@@ -35,13 +35,47 @@ class JsonProtocolTests(unittest.TestCase):
         for field, value in (("timeout_s", -1), ("repeat", 1.5), ("unknown", 1),
                              ("sensor_setpoints", {"-1": 10}),
                              ("sensor_setpoints", {"0": float("nan")}),
-                             ("sensor_setpoints", {"1": 10}),
                              ("pressure_setpoints", {"0": 5})):
             with self.subTest(field=field, value=value):
                 document = deepcopy(DOCUMENT)
                 document["steps"][0][field] = value
                 with self.assertRaises((ValueError, RuntimeError)):
                     normalize(document)
+
+    def test_limits_are_optional_and_explicit_limits_still_apply(self):
+        document = deepcopy(DOCUMENT)
+        document.pop("pressure_limits_mbar")
+        self.assertEqual(normalize(document)["pressure_limits_mbar"], {})
+        document["pressure_limits_mbar"] = {"1": 500}
+        self.assertEqual(normalize(document)["pressure_limits_mbar"], {"1": 500})
+        document["steps"][0].update(sensor_setpoints={}, pressure_setpoints={"1": 500})
+        with self.assertRaisesRegex(ValueError, "below its pressure limit"):
+            normalize(document)
+
+    def test_detected_ranges_apply_without_software_trips(self):
+        channels = [{"index": 0, "detected": {"pressure_max_mbar": 2000, "sensor_max_ul_min": 1000}}]
+        document = deepcopy(DOCUMENT)
+        document.pop("pressure_limits_mbar")
+        step = document["steps"][0]
+        step.update(sensor_setpoints={}, pressure_setpoints={"0": 2000})
+        validate_channels(normalize(document), channels)
+        document["pressure_limits_mbar"] = {"0": 2000}
+        step["pressure_setpoints"] = {"0": 1999}
+        validate_channels(normalize(document), channels)
+        document["pressure_limits_mbar"] = {}
+        for mode, target in (("pressure_setpoints", 2001), ("sensor_setpoints", 1001)):
+            step.update(sensor_setpoints={}, pressure_setpoints={})
+            step[mode] = {"0": target}
+            with self.assertRaisesRegex(ValueError, "detected range"):
+                validate_channels(normalize(document), channels)
+            step[mode] = {"4": 10}
+            with self.assertRaisesRegex(ValueError, "not connected"):
+                validate_channels(normalize(document), channels)
+        for maximum in (None, float("nan"), float("inf")):
+            step.update(sensor_setpoints={}, pressure_setpoints={"0": 10})
+            channels[0]["detected"]["pressure_max_mbar"] = maximum
+            with self.assertRaisesRegex(ValueError, "detected range"):
+                validate_channels(normalize(document), channels)
 
     def test_unbounded_volume_is_refused(self):
         document = deepcopy(DOCUMENT)

@@ -293,8 +293,12 @@ sorted or deduplicated for you: a list that does not climb, repeats itself, or
 opens above 50 uL/min is refused, because silently rewriting it gives a run that
 does not match its own request.
 
-The pressure limit is capped at 1900 mbar — the controller tops out at 2000, and
-the point is to stop short of it rather than go looking for it.
+Software pressure trips are optional and off by default. Set
+`oil_pressure_trip_mbar` explicitly to enable a trip; there is no fixed 1900 mbar
+cap, but a configured threshold must not exceed the detected controller range.
+Without a trip this run has no software overpressure shutdown. The 1900 mbar
+values in the examples are explicit choices, not a global restriction. JSON
+protocols similarly use optional per-channel `pressure_limits_mbar` entries.
 
 Nothing flows until the operator answers a question quoting what the
 *instrument* reports about channel 0, not what the configuration claims. Answer

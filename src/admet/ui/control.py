@@ -189,7 +189,8 @@ class NumericParamEdit(QLineEdit):
         if param.maximum is not None:
             self.hint += f" Maximum: {param.maximum:g}."
         if param.name == "desktop_pressure_limit_mbar":
-            self.hint += " The trip must stay below the 2000 mbar controller ceiling."
+            self.setPlaceholderText("Off")
+            self.hint += " Leave blank to disable the software pressure trip. Hardware ranges still apply."
         self.setToolTip(self.hint)
         self.textEdited.connect(self._edited)
         self.editingFinished.connect(self.commit)
@@ -201,8 +202,10 @@ class NumericParamEdit(QLineEdit):
         if not self.pending:
             return True
         try:
-            value = float(self.text().strip())
-            if not math.isfinite(value):
+            text = self.text().strip()
+            optional_trip = self.param.name == "desktop_pressure_limit_mbar"
+            value = None if optional_trip and not text else float(text)
+            if value is not None and not math.isfinite(value):
                 raise ValueError("Enter a finite number.")
             value = self.param.validate(value)
         except (ValueError, TypeError) as exc:

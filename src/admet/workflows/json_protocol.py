@@ -59,11 +59,8 @@ def normalize(document):
             step[key] = channel_map(step.get(key, {}), key)
         if set(step["sensor_setpoints"]) & set(step["pressure_setpoints"]):
             raise ValueError("a channel cannot have flow and pressure control in the same step")
-        active = set(step["sensor_setpoints"]) | set(step["pressure_setpoints"])
-        if active - set(limits):
-            raise ValueError("each controlled channel requires a pressure limit")
         for key, value in step["pressure_setpoints"].items():
-            if value >= limits[key]:
+            if key in limits and value >= limits[key]:
                 raise ValueError("pressure target must be below its pressure limit")
         params = step.get("trigger_params", {})
         if not isinstance(params, dict):
@@ -132,13 +129,19 @@ def validate_channels(document, channels):
         if detected is None:
             raise ValueError(f"channel {key} is not connected")
         maximum = detected.get("pressure_max_mbar")
-        if maximum is None or limit >= maximum:
-            raise ValueError(f"channel {key}: pressure limit must be below detected maximum")
+        if maximum is None or not math.isfinite(maximum) or limit > maximum:
+            raise ValueError(f"channel {key}: pressure limit exceeds or lacks detected maximum")
     for step in document["steps"]:
-        for key, flow in step["sensor_setpoints"].items():
-            maximum = by_index[key].get("sensor_max_ul_min")
-            if maximum is None or flow > maximum:
-                raise ValueError(f"channel {key}: flow target exceeds detected range")
+        for targets, range_key, label in (
+            ("sensor_setpoints", "sensor_max_ul_min", "flow"),
+            ("pressure_setpoints", "pressure_max_mbar", "pressure"),
+        ):
+            for key, target in step[targets].items():
+                if key not in by_index:
+                    raise ValueError(f"channel {key} is not connected")
+                maximum = by_index[key].get(range_key)
+                if maximum is None or not math.isfinite(maximum) or target > maximum:
+                    raise ValueError(f"channel {key}: {label} target exceeds or lacks detected range")
         sensor = step.get("trigger_params", {}).get("sensor_index")
         if sensor is not None and str(sensor) not in by_index:
             raise ValueError(f"trigger sensor {sensor} is not connected")

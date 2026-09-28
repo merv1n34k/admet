@@ -2,13 +2,12 @@
 
 One specific recipe, not a general experiment builder. It asks a single
 question: how much oil can this path carry before the controller runs out of
-pressure -- and it answers it without going looking for the ceiling.
+pressure. A software pressure trip can be configured for the run.
 
 The rig has already been seen to saturate: about 1999.7 mbar for only
 236.4 uL/min against a 300 uL/min target, and later about 128 uL/min against
-250. Reproducing that tells nobody anything new and is hard on the hardware, so
-this stops at a limit well under the controller's 2000 mbar and reports that it
-stopped rather than pushing on.
+250. Any configured trip is reported explicitly; with no trip configured this
+recipe does not provide software overpressure shutdown.
 
 What comes out is a classification, not a verdict on whether the thread ended:
 
@@ -35,12 +34,6 @@ from admet.engines.acquisition.pipeline import ProtocolStep
 # Which channel carries the oil. Confirmed by the operator against what the
 # instrument reports before anything flows, never assumed from this alone.
 OIL_CHANNEL = 0
-
-# The controller tops out at 2000 mbar. Everything here is meant to stay below
-# that with room to spare, so the ceiling is never the thing being tested. The
-# operation declares this as its parameter's maximum, which is where it is
-# enforced -- a model reading the schema is told before it asks.
-MAX_TRIP_MBAR = 1900.0
 
 CONFIGURATIONS = ("bypass_chip", "with_chip")
 
@@ -115,6 +108,17 @@ def build_steps(settings: dict[str, Any], channel: dict[str, Any]) -> tuple[list
     guessing at its own protocol.
     """
     targets = check_targets([float(target) for target in settings["flow_targets_ul_min"]])
+    from admet.workflows.json_protocol import number, validate_channels
+
+    for target in targets:
+        number(target, "flow target")
+    trip = settings.get("oil_pressure_trip_mbar")
+    if trip is not None:
+        trip = number(trip, "oil_pressure_trip_mbar", minimum=1)
+    validate_channels({
+        "pressure_limits_mbar": {"0": trip} if trip is not None else {},
+        "steps": [{"sensor_setpoints": {"0": max(targets)}, "pressure_setpoints": {}}],
+    }, [channel])
 
     tolerance = float(settings["settle_tolerance_ul_min"])
     window_s = float(settings["settle_window_s"])
@@ -255,7 +259,7 @@ def classify(
     targets: list[dict[str, Any]],
     *,
     tripped: bool,
-    trip_mbar: float,
+    trip_mbar: float | None,
     reason: str = "",
 ) -> tuple[str, str]:
     """What the run showed, and why. Never "the thread ended, so it passed"."""
@@ -287,7 +291,8 @@ def classify(
     near_limit = [
         t
         for t in targets
-        if not t["settled"] and (t["pressure_mbar"]["max"] or 0.0) >= trip_mbar * 0.95
+        if trip_mbar is not None and not t["settled"]
+        and t["pressure_mbar"]["max"] is not None and t["pressure_mbar"]["max"] >= trip_mbar * 0.95
     ]
     if near_limit:
         worst = max(near_limit, key=lambda t: t["pressure_mbar"]["max"])
@@ -299,7 +304,7 @@ def classify(
     unsettled = [t for t in targets if not t["settled"]]
     if unsettled:
         names = ", ".join(f"{t['requested_ul_min']:g}" for t in unsettled)
-        return UNSTABLE, f"pressure had room, but {names} uL/min never settled"
+        return UNSTABLE, f"{names} uL/min never settled"
 
     short = [t for t in targets if not t["held_the_flow"]]
     if short:
@@ -308,7 +313,9 @@ def classify(
             f"{worst['requested_ul_min']:g} uL/min settled at only "
             f"{(worst['flow_fraction'] or 0) * 100:.0f}% of what was asked for"
         )
-    return PASS, "every target settled and held its flow below the pressure limit"
+    return PASS, "every target settled and held its flow" + (
+        " below the pressure limit" if trip_mbar is not None else "; software pressure trip was off"
+    )
 
 
 class ValidationRun(threading.Thread):
@@ -480,7 +487,7 @@ class ValidationRun(threading.Thread):
         classification, why = classify(
             measured,
             tripped=bool(safety["tripped"]),
-            trip_mbar=float(self._settings["oil_pressure_trip_mbar"]),
+            trip_mbar=self._settings["oil_pressure_trip_mbar"],
             reason=reason,
         )
         return {

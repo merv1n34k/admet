@@ -78,7 +78,7 @@ class DesktopWindowTests(unittest.TestCase):
         editor.selectAll()
         with patch.object(self.window, "_set_value", wraps=self.window._set_value) as commit:
             QTest.keyClicks(editor, "1850.5")
-            self.assertEqual(self.window.values[editor.param.name], 1900)
+            self.assertIsNone(self.window.values[editor.param.name])
             self.assertTrue(panel.dirty)
             commit.assert_not_called()
             self.window._sync_param_editor(editor.param.name, editor)
@@ -98,7 +98,7 @@ class DesktopWindowTests(unittest.TestCase):
         panel = self.window._protocol_editor(self.window.workflow.stages[index])
         editor = self.window._param_editors["desktop_pressure_limit_mbar"]
         with patch.object(self.backend, "call", side_effect=AssertionError("invalid draft used")):
-            for text in ("2000", "nan", "inf", "-1", "", "abc"):
+            for text in ("0", "nan", "inf", "-1", "abc"):
                 with self.subTest(text=text):
                     editor.setFocus()
                     editor.selectAll()
@@ -106,7 +106,7 @@ class DesktopWindowTests(unittest.TestCase):
                     QTest.keyClicks(editor, text)
                     QTest.keyClick(editor, Qt.Key.Key_Return)
                     self.assertTrue(editor.pending)
-                    self.assertEqual(self.window.values[editor.param.name], 1900)
+                    self.assertIsNone(self.window.values[editor.param.name])
                     self.window._sync_param_editor(editor.param.name, editor)
                     self.assertEqual(editor.text(), text)
                     panel.build_plan()
@@ -155,12 +155,36 @@ class DesktopWindowTests(unittest.TestCase):
         name = "desktop_pressure_limit_mbar"
         editor = self.window._param_editors[name]
         editor.selectAll()
-        QTest.keyClicks(editor, "2000")
+        QTest.keyClicks(editor, "nan")
         self.window.current_stage_page.mounted_signature = None
         self.window._render_current_stage()
-        self.assertEqual(self.window._param_editors[name].text(), "2000")
+        self.assertEqual(self.window._param_editors[name].text(), "nan")
         self.assertTrue(self.window._param_editors[name].pending)
-        self.assertEqual(self.window.values[name], 1900)
+        self.assertIsNone(self.window.values[name])
+
+    def test_optional_pressure_trip_accepts_controller_ceiling_and_clears_to_off(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "priming")
+        self.window._select_stage(index)
+        panel = self.window._protocol_editor(self.window.workflow.stages[index])
+        editor = self.window._param_editors["desktop_pressure_limit_mbar"]
+        self.assertEqual(editor.placeholderText(), "Off")
+        QTest.keyClicks(editor, "2000")
+        QTest.keyClick(editor, Qt.Key.Key_Return)
+        self.assertEqual(self.window.values[editor.param.name], 2000)
+        panel.build_plan()
+        self.drain()
+        self.assertEqual(set(panel.plan["armed_safety_limits"]["pressure_mbar"].values()), {2000})
+        editor.selectAll()
+        QTest.keyClick(editor, Qt.Key.Key_Backspace)
+        QTest.keyClick(editor, Qt.Key.Key_Return)
+        self.assertIsNone(self.window.values[editor.param.name])
+        panel.build_plan()
+        self.drain()
+        self.assertEqual(panel.plan["armed_safety_limits"]["pressure_mbar"], {})
+        self.assertIn("pressure trips Off", panel.summary.text())
 
     def test_plan_commits_valid_numeric_draft_without_actuation(self):
         from PySide6.QtTest import QTest
@@ -224,6 +248,8 @@ class DesktopWindowTests(unittest.TestCase):
             self.app.processEvents()
             panel = self.window._ensure_preflight()
             self.assertTrue(panel.scheme.isVisible())
+            panel.pressure_limit.setValue(2500)
+            self.assertEqual(panel.pressure_limit.value(), 2500)
             self.assertFalse(self.window.main_panel.isVisible())
             self.assertFalse(self.window.action_panel.isVisible())
             stage = self.window.workflow.stages[ids.index("checkup")]

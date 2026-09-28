@@ -1,7 +1,7 @@
 # Saved protocols
 
 The agent configures the rig and saves JSON protocols through MCP. A definition
-contains only a name, pressure limits, and ordered steps. Saving and planning do
+contains only a name, optional pressure trips, and ordered steps. Saving and planning do
 not actuate hardware. Execution always takes the reviewed plan ID.
 
 ```json
@@ -24,7 +24,13 @@ not actuate hardware. Execution always takes the reviewed plan ID.
 Channel keys are configured channel indices. Flow targets use `sensor_setpoints`
 in µL/min; open-loop pressure targets use `pressure_setpoints` in mbar. Several
 channels in one step run concurrently. A channel cannot have both modes in one
-step. Pressure limits must be positive and below the detected controller maximum.
+step. `pressure_limits_mbar` is optional; omitted or `{}` means software pressure
+trips are off. Entries enable trips only for the specified channels, must be
+positive, and must not exceed the detected controller maximum. Pressure targets
+must stay below any explicitly configured trip. Flow and pressure targets must
+remain within detected hardware ranges even when no trips are configured.
+There is no fixed 1900 mbar cap and no automatic software overpressure shutdown
+on channels without a configured trip. Existing saved limits are preserved.
 The supported targets are non-negative; vacuum/reverse-flow protocols are not
 part of this version.
 
@@ -46,7 +52,7 @@ MCP operations:
 - `control_protocol`: `{"action": "execute", "plan_id": "plan_…"}` executes after review
   and explicit human approval. Existing confirm/skip/pause/resume/abort actions apply.
 
-Unknown fields, duplicate file keys, invalid numbers, missing limits, and
+Unknown fields, duplicate file keys, invalid numbers, unknown channels, and
 out-of-range targets are refused. A saved file can be edited or replaced without
 changing an already-created plan. Reload it to create a new plan.
 

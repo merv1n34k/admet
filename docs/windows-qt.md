@@ -80,19 +80,27 @@ Escape or closing the popup cancels without performing the action. Protocol gate
 remain inline and never open a confirmation popup.
 
 The old unbounded manual flow/pressure inputs are disabled. Put dispensing
-targets in bounded JSON steps with pressure trips and time/volume conditions.
+targets in bounded JSON steps with time/volume conditions and optional pressure trips.
 Priming and Wash keep their original step sequences and familiar parameter
 forms, using the same guarded JSON plan/recording backend. They have explicit
-timeouts and a default 1900 mbar pressure trip. The old 2000 mbar wash hold is
-replaced with an editable 1800 mbar default, below that trip and the controller
-ceiling. Review these values for the physical rig before execution.
+timeouts. Software pressure trips default to **Off**: leave the optional pressure
+trip field blank, or enter a positive threshold in mbar to enable it. There is no
+fixed 1900 mbar cap. The editable wash target defaults to 1800 mbar; that target is
+not a safety limit. Review these values for the physical rig before execution.
 
 Numeric parameter fields accept free typing and apply a valid value on Enter or
 leaving the field, not on each keystroke. Invalid text stays visible with an error;
 the previous value is unchanged and cannot be silently used to build a new plan.
 Editing a built-in protocol parameter invalidates its preview. Build and review a
-new plan before execution. The pressure-trip field accepts 1–1900 mbar; 2000 mbar
-is the controller ceiling, not an allowable trip threshold for this form.
+new plan before execution. Detected controller and sensor ranges still apply,
+including when trips are off. A 2000 mbar pressure target is allowed on a detected
+2000 mbar controller when no lower software trip is configured. A pressure target
+must remain strictly below an explicitly configured trip.
+
+With trips off, ADMET provides **no software overpressure shutdown**. The plan
+shows Off and records which channels have no trip. Step timeouts, emergency stop,
+zero-on-completion and protocol confirmation gates remain active. Existing saved
+protocols retain any explicit trips; changing a default does not rewrite them.
 
 ### Checkup and reusable measurement protocols
 
@@ -110,7 +118,8 @@ fixed workflow stages and use the same recording, safety and confirmation path.
 Gravimetry starts with one 50 µL dispense per channel at 50 µL/min. The flow-check
 example increases Oil L from 50 to 250 µL/min with proportional aqueous targets;
 its stability trigger observes Oil L only, with a 30-second timeout per step.
-Both examples use 1900 mbar trips and zero outputs at step completion.
+Both examples default to trips off and zero outputs at step completion. Add
+`pressure_limits_mbar` to the JSON to configure per-channel trips.
 They are starting examples, not approval for a physical setup.
 
 Results remain in the normal protocol recordings. The Checkup calculator accepts

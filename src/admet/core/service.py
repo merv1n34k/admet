@@ -439,11 +439,22 @@ class Admet:
         plan_id = f"plan_{uuid.uuid4().hex}"
         pressure_limits = (
             {"0": normalized["oil_pressure_trip_mbar"]}
-            if operation_id == "validate_oil_capacity"
+            if operation_id == "validate_oil_capacity" and normalized["oil_pressure_trip_mbar"] is not None
             else {}
         )
         if operation_id == "run_json_protocol":
             pressure_limits = normalized["protocol"]["pressure_limits_mbar"]
+        warnings = ([] if all(g["met"] for g in guards.values()) else [
+            "one or more execution guards are currently unmet"
+        ])
+        controlled_channels = {
+            str(channel) for step in described_steps
+            for key in ("flow_setpoints_ul_min", "pressure_setpoints_mbar")
+            for channel in step[key]
+        }
+        unprotected = sorted(controlled_channels - set(pressure_limits))
+        if unprotected:
+            warnings.append("Software pressure trips off for channels " + ", ".join(unprotected))
         plan = {
             "plan_id": plan_id,
             "operation_id": operation_id,
@@ -468,9 +479,7 @@ class Admet:
                 "fluidics disconnects or required telemetry becomes unavailable",
                 "protocol reports an error",
             ],
-            "warnings": ([] if all(g["met"] for g in guards.values()) else [
-                "one or more execution guards are currently unmet"
-            ]),
+            "warnings": warnings,
             "assumptions": [
                 "configured channel labels match the physical tubing only after operator confirmation"
             ],

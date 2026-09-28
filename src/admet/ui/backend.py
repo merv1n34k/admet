@@ -122,7 +122,7 @@ class DesktopBackend:
                 result = self.service.do(action, {k: v for k, v in settings.items() if k in allowed})
                 return RunResult(job.id, "acquisition", action, metadata=result)
             if action in {"set_channel_flow", "set_channel_pressure"}:
-                raise RuntimeError("Use a bounded JSON protocol with pressure limits for dispensing")
+                raise RuntimeError("Use a bounded JSON protocol for dispensing")
             return self.service.run("acquisition", action, settings, job_id=job.id)
 
     def emergency_stop(self):

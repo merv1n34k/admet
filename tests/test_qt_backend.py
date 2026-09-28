@@ -139,6 +139,40 @@ class DesktopBackendTests(unittest.TestCase):
         worker.join()
         self.assertTrue(self.backend.call("observe")["safety"]["tripped"])
 
+    def test_unrestricted_plan_disarms_old_limits_and_finishes_zeroed(self):
+        self.connect()
+        self.backend.service.arm_pressure_limits({0: 100})
+        document = definition()
+        document.pop("pressure_limits_mbar")
+        document["steps"][0].update(sensor_setpoints={}, pressure_setpoints={"0": 2000})
+        plan = self.plan(document)
+        self.assertEqual(plan["armed_safety_limits"]["pressure_mbar"], {})
+        self.assertIn("Software pressure trips off for channels 0", plan["warnings"])
+        self.backend.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"], "timeout_s": 1})
+        observed = self.backend.call("observe")
+        self.assertFalse(observed["safety"]["armed"])
+        self.assertEqual(observed["safety"]["limits"], {})
+        self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 1})
+        self.wait_completed(plan["plan_id"])
+        observed = self.backend.call("observe")
+        self.assertFalse(observed["safety"]["tripped"])
+        self.assertFalse(observed["recording"]["active"])
+        self.assertTrue(all(c["requested_pressure_mbar"] in (None, 0) for c in observed["channels"]))
+
+    def test_emergency_still_stops_a_protocol_without_pressure_trips(self):
+        self.connect()
+        document = definition(10)
+        document.pop("pressure_limits_mbar")
+        plan = self.plan(document)
+        self.backend.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"], "timeout_s": 1})
+        self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 0.1})
+        stopped = self.backend.emergency_stop()
+        self.assertTrue(stopped["channels_zeroed"])
+        observed = self.backend.call("observe")
+        self.assertTrue(observed["safety"]["tripped"])
+        self.assertEqual({c["mode"] for c in observed["channels"]}, {"off"})
+        self.assertFalse(observed["recording"]["active"])
+
     def test_shutdown_reports_cleanup_errors(self):
         with patch.object(self.backend.service, "run") as run:
             run.return_value = type("Result", (), {"metadata": {"cleanup_errors": ["disconnect failed"]}})()

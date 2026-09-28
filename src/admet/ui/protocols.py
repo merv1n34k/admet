@@ -312,10 +312,11 @@ class ProtocolEditor(QWidget):
     def show_plan(self):
         plan = self.plan
         limits = plan["armed_safety_limits"]["pressure_mbar"]
+        trips = f"{json.dumps(limits)} mbar" if limits else "Off"
         if not self.dirty:
             self.summary.setText(
                 f"{plan['state']} · {plan['step_count']} steps · ETA {value_text(plan['expected_duration_s'], ' s')} "
-                f"+ confirmation waits · pressure trips {json.dumps(limits)} mbar"
+                f"+ confirmation waits · pressure trips {trips}"
                 + (f"\nUnmet guards: {', '.join(plan['unmet_guards'])}" if plan["unmet_guards"] else "")
             )
         self.summary.setToolTip(
