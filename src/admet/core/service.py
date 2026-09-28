@@ -547,6 +547,8 @@ class Admet:
                 artifact = self._run_artifacts[plan_id]
                 artifact["recording"] = True
                 artifact["artifacts"]["fluidics_csv"] = recording.get("csv_path")
+                artifact["artifacts"]["polling_origin_monotonic"] = self.polling_started_monotonic()
+                artifact["artifacts"]["recording_closed"] = False
             result = op.run(self, deepcopy(plan["normalized_settings"]))
         except Exception as exc:
             plan["state"] = "failed"
@@ -583,6 +585,7 @@ class Admet:
         try:
             if artifact and artifact["recording"]:
                 self.do("stop_recording")
+                artifact["artifacts"]["recording_closed"] = True
         finally:
             self._save_plan(plan)
             if artifact:

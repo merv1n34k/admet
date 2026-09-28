@@ -131,6 +131,76 @@ class DesktopBackendTests(unittest.TestCase):
             plan = self.plan()
         self.assertEqual(plan["state"], "planned")
 
+    def test_density_completion_closes_recording_without_running_calculations(self):
+        from tests.test_oil_density import recorded_density
+
+        document, csv_path, events_path, origin = recorded_density(self.tmp.name)
+        plan = self.plan(document)
+        service = self.backend.service
+        stored = service._protocol_plans[plan["plan_id"]]
+        store = service._plan_stores[plan["plan_id"]]
+        directory = store.begin(stored)
+        (directory / "events.jsonl").write_text(events_path.read_text())
+        service._run_artifacts[plan["plan_id"]] = {
+            "store": store, "directory": directory, "recording": True,
+            "artifacts": {"fluidics_csv": str(csv_path), "polling_origin_monotonic": origin},
+        }
+        stored["state"] = "completed"
+        with patch.object(service, "do") as stop, patch(
+            "admet.workflows.oil_density.analyze_density_run", side_effect=AssertionError("automatic analysis"),
+        ):
+            service._finish_plan(stored)
+        stop.assert_called_once_with("stop_recording")
+        published = self.backend.call("planned_protocols", {"plan_id": plan["plan_id"]})["plans"][0]
+        self.assertNotIn("analysis_result", published)
+        summary = json.loads((directory / "summary.json").read_text())
+        self.assertTrue(summary["artifacts"]["recording_closed"])
+        self.assertEqual(summary["artifacts"]["polling_origin_monotonic"], origin)
+        self.assertNotIn(plan["plan_id"], service._run_artifacts)
+
+    def test_density_mocked_fast_run_uses_native_gates_and_rejects_short_recording(self):
+        self.connect()
+        channels = self.backend.engine.channel_manager
+        channels.user_set_pressure(0, 13)
+        channels.user_set_pressure(2, 17)
+        plan = self.plan(template_documents()["density_dsurf"])
+        # Only the clock trigger is accelerated; device access remains simulated.
+        from admet.engines.acquisition import triggers
+
+        with patch.object(triggers.TimeTrigger, "check", return_value=True):
+            self.backend.call("control_protocol", {
+                "action": "execute", "plan_id": plan["plan_id"], "timeout_s": 0.1,
+            })
+            gates, last_gate = [], None
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                observed = self.backend.call("observe")
+                protocol = observed["protocol"]
+                if protocol["confirmation_message"] and protocol["step_index"] != last_gate:
+                    last_gate = protocol["step_index"]
+                    gates.append(last_gate)
+                    self.assertEqual(observed["channels"][1]["requested_pressure_mbar"], 0)
+                    self.assertEqual([observed["channels"][i]["requested_pressure_mbar"] for i in (0, 2)], [13, 17])
+                    self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 0.1})
+                completed = self.backend.call("planned_protocols", {"plan_id": plan["plan_id"]})["plans"][0]
+                if completed["state"] == "completed":
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("accelerated density run did not finish")
+        self.assertEqual(len(gates), 8)
+        self.assertNotIn("analysis_result", completed)
+        from admet.workflows.calculations import calculate_run
+
+        directory = Path(self.backend.workdir) / "records" / "protocols" / plan["plan_id"]
+        calculation = calculate_run(directory, "oil_density")
+        self.assertEqual(calculation["result"]["status"], "inconclusive")
+        self.assertIsNone(calculation["result"]["density_g_ml"])
+        observed = self.backend.call("observe")
+        self.assertFalse(observed["recording"]["active"])
+        self.assertEqual(observed["channels"][1]["requested_pressure_mbar"], 0)
+        self.assertEqual([observed["channels"][i]["requested_pressure_mbar"] for i in (0, 2)], [13, 17])
+
     def test_stale_cancelled_and_direct_start_refused(self):
         self.connect()
         plan = self.plan()

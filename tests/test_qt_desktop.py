@@ -299,6 +299,44 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertEqual(stored["steps"][0]["sensor_setpoints"]["0"], 25)
         self.assertEqual(self.panel.templates["pressure_flow_check"]["steps"][0]["sensor_setpoints"]["0"], 50)
 
+    def test_density_template_and_persistent_calculations_section(self):
+        from tests.test_calculations import archived_density
+
+        archived_density(self.backend.workdir)
+        self.window._select_stage(self.experiment_index)
+        self.panel.library.setCurrentIndex(self.panel.library.findData("@density_dsurf"))
+        with patch.object(self.backend.engine, "run", side_effect=AssertionError("actuation")):
+            self.panel.open_saved()
+            self.panel.build_plan()
+            self.drain()
+        self.assertEqual(self.panel.plan["expected_duration_s"], 420)
+        self.assertIn("5 cm ABOVE", self.panel.plan["steps"][1]["confirmation"])
+        self.assertNotIn("temperature", self.panel.editor.toPlainText())
+        self.assertNotIn("analysis", self.panel.document())
+        calculation_index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "calculations")
+        with patch.object(self.backend.engine, "run", side_effect=AssertionError("calculation actuated")):
+            self.window._select_stage(calculation_index)
+            panel = self.window._calculations
+            self.drain(lambda: not panel.tasks.busy)
+            self.assertEqual(panel.runs.count(), 1)
+            panel.calculate()
+            self.drain(lambda: not panel.tasks.busy)
+            self.assertIn("1.2000 g/mL", panel.output.toPlainText())
+            self.assertEqual(panel.history.count(), 1)
+            panel.calculation.setCurrentIndex(panel.calculation.findData("recording_summary"))
+            panel.calculate()
+            self.drain(lambda: not panel.tasks.busy)
+            self.assertEqual(panel.history.count(), 2)
+            self.window._select_stage(self.experiment_index)
+            self.window._select_stage(calculation_index)
+            self.drain(lambda: not panel.tasks.busy)
+            self.assertFalse(panel.isHidden())
+            self.assertEqual(panel.history.count(), 2)
+            self.window._reset_project_workflow()
+            self.window._select_stage(calculation_index)
+            self.drain(lambda: not panel.tasks.busy)
+            self.assertEqual(panel.history.count(), 2)
+
     def test_gui_json_save_plan_review_confirm_completion(self):
         self.backend.call("connect_fluidics")
         self.backend.call("apply_corrections")

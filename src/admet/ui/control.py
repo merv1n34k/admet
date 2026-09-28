@@ -394,6 +394,7 @@ class ControlWindow(QMainWindow):
         # editing any correction value makes the applied set stale again.
         self._corrections_applied = False
         self._preflight: PreflightPanel | None = None
+        self._calculations = None
         self._last_sweep_step = -1
         self._sweep_reading: tuple[list[float], list[float]] | None = None
         # A finished check writes its snapshot once; the completion state is polled.
@@ -689,6 +690,10 @@ class ControlWindow(QMainWindow):
 
     def _reset_project_workflow(self):
         self._detach_live_widgets()
+        if self._calculations is not None:
+            self._calculations.setParent(None)
+            self._calculations.hide()
+            self._calculations.set_project(None)
         if self._preflight is not None:
             for section in self._preflight.sections.values():
                 section.setParent(self._preflight)
@@ -984,6 +989,9 @@ class ControlWindow(QMainWindow):
 
     def _mount_stage(self, stage: Stage) -> None:
         self._detach_live_widgets()
+        if "calculations" in stage.features and self._calculations is not None:
+            self._calculations.setParent(None)
+            self._calculations.hide()
         if stage.id in self.protocol_editors:
             self.protocol_editors[stage.id].setParent(None)
         self._clear_layout(self.action_box_layout)
@@ -1024,6 +1032,9 @@ class ControlWindow(QMainWindow):
         self._render_channel_manager(stage)
         self._render_sections(stage)
         self._render_results(stage)
+        if "calculations" in stage.features and self._calculations is not None:
+            if not self._calculations.tasks.busy:
+                self._calculations.refresh()
 
     def _render_sections(self, stage: Stage) -> None:
         """Mount this stage's planning sections, moving them off whatever held them.
@@ -1185,8 +1196,9 @@ class ControlWindow(QMainWindow):
         return controls
 
     def _render_main(self, stage: Stage) -> None:
-        self.main_panel.setVisible("checkup" not in stage.features)
-        if "checkup" in stage.features:
+        offline = bool({"checkup", "calculations"}.intersection(stage.features))
+        self.main_panel.setVisible(not offline)
+        if offline:
             return
         display = QWidget()
         display.setObjectName("MainDisplay")
@@ -1569,8 +1581,9 @@ class ControlWindow(QMainWindow):
         return table
 
     def _render_results(self, stage: Stage) -> None:
-        self.results_panel.setVisible("checkup" not in stage.features)
-        if "checkup" in stage.features:
+        offline = bool({"checkup", "calculations"}.intersection(stage.features))
+        self.results_panel.setVisible(not offline)
+        if offline:
             return
         if has_feature(stage, "fluidics"):
             if self.monitor_table is None:
@@ -1615,6 +1628,19 @@ class ControlWindow(QMainWindow):
     def _render_action(self, stage: Stage) -> None:
         self.action_panel.setVisible("checkup" not in stage.features)
         if "checkup" in stage.features:
+            return
+        if "calculations" in stage.features:
+            from admet.ui.calculations import CalculationsPanel
+
+            self.action_panel.layout().itemAt(0).widget().setText("Calculations")
+            if self._calculations is None:
+                self._calculations = CalculationsPanel()
+            unchanged_project = self._calculations.project == self.api.workdir
+            self._calculations.set_project(self.api.workdir)
+            if unchanged_project and not self._calculations.tasks.busy:
+                self._calculations.refresh()
+            self.action_layout.addWidget(self._calculations)
+            self._calculations.show()
             return
         self.action_panel.layout().itemAt(0).widget().setText(
             "Protocol" if "json_protocol" in stage.features else "Action Panel"

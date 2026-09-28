@@ -1,0 +1,194 @@
+"""Offline calculations over archived runs, independent of the live service."""
+
+from copy import deepcopy
+from datetime import datetime, timezone
+import csv
+import hashlib
+import json
+from pathlib import Path
+import re
+from statistics import mean, stdev
+import uuid
+
+from admet.core.protocol_store import write_json
+from admet.workflows.oil_density import _finite, analyze_density_run
+
+
+def recorded_runs(project):
+    if not project:
+        return []
+    runs = []
+    for path in (Path(project) / "records" / "protocols").glob("*/summary.json"):
+        try:
+            summary = json.loads(path.read_text(encoding="utf-8"))
+            if summary.get("state") not in {"completed", "failed", "cancelled"}:
+                continue
+            name = summary.get("normalized_settings", {}).get("protocol", {}).get("name", path.parent.name)
+            runs.append({"directory": str(path.parent), "name": name,
+                         "at": summary.get("completed_at") or summary.get("executed_at") or "",
+                         "state": summary["state"]})
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return sorted(runs, key=lambda run: run["at"], reverse=True)
+
+
+def _recording_path(directory, summary):
+    value = summary.get("artifacts", {}).get("fluidics_csv")
+    if not isinstance(value, str) or not value:
+        raise ValueError("This run has no fluidics recording")
+    path = Path(value)
+    # Rebase project-local recordings first when an .admetp was moved to another PC.
+    normalized = value.replace("\\", "/")
+    if "/records/" in normalized:
+        relative = "records/" + normalized.rsplit("/records/", 1)[1]
+        candidate = directory.parents[2] / relative
+        if candidate.is_file():
+            return candidate
+    if not path.is_absolute():
+        path = directory.parents[2] / path
+    if not path.is_file():
+        raise ValueError(f"Recording not found: {value}")
+    return path
+
+
+def _density(context):
+    document = deepcopy(context["document"])
+    if "analysis" not in document:
+        # The protocol-only density templates store geometry in their explicit step labels.
+        # Never infer heights from step order or quietly assume an arbitrary run is density.
+        points = []
+        pattern = r"(Scout|Pass ([12])) ([0-9]+(?:\.[0-9]+)?) cm / ([0-9]+(?:\.[0-9]+)?) uL-min"
+        for index, step in enumerate(document["steps"], 1):
+            match = re.fullmatch(pattern, step.get("name", ""))
+            if match is None:
+                if any(step.get("sensor_setpoints", {}).values()):
+                    raise ValueError("This protocol has no recognized density height/pass labels")
+                continue
+            if step.get("sensor_setpoints") != {"1": float(match[4])}:
+                raise ValueError(f"Step {index}: density label and M1 flow target disagree")
+            if step.get("trigger_params", {}).get("duration_s") != 20:
+                raise ValueError("Protocol-only density recordings require the declared 20-second points")
+            points.append({"step": index, "pass": int(match[2]) if match[2] else 0,
+                           "height_cm": float(match[3]), "settle_s": 10})
+        if not points:
+            raise ValueError("Choose a density protocol run; heights cannot be recovered from a bare CSV")
+        document["analysis"] = {"type": "oil_density", "oil_id": document["name"], "points": points}
+    mapping = document["analysis"]["points"]
+    previous = None
+    for point in mapping:
+        group = (point["pass"], point["height_cm"])
+        if group != previous:
+            message = document["steps"][point["step"] - 1].get("confirm_message", "")
+            height = re.search(r"Set outlet ([0-9]+(?:\.[0-9]+)?) cm ABOVE", message)
+            if height is None or float(height[1]) != point["height_cm"]:
+                raise ValueError("Recorded height confirmation and calculation height disagree")
+        previous = group
+    result = analyze_density_run(
+        document, context["csv"], context["directory"] / "events.jsonl",
+        context["summary"].get("artifacts", {}).get("polling_origin_monotonic"),
+        completed=context["summary"].get("state") == "completed",
+    )
+    result["point_mapping"] = mapping
+    return result
+
+
+def _recording_summary(context):
+    with context["csv"].open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        columns = [key for key in (reader.fieldnames or [])
+                   if re.fullmatch(r"(?:pressure_[0-9]+_mbar|flow_[0-9]+_ul_min)", key)]
+        values = {key: [] for key in columns}
+        total = 0
+        for row in reader:
+            total += 1
+            for key in columns:
+                value = _finite(row.get(key))
+                if value is not None:
+                    values[key].append(value)
+    return {"status": "complete", "rows": total,
+            "note": "Whole-recording statistics include settling and operator waits; these are not density fits.",
+            "statistics": {key: {"samples": len(v), "missing": total - len(v),
+                                 "mean": mean(v) if v else None,
+                                 "std": stdev(v) if len(v) > 1 else None,
+                                 "min": min(v) if v else None, "max": max(v) if v else None}
+                           for key, v in values.items()}}
+
+
+CALCULATIONS = {
+    "oil_density": {"label": "Oil density", "version": 1, "calculate": _density,
+                    "files": ("protocol.json", "events.jsonl"),
+                    "description": "Two height passes from a density protocol; excludes scout and settling."},
+    "recording_summary": {"label": "Recording summary", "version": 1, "calculate": _recording_summary,
+                          "files": (),
+                          "description": "Measured pressure/flow statistics and missing-sample counts."},
+}
+
+
+def calculate_run(directory, calculation_id):
+    calculation = CALCULATIONS.get(calculation_id)
+    if calculation is None:
+        raise ValueError("Unknown calculation")
+    directory = Path(directory).resolve()
+    summary_path = directory / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if summary.get("state") not in {"completed", "failed", "cancelled"}:
+        raise ValueError("Wait until the recording has finished before calculating")
+    if summary.get("artifacts", {}).get("recording_closed") is False:
+        raise ValueError("This recording was not successfully closed; do not analyze an active file")
+    csv_path = _recording_path(directory, summary)
+    protocol_path = directory / "protocol.json"
+    sources = [summary_path, csv_path]
+    document = None
+    if "protocol.json" in calculation["files"]:
+        document = json.loads(protocol_path.read_text(encoding="utf-8"))
+    sources.extend(directory / name for name in calculation["files"])
+
+    def hashes():
+        return [{"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                for path in sources]
+    inputs = hashes()
+    result = calculation["calculate"]({"directory": directory, "document": document,
+                                        "summary": summary, "csv": csv_path})
+    if hashes() != inputs:
+        raise ValueError("Recording changed during calculation; refresh and try again")
+    payload = {"calculation_id": calculation_id, "calculation_version": calculation["version"],
+               "created_at": datetime.now(timezone.utc).isoformat(), "plan_id": summary.get("plan_id"),
+               "inputs": inputs, "result": result}
+    path = directory / "calculations" / f"{calculation_id}_{uuid.uuid4().hex}.json"
+    write_json(path, payload)
+    return {"path": str(path), **payload}
+
+
+def saved_results(directory):
+    if not directory:
+        return []
+    entries = []
+    for path in (Path(directory) / "calculations").glob("*.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if (not isinstance(payload.get("result"), dict)
+                    or not isinstance(payload.get("calculation_id"), str)
+                    or not isinstance(payload.get("created_at"), str)):
+                continue
+            entries.append({**payload, "path": str(path)})
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return sorted(entries, key=lambda result: result.get("created_at", ""), reverse=True)
+
+
+def result_text(payload):
+    result = payload["result"]
+    if payload["calculation_id"] == "oil_density":
+        value = result.get("density_g_ml")
+        lines = [f"Density: {value:.4f} g/mL" if value is not None else "Density: inconclusive"]
+        for entry in result.get("passes", []):
+            density = entry.get("density_g_ml")
+            lines.append(f"Pass {entry['pass']}: " + (f"{density:.4f} g/mL" if density is not None else "unavailable"))
+        difference = result.get("repeat_difference_percent")
+        if difference is not None:
+            lines.append(f"Pass disagreement: {difference:.2f}%")
+        lines.append(result.get("note", ""))
+        lines.extend(result.get("issues", []))
+    else:
+        lines = [result.get("note", ""), json.dumps(result, indent=2, ensure_ascii=False)]
+    return "\n".join(lines) + "\n\nSaved: " + payload["path"]

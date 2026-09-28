@@ -29,6 +29,19 @@ Checkup is a non-actuating design/calculation page; **Save Project** preserves
 the layout and entered readings. Gravimetry and pressure/flow checks are editable
 JSON templates in the protocol selector, not fixed experiment stages.
 
+**Calculations** is a separate TOC section: select **Oil density** or **Recording
+summary**, select a finished recorded run, then **Calculate**. It reads archived
+files, never operates devices, and saves each result separately under
+`records/protocols/<plan_id>/calculations/`. Saved results are available after
+reopening the project; Checkup and protocol execution do not run calculations.
+Density uses the confirmed density templates' height/pass labels and recorded
+step times (10 seconds settling, then sampling). Keep those labels unchanged;
+arbitrary CSV files without geometry and step timing cannot establish density.
+Older recordings without the saved polling clock origin return an inconclusive
+density result rather than guessing measurement windows. The calculation
+selector is backed by `workflows/calculations.py`; additional calculators can
+register there without adding experiment-specific TOC pages.
+
 See [Windows desktop setup and workflow](docs/windows-qt.md). Desktop operation
 is covered by offscreen Qt, simulated fluidics, and mocked camera tests on macOS;
 Windows drivers and physical devices still need acceptance testing on the target PC.

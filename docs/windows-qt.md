@@ -6,11 +6,30 @@ start or attach to MCP, a terminal interface, or a background server.
 
 ## Install and launch
 
-Have Git and uv available on the Windows PC. Obtain this branch, then run from
-the repository directory:
+Install Git and uv in PowerShell if needed:
 
 ```powershell
+winget install --id Git.Git -e --source winget
+winget install --id astral-sh.uv -e --source winget
+```
+
+Close and reopen PowerShell so both commands are on PATH. For a fresh install:
+
+```powershell
+git clone --branch feat/windows-qt-protocols https://github.com/merv1n34k/admet.git admet2
+cd admet2
+uv python install 3.12
+uv sync --locked --extra control
+.\start-admet.cmd
+```
+
+For an existing clone, finish any run and close ADMET before updating. Preserve
+local edits; do not reset or overwrite them to force an update. From the repository:
+
+```powershell
+git fetch origin
 git switch feat/windows-qt-protocols
+git pull --ff-only origin feat/windows-qt-protocols
 uv sync --locked --extra control
 .\start-admet.cmd
 ```
@@ -69,7 +88,7 @@ lock does not coordinate with those other programs.
    A changed connection, correction set, project, or safety context requires a
    new plan. Editing JSON or built-in parameters disables execution until you re-plan.
 8. When a gate appears, **Confirm** applies that step's targets. **Skip**,
-   **Pause**, and **Abort** zero all channels. **Resume** resumes a paused run.
+   **Pause**, and **Abort** zero protocol-owned channels. **Resume** resumes a paused run.
    Read the event log and monitor the rig throughout the run.
 
 The protocol's own confirmation gates are the only run confirmations. A step
@@ -157,12 +176,37 @@ liquid properties are calculated from the currently selected liquid profiles.
 
 ## Storage and recording
 
+### Calculations
+
+The separate **Calculations** TOC page reads finished runs from the current
+project. Choose **Oil density** or **Recording summary**, select the recorded run,
+then click **Calculate**. It requires no device connection and makes no hardware
+calls. **Refresh** finds newly finished runs. The saved-result selector restores
+previous calculations after reopening the project; recalculation adds a new result.
+
+Density templates are **density dsurf**, **density evagreen** and **density custom
+mix**. All use channel 1 only: 5/15/20 µL/min for 20 seconds per point, one scout
+and two opposite height passes. See [density method](oil_density_experiment.md).
+The files contain ordinary protocol steps, not mandatory analysis metadata.
+Density analysis recognizes their explicit height/pass labels and validates them
+against the confirmation text; keep these labels intact. Unknown geometry is
+refused rather than guessed. Older recordings lacking a polling clock origin
+produce an inconclusive density result. A whole-recording summary can still be used.
+
+Results contain source-file hashes, calculator version, per-point statistics,
+fit diagnostics and warnings. Missing measurements remain null. Calculations do
+not alter raw data, run state or device settings. No automatic calculation runs
+on protocol completion, and no calculation is added to Checkup.
+
+### Project files
+
 The schema is unchanged; see [JSON protocols](json_protocols.md). No YAML or
 alternate runner is used.
 
 - `protocols/<name>.json`: reusable definitions.
 - `plans/<plan_id>.json`: plan audit records.
 - `records/protocols/<plan_id>/`: exact definition, plan, event log and summary.
+- `records/protocols/<plan_id>/calculations/`: separately saved calculation results.
 - `records/fluidics/`: CSV recordings referenced by the run summary.
 - `manifest.json`: project definitions and run references.
 

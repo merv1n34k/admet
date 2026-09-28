@@ -293,6 +293,13 @@ def create_control_workflow() -> Workflow:
             protocol_stage("experiment_1", "6. Experiment 1"),
             protocol_stage("wash", "7. Wash", builtin="wash"),
             Stage(
+                "calculations", "Calculations",
+                instructions=("Choose a saved run and a calculation. Results stay with the recording in the project.",),
+                features=("calculations",),
+                actions=(StageAction("Continue", completes=True),),
+                show_settings=False,
+            ),
+            Stage(
                 "cleanup",
                 "Cleanup",
                 description="Disconnect devices and finish the control session.",
