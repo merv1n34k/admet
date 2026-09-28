@@ -114,6 +114,15 @@ def load(path):
     return loads(Path(path).read_text(encoding="utf-8"))
 
 
+def template_documents():
+    from importlib.resources import files
+
+    directory = files("admet.workflows").joinpath("templates")
+    documents = [loads(path.read_text(encoding="utf-8")) for path in directory.iterdir()
+                 if path.name.endswith(".json")]
+    return {document["name"]: document for document in documents}
+
+
 def validate_channels(document, channels):
     by_index = {str(channel["index"]): channel["detected"] for channel in channels}
     if not by_index:

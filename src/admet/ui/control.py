@@ -640,6 +640,11 @@ class ControlWindow(QMainWindow):
 
     def _reset_project_workflow(self):
         self._detach_live_widgets()
+        if self._preflight is not None:
+            for section in self._preflight.sections.values():
+                section.setParent(self._preflight)
+            self._preflight.deleteLater()
+            self._preflight = None
         self.page_scroll.takeWidget()
         for page in self.stage_pages.values():
             page.deleteLater()
@@ -767,6 +772,9 @@ class ControlWindow(QMainWindow):
                 liquids=self._channel_liquids,
                 parent=self,
             )
+            saved = self.api.session.metadata.get("qt_checkup") if self.api.session else None
+            if saved:
+                self._preflight.load_snapshot(saved)
         return self._preflight
 
     def _channel_liquids(self) -> dict[str, tuple[float, float]]:
@@ -849,7 +857,7 @@ class ControlWindow(QMainWindow):
                 return
             target = Path(path)
         try:
-            self.api.save_project()
+            self.api.save_project(checkup=self._preflight.workspace_state() if self._preflight else None)
         except Exception as exc:
             self._set_status("Project save failed", "danger")
             self._notify(f"Project save failed: {exc}", "danger", timeout_ms=0)
@@ -998,9 +1006,9 @@ class ControlWindow(QMainWindow):
         what did this rig read last time?
         """
         kind = self._check_kind(stage)
-        if not kind:
+        if not kind and "checkup" not in stage.features:
             return None
-        panel, body = _panel_box(f"Previous {kind} checks")
+        panel, body = _panel_box(f"Previous {kind or 'system'} checks")
         hint = QLabel(
             "Every run of this check that has been recorded, on this rig, in any "
             "project. A run that was stopped part way is listed with what it did "
@@ -1038,7 +1046,7 @@ class ControlWindow(QMainWindow):
             return
         stage = stage or self.workflow.current_stage(self.workflow_state)
         kind = self._check_kind(stage)
-        records = [record for record in self._check_history() if record.kind == kind]
+        records = [record for record in self._check_history() if not kind or record.kind == kind]
         self._check_history_rows = records
         table.setRowCount(len(records) or 1)
         if not records:
@@ -1128,6 +1136,9 @@ class ControlWindow(QMainWindow):
         return controls
 
     def _render_main(self, stage: Stage) -> None:
+        self.main_panel.setVisible("checkup" not in stage.features)
+        if "checkup" in stage.features:
+            return
         display = QWidget()
         display.setObjectName("MainDisplay")
         layout = QHBoxLayout(display)
@@ -1509,6 +1520,9 @@ class ControlWindow(QMainWindow):
         return table
 
     def _render_results(self, stage: Stage) -> None:
+        self.results_panel.setVisible("checkup" not in stage.features)
+        if "checkup" in stage.features:
+            return
         if has_feature(stage, "fluidics"):
             if self.monitor_table is None:
                 self.monitor_table = FluidicsMonitorTable()
@@ -1550,6 +1564,9 @@ class ControlWindow(QMainWindow):
         fit_table_height(self.video_table)
 
     def _render_action(self, stage: Stage) -> None:
+        self.action_panel.setVisible("checkup" not in stage.features)
+        if "checkup" in stage.features:
+            return
         self.action_panel.layout().itemAt(0).widget().setText(
             "Protocol" if "json_protocol" in stage.features else "Action Panel"
         )
@@ -2652,7 +2669,6 @@ class ControlWindow(QMainWindow):
     def _stage_params(self, stage: Stage) -> list[Param]:
         params: dict[str, Param] = {}
         hidden = {
-            "simulated",
             "camera_index",
             "start_polling",
             "pipeline_name",
@@ -2688,6 +2704,9 @@ class ControlWindow(QMainWindow):
             editor.addItem("False", False)
             editor.addItem("True", True)
             editor.setCurrentIndex(1 if bool(value) else 0)
+            if param.name == "simulated":
+                editor.setEnabled(not self._fluigent_ready() and not self.api.simulated)
+                editor.setToolTip("Choose before connecting. Disconnect before changing the backend.")
             editor.currentIndexChanged.connect(
                 lambda _index, widget=editor, name=param.name: self._set_value(name, widget.currentData())
             )
@@ -2765,6 +2784,9 @@ class ControlWindow(QMainWindow):
             editor.blockSignals(was_blocked)
 
     def _set_value(self, name: str, value: Any) -> None:
+        if name == "simulated" and (self._fluigent_ready() or self.api.simulated):
+            self._notify("Disconnect Fluigent before changing simulation mode.", "warning")
+            return
         param = self._param_by_name(name)
         try:
             self.values[name] = param.validate(value)

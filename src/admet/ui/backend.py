@@ -45,10 +45,15 @@ class DesktopBackend:
         with self.lock:
             return self.service.open_project(path)
 
-    def save_project(self):
+    def save_project(self, *, checkup=None):
         with self.lock:
             self.service._require_project_idle()
             if self.service.project:
+                if checkup is not None:
+                    project = self.service.project
+                    project.session = replace(project.session, metadata={
+                        **project.session.metadata, "qt_checkup": checkup,
+                    })
                 self.service.project.save()
 
     def save_protocol_order(self, entries):

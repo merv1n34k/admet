@@ -30,7 +30,8 @@ class DesktopWindowTests(unittest.TestCase):
         self.backend.create_project(Path(self.tmp.name) / "gui.admetp")
         self.window = ControlWindow(self.backend)
         self.window.timer.stop()
-        self.panel = self.window._protocol_editor(self.window.workflow.stages[4])
+        self.experiment_index = next(i for i, s in enumerate(self.window.workflow.stages) if s.id == "experiment_1")
+        self.panel = self.window._protocol_editor(self.window.workflow.stages[self.experiment_index])
         self.window.show()
 
     def tearDown(self):
@@ -64,10 +65,85 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertTrue(self.backend.service.state()["corrections"])
         self.assertIn("TEST SIMULATION", self.window.windowTitle())
 
+    def test_fluigent_simulation_selector_is_visible_and_locked_when_connected(self):
+        self.backend.simulated = False
+        with patch.object(self.window, "_ensure_fluigent_availability"):
+            self.window._select_stage(1)
+            self.app.processEvents()
+            selector = self.window._param_editors["simulated"]
+            self.assertTrue(selector.isVisible())
+            self.assertTrue(selector.isEnabled())
+            selector.setCurrentIndex(selector.findData(True))
+            self.window._run("connect_fluidics")
+            self.drain()
+            self.assertTrue(self.backend.engine.hardware.state.simulated)
+            self.assertFalse(self.window._param_editors["simulated"].isEnabled())
+            self.window._set_value("simulated", False)
+            self.assertTrue(self.window.values["simulated"])
+
+    def test_checkup_is_non_actuating_and_preserves_project_layout(self):
+        ids = [s.id for s in self.window.workflow.stages]
+        self.assertEqual(ids[3:6], ["priming", "checkup", "experiment_1"])
+        self.assertNotIn("gravimetry", ids)
+        self.assertNotIn("characterise", ids)
+        with patch.object(self.backend.engine, "run", side_effect=AssertionError("checkup actuated")):
+            self.window._select_stage(ids.index("checkup"))
+            self.app.processEvents()
+            panel = self.window._ensure_preflight()
+            self.assertTrue(panel.scheme.isVisible())
+            self.assertFalse(self.window.main_panel.isVisible())
+            self.assertFalse(self.window.action_panel.isVisible())
+            stage = self.window.workflow.stages[ids.index("checkup")]
+            self.assertFalse(stage.pipeline)
+            self.assertNotIn("Execute", [s[0] for s in self.window._action_button_specs(stage)])
+            length, _bore = panel._segment_inputs["Oil L"][0]
+            length.setValue(37)
+            panel.cells_flow.setValue(11)
+            panel.beads_flow.setValue(22)
+            panel.record_sweep_point(0, [None, 12], [None, 3])
+            panel._gravimetric_rows[0]["empty"].setValue(1.25)
+            self.window._save_project()
+        saved = self.backend.session.metadata["qt_checkup"]
+        self.assertIsNone(saved["flow_checks"][0]["samples"][0]["pressure_mbar"])
+        self.assertEqual(saved["conditions"]["layout"]["channels"][1]["flow_ul_min"], 11)
+        self.assertEqual(saved["conditions"]["layout"]["channels"][2]["flow_ul_min"], 22)
+        self.window._load_project_path(Path(self.backend.workdir))
+        self.window._select_stage(ids.index("checkup"))
+        panel = self.window._ensure_preflight()
+        self.assertEqual(panel._segment_inputs["Oil L"][0][0].value(), 37)
+        self.assertEqual(panel._system_rows[0][1][0].value(), 12)
+        self.assertEqual(panel._system_rows[0][0][0].text(), "—")
+        self.assertEqual(panel._gravimetric_rows[0]["empty"].value(), 1.25)
+        self.assertEqual(panel._gravimetric_rows[0]["full"].text(), "—")
+        self.assertEqual(panel.flow_checks(), ())
+
+    def test_templates_are_editable_json_not_fixed_stages(self):
+        self.window._select_stage(self.experiment_index)
+        for name in ("gravimetry", "pressure_flow_check"):
+            self.panel.library.setCurrentIndex(self.panel.library.findData("@" + name))
+            with patch.object(self.backend.engine, "run", side_effect=AssertionError("template actuated")):
+                self.panel.open_saved()
+                self.panel.build_plan()
+                self.drain()
+            self.assertEqual(self.panel.plan["operation_id"], "run_json_protocol")
+            self.assertEqual(self.panel.document()["name"], name)
+            self.assertTrue(self.panel.plan["steps"][0]["confirmation"])
+            self.assertTrue(all(s["on_complete"] == "zero" for s in self.panel.plan["steps"]))
+        document = self.panel.document()
+        document["name"] = "my_flow_check"
+        document["steps"][0]["sensor_setpoints"]["0"] = 25
+        self.panel.set_document(document)
+        self.assertFalse(self.panel.executable)
+        self.panel.save()
+        self.drain()
+        stored = self.backend.call("list_protocols", {"name": "my_flow_check"})["protocol"]
+        self.assertEqual(stored["steps"][0]["sensor_setpoints"]["0"], 25)
+        self.assertEqual(self.panel.templates["pressure_flow_check"]["steps"][0]["sensor_setpoints"]["0"], 50)
+
     def test_gui_json_save_plan_review_confirm_completion(self):
         self.backend.call("connect_fluidics")
         self.backend.call("apply_corrections")
-        self.window._select_stage(4)
+        self.window._select_stage(self.experiment_index)
         self.panel.set_document(definition())
         self.panel.save()
         self.drain()
@@ -180,7 +256,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertFalse(editor.executable)
 
     def test_protocol_selector_and_preview_are_between_actions_and_graphs(self):
-        self.window._select_stage(4)
+        self.window._select_stage(self.experiment_index)
         page = self.window.current_stage_page
         self.app.processEvents()
         self.assertLess(page.action_box_panel.y(), page.action_panel.y())
@@ -198,13 +274,13 @@ class DesktopWindowTests(unittest.TestCase):
         self.drain()
         self.assertTrue(self.panel.table.isVisible())
         self.window._select_stage(0)
-        self.window._select_stage(4)
+        self.window._select_stage(self.experiment_index)
         self.app.processEvents()
         self.assertTrue(self.panel.library.isVisible())
         self.assertTrue(self.panel.table.isVisible())
 
     def test_saved_custom_toc_order_survives_project_reopen(self):
-        self.window._select_stage(4)
+        self.window._select_stage(self.experiment_index)
         self.panel.set_document(definition())
         self.panel.save()
         self.drain()
@@ -275,7 +351,7 @@ class DesktopWindowTests(unittest.TestCase):
     def test_execute_uses_only_the_native_protocol_confirmation(self):
         self.backend.call("connect_fluidics")
         self.backend.call("apply_corrections")
-        self.window._select_stage(4)
+        self.window._select_stage(self.experiment_index)
         self.panel.set_document(definition())
         self.panel.build_plan()
         self.drain()
@@ -314,7 +390,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.window._confirmation_dialog.button(QMessageBox.StandardButton.Ok).click()
         self.drain()
         self.assertFalse(self.backend.engine.safety_state()["tripped"])
-        self.window._select_stage(4)
+        self.window._select_stage(self.experiment_index)
         self.panel.set_document(definition())
         self.panel.save()
         self.drain()

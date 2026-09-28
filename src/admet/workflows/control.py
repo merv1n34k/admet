@@ -87,7 +87,7 @@ CAMERA_MAIN_SETTINGS = (
     "camera_pixel_format",
     "camera_readout",
 )
-FLUIDICS_MAIN_SETTINGS = ()
+FLUIDICS_MAIN_SETTINGS = ("simulated",)
 
 
 # A channel is set by picking a liquid; the raw correction terms the profile writes
@@ -117,21 +117,26 @@ def protocol_stage(stage_id, label, *, builtin=""):
             params = tuple(replace(p, default=1800.0) if p.name == "wash_pressure_mbar" else p for p in params)
         params += (Param("desktop_pressure_limit_mbar", "Pressure trip (mbar)", ParamKind.FLOAT,
                          default=1900.0, minimum=1.0, maximum=1900.0),)
+    options = {"builtin": builtin, "main": tuple(p.name for p in params)}
     return Stage(
         stage_id, label, pipeline=True,
         instructions=("Review the targets, build a plan, then Execute. Confirm each gate when ready.",),
         settings=ParamSchema(params),
         editor=CONTROL_LIVE_EDITOR, results=CONTROL_RESULTS,
         features=("fluidics", "json_protocol"),
-        settings_options={"builtin": builtin, "main": tuple(p.name for p in params)},
+        settings_options=options,
     )
 
 
 def builtin_document(kind, values):
-    from admet.workflows.protocols import build_priming_protocol, build_wash_protocol
+    from admet.workflows.protocols import (
+        build_priming_protocol, build_wash_protocol,
+    )
     from admet.workflows.json_protocol import normalize
 
-    builder = build_priming_protocol if kind == "priming" else build_wash_protocol
+    builder = {
+        "priming": build_priming_protocol, "wash": build_wash_protocol,
+    }[kind]
     steps = []
     for step in builder(values):
         params = step.trigger_params
@@ -276,8 +281,16 @@ def create_control_workflow() -> Workflow:
                 },
             ),
             protocol_stage("priming", "4. Priming", builtin="priming"),
-            protocol_stage("experiment_1", "5. Experiment 1"),
-            protocol_stage("wash", "6. Wash", builtin="wash"),
+            Stage(
+                "checkup", "5. Checkup / chip layout",
+                instructions=("Review your chip/tubing layout and calculations. Save the project to keep them. "
+                              "Measurement runs are editable JSON protocols in Experiment steps; this page does not actuate.",),
+                features=("checkup",),
+                actions=(StageAction("Continue", completes=True),),
+                settings_options={"sections": ("flow", "layout", "system", "gravimetric", "consumption")},
+            ),
+            protocol_stage("experiment_1", "6. Experiment 1"),
+            protocol_stage("wash", "7. Wash", builtin="wash"),
             Stage(
                 "cleanup",
                 "Cleanup",

@@ -13,6 +13,7 @@ consistent, since every section is a function of the same flows and liquids.
 from __future__ import annotations
 
 from collections.abc import Callable
+import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
@@ -116,11 +117,12 @@ def _value_label(text: str = "-") -> QLabel:
     return label
 
 
-def _safe_at(values: list[float], index: int) -> float:
+def _safe_at(values: list[float], index: int) -> float | None:
     try:
-        return float(values[index])
+        value = float(values[index])
+        return value if math.isfinite(value) else None
     except (IndexError, TypeError, ValueError):
-        return 0.0
+        return None
 
 
 def _node(text: str) -> QLabel:
@@ -459,7 +461,7 @@ class PreflightPanel(QWidget):
             self._segment_inputs[channel] = rows
 
         # Built before the scheme: it colours its pipes against this budget.
-        self.pressure_limit = _spin(0.0, 20000.0, 2000.0, " mbar", decimals=0)
+        self.pressure_limit = _spin(1.0, 1900.0, 1900.0, " mbar", decimals=0)
         self.pressure_limit.valueChanged.connect(self.recalculate)
 
         self.outlet_length = _spin(0.0, 10000.0, 20.0, " cm")
@@ -485,11 +487,12 @@ class PreflightPanel(QWidget):
         limits = QGridLayout()
         limits.setContentsMargins(0, 4, 0, 0)
         limits.setHorizontalSpacing(10)
-        _field(limits, 0, 0, "Pressure limit", self.pressure_limit)
+        _field(limits, 0, 0, "Pressure budget", self.pressure_limit)
         body.addLayout(limits)
         note = QLabel(
             "One unit's ceiling, applied per channel rather than shared; where the "
-            "units differ, enter the lowest. Tubing only -- the chip is measured below."
+            "units differ, enter the lowest. Calculation only; hardware trips belong to the protocol. "
+            "Tubing only -- the chip is measured below."
         )
         note.setObjectName("StageSummary")
         note.setWordWrap(True)
@@ -522,7 +525,7 @@ class PreflightPanel(QWidget):
         bore_mm = float(bore.currentData())
         if length.value() <= 0:
             return (0.0, 0.0)
-        flows = (self.oil_flow.value(), self.beads_flow.value(), self.cells_flow.value())
+        flows = (self.oil_flow.value(), self.cells_flow.value(), self.beads_flow.value())
         flow = flows[row] if row < len(flows) else 0.0
         drop = Segment(length.value(), bore_mm).resistance(
             self._channel_viscosity(channel)
@@ -589,7 +592,7 @@ class PreflightPanel(QWidget):
         return 1.0
 
     def _channel_paths(self) -> list[ChannelPath]:
-        flows = (self.oil_flow.value(), self.beads_flow.value(), self.cells_flow.value())
+        flows = (self.oil_flow.value(), self.cells_flow.value(), self.beads_flow.value())
         paths = []
         for index, channel in enumerate(self._channel_labels):
             rows = self._segment_inputs.get(channel, [])
@@ -636,10 +639,9 @@ class PreflightPanel(QWidget):
     def _build_system_panel(self) -> QWidget:
         panel, body = _panel("Measured system resistance")
         protocol = QLabel(
-            "Start Sweep fills this in: every channel is scaled together, 20% to 100% "
-            "of target, so the phase ratio holds and each channel stays linear in its "
-            "own flow. Rows can also be typed by hand. Re-run it after any change to "
-            "the chip, the tubing or the liquids."
+            "Enter pressure/flow pairs from a recorded run, or load a previous check below. "
+            "Use a fixed phase ratio for the resistance fit. This calculator does not start a sweep "
+            "or automatically associate results with a protocol. Re-measure after changing the setup."
         )
         protocol.setObjectName("StageSummary")
         protocol.setWordWrap(True)
@@ -670,8 +672,10 @@ class PreflightPanel(QWidget):
             table.setItem(index, 0, step)
             row: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
             for channel_index in range(len(self._channel_labels)):
-                pressure = _spin(0.0, 20000.0, 0.0, "", decimals=0)
-                flow = _spin(0.0, 20000.0, 0.0, "", decimals=2)
+                pressure = _spin(-1.0, 20000.0, -1.0, "", decimals=0)
+                flow = _spin(-1.0, 20000.0, -1.0, "", decimals=2)
+                pressure.setSpecialValueText("—")
+                flow.setSpecialValueText("—")
                 pressure.valueChanged.connect(self.recalculate)
                 flow.valueChanged.connect(self.recalculate)
                 table.setCellWidget(index, 1 + channel_index * 2, pressure)
@@ -732,7 +736,7 @@ class PreflightPanel(QWidget):
         self,
     ) -> list[tuple[str, tuple[tuple[float, float], ...], SystemResistance, float]]:
         """Channels with enough swept points to fit, as (channel, samples, fit, target)."""
-        targets = (self.oil_flow.value(), self.beads_flow.value(), self.cells_flow.value())
+        targets = (self.oil_flow.value(), self.cells_flow.value(), self.beads_flow.value())
         measured = []
         for index, channel in enumerate(self._channel_labels):
             samples = tuple(
@@ -843,7 +847,7 @@ class PreflightPanel(QWidget):
         for row in self._gravimetric_rows:
             empty = row["empty"].value()
             full = row["full"].value()
-            if full <= empty:
+            if empty < 0 or full <= empty:
                 continue
             channel = str(row["channel"])
             runs_by_channel.setdefault(channel, []).append(GravimetricRun(channel, empty, full))
@@ -926,6 +930,10 @@ class PreflightPanel(QWidget):
             self.outlet_length.setValue(float(outlet.get("length_cm") or 0.0))
             self._select_bore(self.outlet_bore, float(outlet.get("bore_mm") or 0.0))
 
+        self.clear_sweep()
+        for row in self._gravimetric_rows:
+            row["empty"].setValue(-1.0)
+            row["full"].setValue(-1.0)
         for check in data.get("flow_checks", ()) or ():
             if not isinstance(check, dict):
                 continue
@@ -936,8 +944,8 @@ class PreflightPanel(QWidget):
                 if not isinstance(sample, dict) or step >= len(self._system_rows):
                     continue
                 pressure_box, flow_box = self._system_rows[step][column]
-                pressure_box.setValue(float(sample.get("pressure_mbar") or 0.0))
-                flow_box.setValue(float(sample.get("flow_ul_min") or 0.0))
+                pressure_box.setValue(-1.0 if sample.get("pressure_mbar") is None else float(sample["pressure_mbar"]))
+                flow_box.setValue(-1.0 if sample.get("flow_ul_min") is None else float(sample["flow_ul_min"]))
                 restored = True
 
         for check in data.get("dispense_checks", ()) or ():
@@ -954,12 +962,39 @@ class PreflightPanel(QWidget):
             for row, weights in zip(rows, check.get("weights_g", ()) or (), strict=False):
                 if not isinstance(weights, dict):
                     continue
-                row["empty"].setValue(float(weights.get("empty") or 0.0))
-                row["full"].setValue(float(weights.get("full") or 0.0))
+                row["empty"].setValue(-1.0 if weights.get("empty") is None else float(weights["empty"]))
+                row["full"].setValue(-1.0 if weights.get("full") is None else float(weights["full"]))
                 restored = True
 
+        for name in ("setups", "replicates", "run_time", "overage"):
+            value = data.get("consumption", {}).get(name)
+            if isinstance(value, (int, float)):
+                getattr(self, name).setValue(value)
         self.recalculate()
         return restored
+
+    def workspace_state(self):
+        def measured(box):
+            return box.value() if box.value() >= 0 else None
+
+        return {
+            "conditions": self.conditions().to_dict(),
+            "flow_checks": [
+                {"channel": channel, "samples": [
+                    {"pressure_mbar": measured(row[index][0]), "flow_ul_min": measured(row[index][1])}
+                    for row in self._system_rows
+                ]} for index, channel in enumerate(self._channel_labels)
+            ],
+            "dispense_checks": [
+                {"channel": channel, "target_ul": self.target_volume.value(),
+                 "flow_ul_min": self.dispense_flow.value(), "weights_g": [
+                     {"empty": measured(row["empty"]), "full": measured(row["full"])}
+                     for row in self._gravimetric_rows if row["channel"] == channel
+                 ]} for channel in self._channel_labels
+            ],
+            "consumption": {name: getattr(self, name).value()
+                            for name in ("setups", "replicates", "run_time", "overage")},
+        }
 
     def _channel_column(self, channel: str) -> int | None:
         try:
@@ -983,15 +1018,16 @@ class PreflightPanel(QWidget):
             return
         row = self._system_rows[step]
         for index, (pressure_box, flow_box) in enumerate(row):
-            pressure_box.setValue(_safe_at(pressures, index))
-            flow_box.setValue(_safe_at(flows, index))
+            pressure, flow = _safe_at(pressures, index), _safe_at(flows, index)
+            pressure_box.setValue(-1.0 if pressure is None else pressure)
+            flow_box.setValue(-1.0 if flow is None else flow)
         self.recalculate()
 
     def clear_sweep(self) -> None:
         for row in self._system_rows:
             for pressure_box, flow_box in row:
-                pressure_box.setValue(0.0)
-                flow_box.setValue(0.0)
+                pressure_box.setValue(-1.0)
+                flow_box.setValue(-1.0)
         self.recalculate()
 
     def _set_verdict(self, feasible: bool | None, detail: str = "") -> None:
@@ -1142,8 +1178,10 @@ class PreflightPanel(QWidget):
                 label = QLabel(channel if replicate == 0 else "")
                 label.setObjectName("MutedText")
                 density = _value_label()
-                empty = _spin(0.0, 10000.0, 0.0, " g", decimals=4)
-                full = _spin(0.0, 10000.0, 0.0, " g", decimals=4)
+                empty = _spin(-1.0, 10000.0, -1.0, " g", decimals=4)
+                full = _spin(-1.0, 10000.0, -1.0, " g", decimals=4)
+                empty.setSpecialValueText("—")
+                full.setSpecialValueText("—")
                 empty.valueChanged.connect(self.recalculate)
                 full.valueChanged.connect(self.recalculate)
                 net = _value_label()
@@ -1211,7 +1249,7 @@ class PreflightPanel(QWidget):
             row["density"].setText(f"{density:g}" if density else "-")
             empty = row["empty"].value()
             full = row["full"].value()
-            if full <= empty:
+            if empty < 0 or full <= empty or not density:
                 row["net"].setText("-")
                 row["volume"].setText("-")
                 row["factor"].setText("-")

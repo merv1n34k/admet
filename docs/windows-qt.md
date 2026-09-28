@@ -27,7 +27,9 @@ uv run --locked --extra control admet qt
 uv run --locked --extra control admet qt --project "D:\Experiments\today.admetp"
 ```
 
-The desktop is live-only; there are no mode flags or simulation selectors.
+The launcher has no mode flags. Step 2 restores the **Simulated Hardware** selector
+for Fluigent (False = real hardware, True = simulation). Choose before connecting;
+the selector is locked while connected. It does not change the camera backend.
 Startup does not connect devices. Click Connect when the physical setup is ready.
 Simulation remains an internal test fixture, not a desktop operating mode.
 
@@ -50,7 +52,7 @@ lock does not coordinate with those other programs.
 4. The TOC keeps **Priming** and **Wash** as fixed stages. Use **+ Protocol step**
    to insert custom experiments between them. Each experiment has a **Protocol**
    section between the existing action bar and graphs/camera: select a saved
-   definition and **Open saved**, **Import JSON**, or **Edit JSON**.
+   definition or template and **Open**, **Import JSON**, or **Edit JSON**.
    **Save JSON** validates and stores it in the project. Saved custom TOC order
    and protocol references are restored when you reopen the project.
 5. **Plan**, in the existing action bar, freezes the definition without setting any channel,
@@ -80,6 +82,30 @@ forms, using the same guarded JSON plan/recording backend. They have explicit
 timeouts and a default 1900 mbar pressure trip. The old 2000 mbar wash hold is
 replaced with an editable 1800 mbar default, below that trip and the controller
 ceiling. Review these values for the physical rig before execution.
+
+### Checkup and reusable measurement protocols
+
+**Checkup / chip layout** restores the original tubing map, flow split,
+resistance fit, gravimetric calculator and consumption estimates. It does not
+operate devices or change a protocol. **Save Project** preserves the map and
+entered readings, including incomplete rows. Previous check records can be loaded
+from the history table; a historical result is not a fresh validation of the setup.
+The pressure budget here is a calculation input, not an armed hardware limit.
+
+The Experiment selector includes **Template · gravimetry** and
+**Template · pressure flow check**. These are ordinary JSON documents: open,
+edit targets/steps, save under your own name, then Plan and Execute. They add no
+fixed workflow stages and use the same recording, safety and confirmation path.
+Gravimetry starts with one 50 µL dispense per channel at 50 µL/min. The flow-check
+example increases Oil L from 50 to 250 µL/min with proportional aqueous targets;
+its stability trigger observes Oil L only, with a 30-second timeout per step.
+Both examples use 1900 mbar trips and zero outputs at step completion.
+They are starting examples, not approval for a physical setup.
+
+Results remain in the normal protocol recordings. The Checkup calculator accepts
+entered measurements or historical check records; it does not automatically infer
+which arbitrary JSON steps belong to a calibration or fit. The layout is saved;
+liquid properties are calculated from the currently selected liquid profiles.
 
 ## Storage and recording
 

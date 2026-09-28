@@ -14,15 +14,20 @@ uv sync --locked --extra control
 With the project environment activated, open the app with `admet qt`
 (optionally `--project PATH`). Without activation, use `uv run --extra control admet qt`.
 
-The desktop controls real devices; there is no live/simulated switch.
+The desktop defaults to real devices. Step 2 has a **Simulated Hardware** selector
+for Fluigent; choose before connecting. This does not simulate the camera.
 Devices remain disconnected until you click Connect. Create/open an
 `.admetp` project, connect devices, apply corrections, then use the original
-TOC: **Priming → Experiment steps → Wash**. Add experiments with **+ Protocol
+TOC: **Priming → Checkup / chip layout → Experiment steps → Wash**. Add experiments with **+ Protocol
 step**. Select/import JSON and review the plan directly between the existing
 action bar and graphs/camera; use **Plan** and **Execute** in that action bar.
 Confirmation gates, pause/skip/abort, emergency stop, and run artifacts use the
 existing backend. Closing the window stops and disconnects; it does not detach.
 Execute uses the protocol's own confirmation gates, without an extra approval prompt.
+
+Checkup is a non-actuating design/calculation page; **Save Project** preserves
+the layout and entered readings. Gravimetry and pressure/flow checks are editable
+JSON templates in the protocol selector, not fixed experiment stages.
 
 See [Windows desktop setup and workflow](docs/windows-qt.md). Desktop operation
 is covered by offscreen Qt, simulated fluidics, and mocked camera tests on macOS;

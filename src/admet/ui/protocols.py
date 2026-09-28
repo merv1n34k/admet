@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from admet.ui import theme as ui
 from admet.ui.tables import GridTable, fit_table_height
 from admet.workflows.control import builtin_document
-from admet.workflows.json_protocol import load, loads
+from admet.workflows.json_protocol import load, loads, template_documents
 
 
 def value_text(value, unit=""):
@@ -108,11 +108,12 @@ class ProtocolEditor(QWidget):
         self.editor.setPlaceholderText("Open a saved JSON protocol or paste a definition here.")
         self.builtin = stage.settings_options.get("builtin", "")
         if not self.builtin:
+            self.templates = template_documents()
             bar = QHBoxLayout()
             self.library = QComboBox()
             self.library.setMinimumWidth(170)
             bar.addWidget(self.library, 1)
-            for label, callback in (("Open saved", self.open_saved),
+            for label, callback in (("Open", self.open_saved),
                                     ("Import JSON", self.import_json), ("Save JSON", self.save),
                                     ("Edit JSON", self.toggle_editor)):
                 button = ui.button(label)
@@ -170,19 +171,25 @@ class ProtocolEditor(QWidget):
         if self.builtin:
             return
         names = [entry["name"] for entry in entries if not entry.get("error")]
-        if names == [self.library.itemData(i) for i in range(1, self.library.count())]:
+        items = [(name, name) for name in names] + [
+            ("@" + name, "Template · " + name.replace("_", " ")) for name in sorted(self.templates)
+        ]
+        if [key for key, _ in items] == [self.library.itemData(i) for i in range(1, self.library.count())]:
             if self.library.count():
                 return
         selected = self.library.currentData()
         self.library.clear()
-        self.library.addItem("Select saved protocol…", None)
-        for name in names:
-            self.library.addItem(name, name)
-        if selected in names:
-            self.library.setCurrentIndex(names.index(selected) + 1)
+        self.library.addItem("Select protocol or template…", None)
+        for key, label in items:
+            self.library.addItem(label, key)
+        self.library.setCurrentIndex(max(0, self.library.findData(selected)))
 
     def open_saved(self):
         name = self.library.currentData()
+        if name and name.startswith("@"):
+            self.set_document(self.templates[name[1:]])
+            self.editor.show()
+            return
         if name:
             self.submit(
                 lambda: self.backend.call("list_protocols", {"name": name}),

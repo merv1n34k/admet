@@ -1,0 +1,12 @@
+{
+  "name": "gravimetry",
+  "pressure_limits_mbar": {"0": 1900, "1": 1900, "2": 1900},
+  "steps": [
+    {"name": "Dispense Oil L", "sensor_setpoints": {"0": 50}, "trigger_type": "volume", "trigger_params": {"sensor_index": 0, "target_volume_ul": 50}, "timeout_s": 120, "on_complete": "zero", "confirm_message": "Confirm channel 0 is Oil L. Weigh the empty collection tube and place it at the outlet."},
+    {"name": "Weigh Oil L", "trigger_type": "time", "trigger_params": {"duration_s": 0}, "on_complete": "zero", "confirm_message": "Weigh the Oil L collection tube and record empty and full masses before continuing."},
+    {"name": "Dispense Cells M", "sensor_setpoints": {"1": 50}, "trigger_type": "volume", "trigger_params": {"sensor_index": 1, "target_volume_ul": 50}, "timeout_s": 120, "on_complete": "zero", "confirm_message": "Confirm channel 1 is Cells M. Weigh the empty collection tube and place it at the outlet."},
+    {"name": "Weigh Cells M", "trigger_type": "time", "trigger_params": {"duration_s": 0}, "on_complete": "zero", "confirm_message": "Weigh the Cells M collection tube and record empty and full masses before continuing."},
+    {"name": "Dispense Beads M", "sensor_setpoints": {"2": 50}, "trigger_type": "volume", "trigger_params": {"sensor_index": 2, "target_volume_ul": 50}, "timeout_s": 120, "on_complete": "zero", "confirm_message": "Confirm channel 2 is Beads M. Weigh the empty collection tube and place it at the outlet."},
+    {"name": "Weigh Beads M", "trigger_type": "time", "trigger_params": {"duration_s": 0}, "on_complete": "zero", "confirm_message": "Weigh the Beads M collection tube and record empty and full masses before continuing."}
+  ]
+}
