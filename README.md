@@ -10,13 +10,12 @@ owns the instrument.**
                               ├──▶  runtime/events.jsonl   appended on change
                               └──▶  project: raw data, summaries, manifest
 
-  human       ──────────▶  admet watch --runtime <same dir>     read-only
+  human       ──────────▶  admet control --runtime <same dir> ──MCP──▶ owner
 ```
 
-The client commands and reads. The human watches the same run from another
-terminal, through files that carry no way to command anything. Nothing else
-opens the hardware — a second server pointed at the same runtime directory is
-refused before it can try.
+The agent configures the rig and prepares experiments. The human attaches from
+another terminal to review plans, execute, and control the run. Both clients use
+the same guarded MCP operations; only the owner opens hardware.
 
 With `--runtime`, `serve` is split internally into a durable hardware owner and
 a per-chat stdio MCP relay. Closing a chat detaches only its relay; the owner,
@@ -38,13 +37,13 @@ make test       # all simulated, no hardware touched
 ```sh
 admet describe [TARGET]
 admet serve (--simulated | --live) [--project PATH] [--runtime PATH]
-admet watch --runtime PATH [--once]
+admet control --runtime PATH [--once]
 ```
 
-That is the whole command line. Running an experiment is deliberately not here:
-it happens over MCP or from Python, both through the same guarded operations. A
-terminal command per operation would be a third way to do the same thing, and
-the one that drifts.
+`control` replaces `watch`; there is no compatibility alias. It attaches to an
+already-running owner. Ask the agent to start/configure that owner. Quitting the
+terminal detaches without stopping the session. `--once` prints a read-only,
+pipe-safe telemetry snapshot without connecting to MCP.
 
 `serve` refuses to start without `--simulated` or `--live`. Real hardware is
 never what you get by saying nothing.
@@ -67,11 +66,11 @@ at every level: the operation `connect_fluidics` drives the action
 | `write` | has finished having its effect when it returns |
 | `start` | leaves something running after it returns — poll `observe`, or wait |
 
-## Watching a run
+## Controlling a run
 
 ```sh
-admet watch --runtime /tmp/admet-live          # live, q to quit
-admet watch --runtime /tmp/admet-live --once   # one frame, for pipes
+admet control --runtime /tmp/admet-live          # attach; q to detach
+admet control --runtime /tmp/admet-live --once   # one frame, for pipes
 ```
 
 ```
@@ -96,22 +95,39 @@ A measurement that has not been taken shows as `—`, never `0.0`: on this scree
 the two would be indistinguishable. A heartbeat older than three seconds says
 `STALE` and that the screen is not current.
 
-The monitor reads two files and nothing else. Two tests hold that: one parses
-its import graph, and one runs `admet watch` as a real process and asserts
-neither the service nor any engine module was loaded.
+The terminal reads telemetry files and sends actions over the owner's MCP
+socket. Requests run separately from keyboard input. The terminal imports
+neither the service nor engines, and cannot create another hardware owner.
+
+| Key | Action |
+| --- | --- |
+| `O` | Open the project's saved protocol library; arrows select, Enter creates a plan |
+| `V` | Review a current plan; Tab cycles through plans |
+| `R` | Execute the displayed plan (available in review only) |
+| `Y` / `S` | Proceed through a confirmation / skip the current step |
+| `P` / `A` | Pause or resume / abort the run |
+| `C` | Close the view; the run continues |
+| `L` | Open the event log |
+| `E` / `X` | Emergency stop / safely shut down the owner |
+| `q` / Escape | Back from a detail view; from the dashboard, detach and quit |
+
+Open and review are non-actuating. Execution and confirmation are separate
+deliberate actions. The agent continues to manage device connections, corrections,
+protocol editing, and server startup. `X` requests orderly zeroing and shutdown;
+it does not send `SIGKILL`.
 
 ### Manual emergency control
 
-`watch` remains strictly read-only. It displays the persistent owner's PID,
-which the operator can use for two fixed OS-level recovery actions when MCP is
-unavailable:
+`control` offers `E` for emergency stop and `X` for graceful server shutdown.
+These use independent OS signals, so a pending MCP request does not block them.
+The displayed PID also permits recovery from a separate shell:
 
 ```sh
 kill -USR1 PID   # emergency-stop activity and keep the owner alive
 kill -TERM PID   # safely stop activity, disconnect, publish stopped, and exit
 ```
 
-Use the exact PID currently shown by `watch`. `SIGKILL` is a last resort because
+Use the exact PID currently shown by `control`. `SIGKILL` is a last resort because
 it cannot run hardware cleanup. If pressure or flow may be unsafe, use the
 physical emergency stop first; it remains authoritative.
 
@@ -138,10 +154,10 @@ no guards and remain available only through the expert Python binding.
 The human/AI workflow is deliberately two-phase:
 
 1. The AI calls `plan_protocol` with an existing protocol operation and settings.
-2. The complete immutable plan appears in `observe` and `admet watch` before execution.
+2. The complete immutable plan appears in `observe` and `admet control` before execution.
 3. The AI explains every ordered step, safety limit, confirmation, and abort condition.
 4. The AI stops and waits for explicit human approval.
-5. The human reviews the read-only TUI and confirms the physical setup.
+5. The human reviews the TUI and confirms the physical setup.
 6. Only after approval does the AI call `control_protocol` with action `execute`
    and the immutable `plan_id`.
 7. Every subsequent interaction uses that same tool. An action such as `confirm`,
@@ -185,7 +201,7 @@ protocol completion/cancellation/failure, or the requested timeout. Progress
 samples do not masquerade as milestones. Always reuse `next_sequence`; cursors
 remain monotonic across protocols and reading does not remove events.
 
-The live `watch` TUI adapts its rules and wrapped blocks to the terminal width.
+The live `control` TUI adapts its rules and wrapped blocks to the terminal width.
 Use the arrow keys or `j`/`k` to scroll one line, Page Up/Page Down to scroll a
 page, and Home/End to jump to either edge; the control footer remains pinned.
 Press `L` to open the complete event log; `q` or Escape returns to the dashboard.
@@ -281,11 +297,18 @@ latch that blocked those would leave you holding a tripped rig with no way to
 deal with it. `reset_safety` is refused while anything still reads over its
 limit.
 
-However the server exits — stdin closing, an exception, `KeyboardInterrupt` —
-the rig is stopped before publishing stops, so a failed write can never leave
-liquid moving.
+Closing a relay's stdin detaches that client; the durable owner continues its
+planned run. Orderly owner shutdown attempts to stop the rig before publishing
+stops. The physical emergency stop remains authoritative if software or an SDK
+cannot complete cleanup.
 
 ## Writing a protocol
+
+Prefer reusable JSON files saved in the project's `protocols/` directory.
+The agent uses `save_protocol`, `list_protocols`, and `plan_protocol_file` to
+save, reopen, and plan them. Each execution records the exact definition, plan,
+events, fluidics CSV, and outcome in the `.admetp` project. See the
+[JSON protocol guide](docs/json_protocols.md) for the small format and MCP examples.
 
 A protocol is a list of steps; a step holds channels at setpoints until its
 trigger fires. Run one you wrote with `run_steps`, without adding it to the

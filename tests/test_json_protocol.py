@@ -51,6 +51,55 @@ class JsonProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "timeout"):
             normalize(document)
 
+    def test_group_repeat_expansion_is_bounded(self):
+        document = deepcopy(DOCUMENT)
+        step = document["steps"][0]
+        step["group"] = "batch"
+        document["steps"] = [deepcopy(step) for _ in range(20)]
+        document["steps"][0]["repeat"] = 100
+        with self.assertRaisesRegex(ValueError, "1000"):
+            normalize(document)
+
+    def test_invalid_saved_file_does_not_hide_other_protocols(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = AdmetServer(simulated=True, project=f"{tmp}/p.admetp", create=True)
+            saved = server.call("save_protocol", {"protocol": DOCUMENT})
+            bad = deepcopy(DOCUMENT)
+            bad["steps"][0]["trigger_type"] = "typo"
+            Path(saved["path"]).with_name("bad.json").write_text(json.dumps(bad))
+            entries = server.call("list_protocols", {})["protocols"]
+            self.assertEqual(len(entries), 2)
+            self.assertTrue(next(entry for entry in entries if entry["name"] == "bad")["error"])
+
+    def test_timeout_fails_run_and_finalizes_recording(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = AdmetServer(simulated=True, project=f"{tmp}/p.admetp", create=True)
+            try:
+                server.call("connect_fluidics", {})
+                server.call("apply_corrections", {})
+                document = deepcopy(DOCUMENT)
+                document["steps"][0].update(
+                    sensor_setpoints={"0": 0}, trigger_type="volume",
+                    trigger_params={"sensor_index": 0, "target_volume_ul": 100}, timeout_s=0.05,
+                )
+                plan = server.call("plan_protocol", {
+                    "operation_id": "run_json_protocol", "settings": {"protocol": document},
+                })
+                server.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"]})
+                server.call("control_protocol", {"action": "confirm", "timeout_s": 1})
+                deadline = time.monotonic() + 3
+                while server.admet._executing_plan_id and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                finished = server.call("planned_protocols", {})["plans"][0]
+                self.assertEqual(finished["state"], "failed")
+                self.assertIn("timed out", finished["error"])
+                observed = server.call("observe", {})
+                self.assertFalse(observed["recording"]["active"])
+                self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0)
+                                    for c in observed["channels"]))
+            finally:
+                server.call("disconnect_fluidics", {})
+
     def test_plan_is_non_actuating_and_direct_mcp_start_is_refused(self):
         server = AdmetServer(simulated=True)
         with patch.object(server.admet, "engine_action", side_effect=AssertionError("hardware")):

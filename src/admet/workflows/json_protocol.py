@@ -27,7 +27,8 @@ def channel_map(value, label):
 
 
 def normalize(document):
-    from admet.workflows.operations import STEP_LIST_SCHEMA, _step_from
+    from admet.workflows.operations import STEP_LIST_SCHEMA, Refused, _step_from
+    from admet.engines.acquisition.pipeline import expand_protocol_steps
 
     if not isinstance(document, dict):
         raise ValueError("protocol must be a JSON object")
@@ -87,9 +88,12 @@ def normalize(document):
             if number(step["timeout_s"], "timeout_s") <= 0:
                 raise ValueError("timeout_s must be positive")
         step.setdefault("on_complete", "zero")
-        _step_from(step, index)
+        try:
+            _step_from(step, index)
+        except Refused as exc:
+            raise ValueError(str(exc)) from exc
         normalized.append(step)
-    if sum(step.get("repeat", 1) for step in normalized) > 1000:
+    if len(expand_protocol_steps([_step_from(step, i) for i, step in enumerate(normalized)])) > 1000:
         raise ValueError("expanded protocol exceeds 1000 steps")
     return {"name": name, "pressure_limits_mbar": limits, "steps": normalized}
 

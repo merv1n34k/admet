@@ -41,6 +41,65 @@ def _terminate_owner(runtime, timeout_s=10.0):
 
 
 class AcceptanceRun(unittest.TestCase):
+    def test_saved_protocol_shared_between_agent_and_control_client(self):
+        self.call("create_project", path=str(self.project))
+        self.call("connect_fluidics")
+        self.call("apply_corrections")
+        definition = {
+            "name": "repeatable",
+            "pressure_limits_mbar": {"0": 500},
+            "steps": [{"sensor_setpoints": {"0": 5}, "trigger_type": "time",
+                       "trigger_params": {"duration_s": 0.3}, "confirm_message": "Proceed?"}],
+        }
+        self.call("save_protocol", protocol=definition)
+        self._wait_for(
+            lambda: read_state(self.runtime)["runtime"].get("project") == str(self.project),
+            "project publication",
+        )
+        client = OwnerClient(self.runtime)
+        try:
+            saved = client.call("list_protocols", {})["protocols"][0]
+            plan = client.call("plan_protocol_file", {"path": saved["path"]})
+            observation = self.call("observe")
+            self.assertFalse(observation["recording"]["active"])
+            self.assertEqual({channel["mode"] for channel in observation["channels"]}, {"off"})
+            self.assertIn(plan["plan_id"], [p["plan_id"] for p in observation["planned_protocols"]])
+            self.assertIn("repeatable", saved["path"])
+            self.assertIn("5.0", render({"runtime": {}, "observation": observation}))
+            yielded = client.call("control_protocol", {
+                "action": "execute", "plan_id": plan["plan_id"], "timeout_s": 1,
+            })["yield"]
+            self.assertEqual(yielded["reason"], "confirmation_required")
+            # The terminal detaches at the gate. The agent continues the same run.
+            client.close()
+            self.call("control_protocol", action="confirm", timeout_s=1)
+            self._wait_for(
+                lambda: self.call("planned_protocols", plan_id=plan["plan_id"])["plans"][0]["state"]
+                == "completed", "saved protocol completion",
+            )
+            client.connect()
+            observed = client.call("observe")
+            self.assertFalse(observed["recording"]["active"])
+            self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0)
+                                for c in observed["channels"]))
+            events = client.call("protocol_events", {"after_sequence": 0})["events"]
+            sequences = [event["sequence"] for event in events]
+            self.assertEqual(sequences, sorted(set(sequences)))
+            directory = self.project / "records" / "protocols" / plan["plan_id"]
+            summary = json.loads((directory / "summary.json").read_text())
+            self.assertEqual(summary["state"], "completed")
+            self.assertEqual(summary["digest"], plan["digest"])
+            self.assertTrue(Path(summary["artifacts"]["fluidics_csv"]).is_file())
+            with self.assertRaisesRegex(RuntimeError, "completed"):
+                client.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"]})
+            new_plan = client.call("plan_protocol_file", {"path": saved["path"]})
+            self.assertNotEqual(new_plan["plan_id"], plan["plan_id"])
+            client.call("cancel_protocol_plan", {"plan_id": new_plan["plan_id"]})
+            with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                client.call("control_protocol", {"action": "execute", "plan_id": new_plan["plan_id"]})
+        finally:
+            client.close()
+
     def test_terminal_client_reattaches_to_same_owner_after_project_open(self):
         self.call("create_project", path=str(self.project))
         self._wait_for(

@@ -34,12 +34,15 @@ Codex/MCP client <--stdio--> admet serve <---> Fluigent/camera
                                   +--> append-only runtime/events.jsonl
                                   +--> project recordings and validation artifacts
 
-Human terminal --> admet watch --runtime <same-directory>
+Human terminal --> admet control --runtime <same-directory>
 ```
 
-The monitor is read-only. It must never open the SDK or create an acquisition engine.
+The current terminal attaches to the owner through MCP for review and run controls.
+It must never open the SDK or create an acquisition engine. `control --once`
+remains a read-only telemetry snapshot. See README.md for the current workflow;
+the milestone requirements below describe the original monitor implementation.
 
-Add a `--runtime PATH` option shared by `serve` and `watch`. The serving process must take an exclusive owner lock in that directory. A second serving process must fail clearly rather than opening the same instrument.
+Add a `--runtime PATH` option shared by `serve` and `control`. The serving process must take an exclusive owner lock in that directory. A second serving process must fail clearly rather than opening the same instrument.
 
 ## Milestone 1: Observable State
 
@@ -110,7 +113,7 @@ While `admet serve` is running:
 Implement:
 
 ```bash
-admet watch --runtime /tmp/admet-live
+admet control --runtime /tmp/admet-live
 ```
 
 Use only the standard library and ANSI terminal rendering for this milestone. Do not add a UI framework. Support `--once` for tests and noninteractive inspection.
@@ -239,7 +242,7 @@ Terminal 2, human monitor:
 
 ```bash
 uv run --directory /Users/alexeystroganov/.github_projects/admet2 \
-  admet watch --runtime /tmp/admet_oil_runtime
+  admet control --runtime /tmp/admet_oil_runtime
 ```
 
 Through MCP:
@@ -299,7 +302,7 @@ uv run ruff check .
 Stop when these are true:
 
 - I can connect the MCP server to one simulated controller process.
-- The operator can open `admet watch` and see the same process in real time.
+- The operator can open `admet control` and see the same process in real time.
 - I can call `observe` repeatedly and receive fresh pressure/flow measurements and protocol progress.
 - I can retrieve confirmation messages and events without draining another consumer's data.
 - A disconnect or overpressure zeros the simulated rig automatically.
