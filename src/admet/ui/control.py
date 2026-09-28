@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import signal
 import sys
@@ -172,6 +173,50 @@ CHECK_KINDS = {
     "characterise": CHECK_FLOW,
     "gravimetry": CHECK_DISPENSE,
 }
+
+
+class NumericParamEdit(QLineEdit):
+    committed = Signal(object)
+    rejected = Signal(str)
+
+    def __init__(self, param: Param, value: Any):
+        super().__init__(_display_value(value))
+        self.param = param
+        self.pending = False
+        self.hint = "Type a number; Enter or leaving the field applies it."
+        if param.minimum is not None:
+            self.hint += f" Minimum: {param.minimum:g}."
+        if param.maximum is not None:
+            self.hint += f" Maximum: {param.maximum:g}."
+        if param.name == "desktop_pressure_limit_mbar":
+            self.hint += " The trip must stay below the 2000 mbar controller ceiling."
+        self.setToolTip(self.hint)
+        self.textEdited.connect(self._edited)
+        self.editingFinished.connect(self.commit)
+
+    def _edited(self, _text):
+        self.pending = True
+
+    def commit(self) -> bool:
+        if not self.pending:
+            return True
+        try:
+            value = float(self.text().strip())
+            if not math.isfinite(value):
+                raise ValueError("Enter a finite number.")
+            value = self.param.validate(value)
+        except (ValueError, TypeError) as exc:
+            message = f"{self.param.label}: {exc}. {self.hint} Previous value remains unchanged."
+            self.setStyleSheet(f"border: 1px solid {Theme.DANGER};")
+            self.setToolTip(message)
+            self.rejected.emit(message)
+            return False
+        self.pending = False
+        self.setStyleSheet("")
+        self.setToolTip(self.hint)
+        self.setText(_display_value(value))
+        self.committed.emit(value)
+        return True
 
 
 class _WheelGuard(QObject):
@@ -402,6 +447,7 @@ class ControlWindow(QMainWindow):
         self._protocol_progress_bar: QProgressBar | None = None
         self._protocol_confirm_label: QLabel | None = None
         self._param_editors: dict[str, QWidget] = {}
+        self._numeric_drafts: dict[str, str] = {}
         self.log_label: QLabel | None = None
         self.plot_panel: PlotPanel | None = None
         self.camera_frame_ready.connect(self._show_camera_frame)
@@ -1770,6 +1816,10 @@ class ControlWindow(QMainWindow):
         payload = self._action_payload(action)
         if settings:
             payload.update(settings)
+        if action in {"apply_camera_settings", "apply_corrections"}:
+            if self._numeric_drafts.keys() & payload.keys():
+                self._notify("Finish or correct numeric entries before applying settings.", "warning")
+                return None
         return payload
 
     def _build_run_job(self, action: str, payload: dict[str, Any]) -> RunJob:
@@ -2724,29 +2774,14 @@ class ControlWindow(QMainWindow):
             )
             self._param_editors[param.name] = editor
             return editor
-        if param.kind is ParamKind.INTEGER:
-            editor = QSpinBox()
-            editor.setRange(
-                int(param.minimum if param.minimum is not None else -2_147_483_648),
-                int(param.maximum if param.maximum is not None else 2_147_483_647),
-            )
-            if param.step is not None:
-                editor.setSingleStep(max(1, int(param.step)))
-            editor.setValue(int(value if value is not None else param.default or 0))
-            editor.valueChanged.connect(lambda value, name=param.name: self._set_value(name, value))
-            self._param_editors[param.name] = editor
-            return editor
-        if param.kind is ParamKind.FLOAT:
-            editor = QDoubleSpinBox()
-            editor.setRange(
-                float(param.minimum if param.minimum is not None else -1_000_000_000.0),
-                float(param.maximum if param.maximum is not None else 1_000_000_000.0),
-            )
-            editor.setDecimals(4)
-            if param.step is not None:
-                editor.setSingleStep(float(param.step))
-            editor.setValue(float(value if value is not None else param.default or 0.0))
-            editor.valueChanged.connect(lambda value, name=param.name: self._set_value(name, value))
+        if param.kind in {ParamKind.INTEGER, ParamKind.FLOAT}:
+            editor = NumericParamEdit(param, value)
+            if param.name in self._numeric_drafts:
+                editor.setText(self._numeric_drafts[param.name])
+                editor.pending = True
+            editor.committed.connect(lambda value, name=param.name: self._numeric_committed(name, value))
+            editor.rejected.connect(lambda message: self._notify(message, "danger", timeout_ms=0))
+            editor.textEdited.connect(lambda text, name=param.name: self._numeric_draft_changed(name, text))
             self._param_editors[param.name] = editor
             return editor
         editor = QLineEdit(_display_value(value))
@@ -2761,6 +2796,8 @@ class ControlWindow(QMainWindow):
             self._sync_param_editor(name, editor)
 
     def _sync_param_editor(self, name: str, editor: QWidget) -> None:
+        if isinstance(editor, NumericParamEdit) and editor.pending:
+            return
         value = self.values.get(name)
         was_blocked = editor.blockSignals(True)
         try:
@@ -2782,6 +2819,26 @@ class ControlWindow(QMainWindow):
                     editor.setText(text)
         finally:
             editor.blockSignals(was_blocked)
+
+    def _numeric_committed(self, name: str, value: Any) -> None:
+        self._numeric_drafts.pop(name, None)
+        self._set_value(name, value)
+
+    def _numeric_draft_changed(self, name: str, text: str) -> None:
+        self._numeric_drafts[name] = text
+        for editor in self.protocol_editors.values():
+            if editor.builtin and name in editor.stage.settings.defaults():
+                editor.edited()
+
+    def _commit_numeric_settings(self, stage: Stage) -> bool:
+        valid = True
+        for editor in self._param_editors.values():
+            if isinstance(editor, NumericParamEdit) and not editor.commit():
+                valid = False
+        if self._numeric_drafts.keys() & stage.settings.defaults().keys():
+            self._notify("Finish or correct numeric entries before planning; expand parameters if hidden.", "warning")
+            valid = False
+        return valid
 
     def _set_value(self, name: str, value: Any) -> None:
         if name == "simulated" and (self._fluigent_ready() or self.api.simulated):

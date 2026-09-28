@@ -87,6 +87,13 @@ timeouts and a default 1900 mbar pressure trip. The old 2000 mbar wash hold is
 replaced with an editable 1800 mbar default, below that trip and the controller
 ceiling. Review these values for the physical rig before execution.
 
+Numeric parameter fields accept free typing and apply a valid value on Enter or
+leaving the field, not on each keystroke. Invalid text stays visible with an error;
+the previous value is unchanged and cannot be silently used to build a new plan.
+Editing a built-in protocol parameter invalidates its preview. Build and review a
+new plan before execution. The pressure-trip field accepts 1–1900 mbar; 2000 mbar
+is the controller ceiling, not an allowable trip threshold for this form.
+
 ### Checkup and reusable measurement protocols
 
 **Checkup / chip layout** restores the original tubing map, flow split,
@@ -135,6 +142,10 @@ for the new session.
 **EMERGENCY STOP** runs independently of the ordinary GUI command queue and
 requests zeroing before cleanup. It latches safety. After resolving the cause,
 **Reset safety** on the Cleanup stage requires explicit confirmation and the backend's reset checks.
+A pressure trip terminates the run and closes recording, rather than pausing it.
+Resetting the latch does not resume the run. Inspect the cause and measured
+pressures first, then review the partial recording and build a new plan: repeating
+a partially completed dispense may deliver additional volume.
 Closing the window asks about connected devices, zeros channels, stops the run
 and recording, disconnects, and exits only after cleanup. Errors stay visible.
 

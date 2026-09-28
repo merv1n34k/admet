@@ -287,6 +287,8 @@ class ProtocolEditor(QWidget):
         )
 
     def build_plan(self):
+        if self.builtin and not self.window._commit_numeric_settings(self.stage):
+            return
         try:
             document = self.document()
         except Exception as exc:

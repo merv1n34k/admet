@@ -65,6 +65,139 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertTrue(self.backend.service.state()["corrections"])
         self.assertIn("TEST SIMULATION", self.window.windowTitle())
 
+    def test_numeric_settings_commit_after_typing_and_invalidate_preview(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "priming")
+        self.window._select_stage(index)
+        panel = self.window._protocol_editor(self.window.workflow.stages[index])
+        editor = self.window._param_editors["desktop_pressure_limit_mbar"]
+        panel.dirty = False
+        editor.setFocus()
+        editor.selectAll()
+        with patch.object(self.window, "_set_value", wraps=self.window._set_value) as commit:
+            QTest.keyClicks(editor, "1850.5")
+            self.assertEqual(self.window.values[editor.param.name], 1900)
+            self.assertTrue(panel.dirty)
+            commit.assert_not_called()
+            self.window._sync_param_editor(editor.param.name, editor)
+            self.assertEqual(editor.text(), "1850.5")
+            QTest.keyClick(editor, Qt.Key.Key_Return)
+            commit.assert_called_once_with(editor.param.name, 1850.5)
+            self.assertEqual(self.window.values[editor.param.name], 1850.5)
+            editor.clearFocus()
+            self.assertEqual(commit.call_count, 1)
+
+    def test_invalid_pressure_entry_is_retained_and_blocks_planning(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "priming")
+        self.window._select_stage(index)
+        panel = self.window._protocol_editor(self.window.workflow.stages[index])
+        editor = self.window._param_editors["desktop_pressure_limit_mbar"]
+        with patch.object(self.backend, "call", side_effect=AssertionError("invalid draft used")):
+            for text in ("2000", "nan", "inf", "-1", "", "abc"):
+                with self.subTest(text=text):
+                    editor.setFocus()
+                    editor.selectAll()
+                    QTest.keyClick(editor, Qt.Key.Key_Backspace)
+                    QTest.keyClicks(editor, text)
+                    QTest.keyClick(editor, Qt.Key.Key_Return)
+                    self.assertTrue(editor.pending)
+                    self.assertEqual(self.window.values[editor.param.name], 1900)
+                    self.window._sync_param_editor(editor.param.name, editor)
+                    self.assertEqual(editor.text(), text)
+                    panel.build_plan()
+                    self.assertIsNone(panel.plan)
+            editor.selectAll()
+            QTest.keyClicks(editor, "1800")
+            self.window.activateWindow()
+            self.app.processEvents()
+            editor.setFocus()
+            self.app.processEvents()
+            self.assertTrue(editor.hasFocus())
+            editor.clearFocus()
+            self.app.processEvents()
+            self.assertEqual(self.window.values[editor.param.name], 1800)
+            self.assertFalse(editor.pending)
+
+    def test_numeric_integer_validation_and_deferred_auto_apply(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        editor = self.window._param_editors["camera_width"]
+        previous = self.window.values["camera_width"]
+        with patch.object(self.window, "_schedule_camera_apply") as apply:
+            editor.setFocus()
+            editor.selectAll()
+            QTest.keyClicks(editor, "1234")
+            apply.assert_not_called()
+            self.assertEqual(self.window.values["camera_width"], previous)
+            QTest.keyClick(editor, Qt.Key.Key_Return)
+            apply.assert_called_once()
+            self.assertEqual(self.window.values["camera_width"], 1234)
+            self.assertIsInstance(self.window.values["camera_width"], int)
+            editor.selectAll()
+            QTest.keyClicks(editor, "1234.5")
+            QTest.keyClick(editor, Qt.Key.Key_Return)
+            self.assertTrue(editor.pending)
+            apply.assert_called_once()
+            with patch.object(self.window, "_camera_scene_ready", return_value=True):
+                self.assertIsNone(self.window._prepare_action_payload("apply_camera_settings"))
+
+    def test_numeric_draft_survives_parameter_remount(self):
+        from PySide6.QtTest import QTest
+
+        index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "priming")
+        self.window._select_stage(index)
+        name = "desktop_pressure_limit_mbar"
+        editor = self.window._param_editors[name]
+        editor.selectAll()
+        QTest.keyClicks(editor, "2000")
+        self.window.current_stage_page.mounted_signature = None
+        self.window._render_current_stage()
+        self.assertEqual(self.window._param_editors[name].text(), "2000")
+        self.assertTrue(self.window._param_editors[name].pending)
+        self.assertEqual(self.window.values[name], 1900)
+
+    def test_plan_commits_valid_numeric_draft_without_actuation(self):
+        from PySide6.QtTest import QTest
+
+        index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "priming")
+        self.window._select_stage(index)
+        panel = self.window._protocol_editor(self.window.workflow.stages[index])
+        editor = self.window._param_editors["desktop_pressure_limit_mbar"]
+        editor.selectAll()
+        QTest.keyClicks(editor, "1750")
+        with patch.object(self.backend.engine, "run", side_effect=AssertionError("planning actuated")):
+            panel.build_plan()
+            self.drain()
+        self.assertEqual(self.window.values[editor.param.name], 1750)
+        self.assertEqual(set(panel.plan["armed_safety_limits"]["pressure_mbar"].values()), {1750})
+        self.assertFalse(editor.pending)
+
+    def test_correction_auto_apply_waits_for_numeric_draft(self):
+        from PySide6.QtTest import QTest
+
+        index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "corrections")
+        self.window._select_stage(index)
+        self.window._toggle_action_params()
+        editor = next(e for e in self.window._param_editors.values() if hasattr(e, "pending"))
+        name = editor.param.name
+        previous = self.window.values[name]
+        editor.selectAll()
+        QTest.keyClicks(editor, "2.5")
+        with patch.object(self.window, "_fluigent_ready", return_value=True):
+            self.assertIsNone(self.window._prepare_action_payload("apply_corrections"))
+            self.assertEqual(self.window.values[name], previous)
+            with patch.object(self.window, "_schedule_correction_apply") as apply:
+                self.assertTrue(editor.commit())
+                apply.assert_called_once()
+            self.assertEqual(self.window._prepare_action_payload("apply_corrections")[name], 2.5)
+
+
     def test_fluigent_simulation_selector_is_visible_and_locked_when_connected(self):
         self.backend.simulated = False
         with patch.object(self.window, "_ensure_fluigent_availability"):
