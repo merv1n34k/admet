@@ -120,7 +120,7 @@ class NamingTests(unittest.TestCase):
         verbs = (
             "connect", "disconnect", "apply", "set", "stop", "start", "pause",
             "resume", "confirm", "skip", "run", "read", "list", "create", "open",
-            "add", "verify", "calibrate", "shutdown", "reset", "validate",
+            "add", "verify", "calibrate", "shutdown", "reset", "validate", "save", "plan",
         )
         for op in OPERATIONS:
             if op.id in SPECIFIED_NAMES:

@@ -1,5 +1,8 @@
 from copy import deepcopy
 import tempfile
+import json
+import time
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -73,11 +76,44 @@ class JsonProtocolTests(unittest.TestCase):
                 })
                 server.call("control_protocol", {"action": "confirm", "timeout_s": 1})
                 server.admet.wait_for_protocol(timeout_s=2)
+                deadline = time.monotonic() + 3
+                while server.call("planned_protocols", {})["plans"][0]["state"] == "executing":
+                    if time.monotonic() >= deadline:
+                        self.fail("plan did not complete")
+                    time.sleep(0.01)
                 self.assertEqual(
                     server.call("planned_protocols", {})["plans"][0]["state"], "completed",
                 )
                 observation = server.call("observe", {})
                 self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0)
                                     for c in observation["channels"]))
+                run_dir = Path(tmp) / "test.admetp" / "records" / "protocols" / plan["plan_id"]
+                summary = json.loads((run_dir / "summary.json").read_text())
+                self.assertEqual(summary["state"], "completed")
+                self.assertTrue(Path(summary["artifacts"]["fluidics_csv"]).is_file())
+                self.assertTrue((run_dir / "events.jsonl").read_text())
+                self.assertEqual(json.loads((run_dir / "protocol.json").read_text()),
+                                 normalize(DOCUMENT))
             finally:
                 server.call("disconnect_fluidics", {})
+
+    def test_save_open_plan_file_survives_new_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = f"{tmp}/test.admetp"
+            first = AdmetServer(simulated=True, project=project, create=True)
+            saved = first.call("save_protocol", {"protocol": DOCUMENT})
+            with self.assertRaises(FileExistsError):
+                first.call("save_protocol", {"protocol": DOCUMENT})
+            second = AdmetServer(simulated=True, project=project)
+            self.assertEqual(second.call("list_protocols", {})["protocols"][0]["name"],
+                             DOCUMENT["name"])
+            reopened = second.call("list_protocols", {"name": DOCUMENT["name"]})
+            self.assertEqual(reopened, saved)
+            with patch.object(second.admet, "engine_action", side_effect=AssertionError("setter")):
+                plan = second.call("plan_protocol_file", {"path": saved["path"]})
+            path = Path(project) / "plans" / f"{plan['plan_id']}.json"
+            self.assertEqual(json.loads(path.read_text())["digest"], plan["digest"])
+            second.call("cancel_protocol_plan", {"plan_id": plan["plan_id"]})
+            self.assertEqual(json.loads(path.read_text())["state"], "cancelled")
+            with self.assertRaises(ValueError):
+                second.call("list_protocols", {"name": "../escape"})

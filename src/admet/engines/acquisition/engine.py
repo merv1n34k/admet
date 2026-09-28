@@ -438,7 +438,7 @@ class AcquisitionEngine:
     def stop_recording(self) -> dict[str, Any]:
         return self._recordings.stop_recording()
 
-    def start_pipeline(self, steps: list[ProtocolStep], *, tick_s: float = 0.2) -> None:
+    def start_pipeline(self, steps: list[ProtocolStep], *, tick_s: float = 0.2, on_event=None) -> None:
         """Run the steps handed to it.
 
         The engine is not told which experiment this is and does not ask. What
@@ -453,6 +453,13 @@ class AcquisitionEngine:
             channel.sensor_index: channel_index
             for channel_index, channel in enumerate(self.channel_manager.channels)
         }
+        def publish(event):
+            try:
+                if on_event is not None:
+                    on_event(event)
+            finally:
+                self.record_event(event)
+
         self._pipeline = self._pipeline_engine_factory(
             steps,
             self.channel_manager,
@@ -461,7 +468,7 @@ class AcquisitionEngine:
             sensor_to_channel,
             tick_s=tick_s,
             next_sequence=self.next_event_sequence,
-            on_event=self.record_event,
+            on_event=publish,
         )
         self._pipeline.start()
 

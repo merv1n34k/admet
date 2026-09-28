@@ -171,6 +171,9 @@ class Admet:
         self._validation: Any | None = None
         self._protocol_plans: dict[str, dict[str, Any]] = {}
         self._executing_plan_id: str | None = None
+        self._plan_stores: dict[str, Any] = {}
+        self._run_artifacts: dict[str, Any] = {}
+        self._execution_lock = threading.Lock()
         # The publisher observes from its own thread, so creating an engine
         # must not be a race between it and whoever is driving.
         self._engine_lock = threading.Lock()
@@ -181,12 +184,14 @@ class Admet:
     # -- sessions -----------------------------------------------------------
     def create_project(self, path: str | Path, project_id: str = "") -> ProjectStore:
         """Start a new project, and make it the one runs write into."""
+        self._require_project_idle()
         path = Path(path)
         self.project = ProjectStore.create(path, project_id or path.stem)
         return self.project
 
     def open_project(self, path: str | Path) -> ProjectStore:
         """Open an existing project, or say plainly that it is not one."""
+        self._require_project_idle()
         path = Path(path)
         if not (path / "manifest.json").is_file():
             raise NoProject(f"{path} is not a project: no manifest.json in it")
@@ -194,7 +199,27 @@ class Admet:
         return self.project
 
     def close_project(self) -> None:
+        self._require_project_idle()
         self.project = None
+
+    def _require_project_idle(self):
+        engine = self._engines.get("acquisition")
+        if self._executing_plan_id or (engine and (getattr(engine, "pipeline_state", "idle") in {
+            "running", "paused", "stopping",
+        } or getattr(engine, "recording_active", False))):
+            raise RuntimeError("finish the active protocol/recording before changing project")
+
+    def protocol_store(self):
+        from admet.core.protocol_store import ProtocolStore
+
+        if self.project is None:
+            raise NoProject("open a project first")
+        return ProtocolStore(self.project)
+
+    def plan_protocol_file(self, path: str):
+        from admet.workflows.json_protocol import load
+
+        return self.plan_protocol("run_json_protocol", {"protocol": load(path)})
 
     def describe_project(self) -> dict[str, Any]:
         if self.project is None:
@@ -432,7 +457,7 @@ class Admet:
                 step["confirmation"] for step in described_steps if step["confirmation"]
             ],
             "recording": {
-                "required": operation_id == "validate_oil_capacity",
+                "required": operation_id in {"validate_oil_capacity", "run_json_protocol"},
                 "include_video": bool(normalized.get("include_video", False)),
             },
             "camera_required": bool(normalized.get("include_video", False)),
@@ -456,6 +481,10 @@ class Admet:
             "error": "",
         }
         self._protocol_plans[plan_id] = deepcopy(plan)
+        if self.project is not None:
+            store = self.protocol_store()
+            store.plan(plan)
+            self._plan_stores[plan_id] = store
         return deepcopy(plan)
 
     def planned_protocols(self, plan_id: str = "") -> dict[str, Any]:
@@ -467,6 +496,10 @@ class Admet:
         return {"plans": [deepcopy(plan) for plan in self._protocol_plans.values()]}
 
     def execute_protocol_plan(self, plan_id: str) -> dict[str, Any]:
+        with self._execution_lock:
+            return self._execute_protocol_plan(plan_id)
+
+    def _execute_protocol_plan(self, plan_id: str) -> dict[str, Any]:
         self._refresh_plan_lifecycle()
         plan = self._protocol_plans.get(plan_id)
         if plan is None:
@@ -475,21 +508,42 @@ class Admet:
             raise RuntimeError(f"protocol plan {plan_id} is {plan['state']} and cannot be executed")
         if plan["rig_fingerprint"] != self._rig_fingerprint():
             plan["state"] = "replaced"
+            self._save_plan(plan)
             raise RuntimeError(f"protocol plan {plan_id} is stale because the rig context changed")
         op = find_operation(plan["operation_id"])
         engine = self._engines.get("acquisition")
         latest = engine.latest_event() if engine is not None else None
         before_sequence = latest.sequence if latest else 0
         op.check(self.state())
+        if self._executing_plan_id:
+            raise RuntimeError("another plan is still executing")
         plan["state"] = "executing"
         plan["executed_at"] = _now_iso()
         self._executing_plan_id = plan_id
         try:
+            store = self._plan_stores.get(plan_id)
+            if store is not None:
+                directory = store.begin(plan)
+                self._run_artifacts[plan_id] = {
+                    "store": store, "directory": directory, "artifacts": {},
+                    "recording": False,
+                }
+            self._save_plan(plan)
+            if plan["operation_id"] == "run_json_protocol":
+                if engine is not None and engine.recording_active:
+                    raise RuntimeError("stop the existing recording before executing a JSON protocol")
+                recording = self.do("start_recording", {
+                    "recording_label": plan_id, "include_video": False,
+                })
+                artifact = self._run_artifacts[plan_id]
+                artifact["recording"] = True
+                artifact["artifacts"]["fluidics_csv"] = recording.get("csv_path")
             result = op.run(self, deepcopy(plan["normalized_settings"]))
         except Exception as exc:
             plan["state"] = "failed"
             plan["error"] = str(exc)
             self._executing_plan_id = None
+            self._finish_plan(plan)
             raise
         started = self.wait_protocol_event(after_sequence=before_sequence, timeout_s=1.0)
         return {
@@ -507,7 +561,44 @@ class Admet:
             raise RuntimeError(f"protocol plan {plan_id} is {plan['state']} and cannot be cancelled")
         plan["state"] = "cancelled"
         plan["cancelled_at"] = _now_iso()
+        self._save_plan(plan)
         return deepcopy(plan)
+
+    def _save_plan(self, plan):
+        store = self._plan_stores.get(plan["plan_id"])
+        if store is not None:
+            store.plan(plan)
+
+    def _finish_plan(self, plan):
+        artifact = self._run_artifacts.get(plan["plan_id"])
+        try:
+            if artifact and artifact["recording"]:
+                self.do("stop_recording")
+        finally:
+            self._save_plan(plan)
+            if artifact:
+                artifact["store"].finish(plan, artifact["directory"], artifact["artifacts"])
+            self._run_artifacts.pop(plan["plan_id"], None)
+
+    def _archive_protocol_event(self, plan_id, event):
+        plan = self._protocol_plans[plan_id]
+        if event.error_msg:
+            plan["error"] = event.error_msg
+        artifact = self._run_artifacts.get(plan_id)
+        if artifact:
+            path = artifact["directory"] / "events.jsonl"
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(_describe_event(event)) + "\n")
+        if not event.step_name and str(event.outcome) in {"completed", "cancelled", "error"}:
+            finished = deepcopy(plan)
+            finished["state"] = "completed" if str(event.outcome) == "completed" else "failed"
+            finished["completed_at"] = _now_iso()
+            try:
+                self._finish_plan(finished)
+                plan.update(finished)
+            finally:
+                if self._executing_plan_id == plan_id:
+                    self._executing_plan_id = None
 
     def _refresh_plan_lifecycle(self) -> None:
         if not self._executing_plan_id:
@@ -516,12 +607,15 @@ class Admet:
         if engine is None or engine.pipeline_state in {"running", "paused", "stopping"}:
             return
         plan = self._protocol_plans[self._executing_plan_id]
+        if self._executing_plan_id in self._run_artifacts:
+            return
         event = engine.latest_event()
         outcome = str(getattr(event, "outcome", "")) if event else ""
         plan["state"] = "completed" if outcome == "completed" else "failed"
         plan["completed_at"] = _now_iso()
         plan["error"] = getattr(event, "error_msg", "") if event else "protocol ended without an event"
         self._executing_plan_id = None
+        self._save_plan(plan)
 
     def _rig_fingerprint(self) -> dict[str, Any]:
         engine = self._engines.get("acquisition")
@@ -874,7 +968,14 @@ class Admet:
 
     def run_steps(self, steps: list[Any], *, tick_s: float = 0.2):
         engine = self.engine("acquisition")
-        engine.start_pipeline(steps, tick_s=tick_s)
+        plan_id = self._executing_plan_id
+        if plan_id and plan_id in self._run_artifacts:
+            engine.start_pipeline(
+                steps, tick_s=tick_s,
+                on_event=lambda event: self._archive_protocol_event(plan_id, event),
+            )
+        else:
+            engine.start_pipeline(steps, tick_s=tick_s)
         from admet.core.run import RunResult
 
         return RunResult("run_steps", "acquisition", "run_steps", metadata={"started": True})

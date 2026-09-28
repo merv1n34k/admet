@@ -601,6 +601,30 @@ def _run_json_protocol(runner, settings):
 
 OPERATIONS: tuple[Operation, ...] = (
     Operation(
+        "save_protocol", "Save protocol", "Save a JSON definition in the current project.",
+        target=GENERAL, requires=("project",),
+        params=(Param("replace", "Replace existing", ParamKind.BOOLEAN, default=False),),
+        raw={"protocol": {"type": "object"}},
+        run=lambda runner, settings: runner.protocol_store().save(
+            settings["protocol"], replace=settings["replace"],
+        ),
+    ),
+    Operation(
+        "list_protocols", "Stored protocols", "List saved definitions or open one by name.",
+        kind=READ, target=GENERAL, requires=("project",),
+        params=(Param("name", "Name", ParamKind.TEXT, default=""),),
+        run=lambda runner, settings: (
+            runner.protocol_store().read(settings["name"]) if settings["name"]
+            else runner.protocol_store().list()
+        ),
+    ),
+    Operation(
+        "plan_protocol_file", "Plan JSON file", "Load and plan a JSON file without actuation.",
+        target=GENERAL, requires=("project",),
+        params=(Param("path", "JSON path", ParamKind.PATH, default="", required=True),),
+        run=lambda runner, settings: runner.plan_protocol_file(settings["path"]),
+    ),
+    Operation(
         "run_json_protocol", "Run a JSON protocol", "Plan a reusable JSON protocol.",
         kind=START, params=(TICK,), raw={"protocol": {"type": "object"}},
         requires=("project", "fluidics", "corrections", "idle", "safe"),
