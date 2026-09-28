@@ -151,9 +151,9 @@ class DesktopWindowTests(unittest.TestCase):
         with patch.object(self.backend.engine, "run", side_effect=AssertionError("planning actuated")):
             self.panel.build_plan()
             self.drain()
-        self.assertEqual(self.panel.table.rowCount(), 3)
-        self.assertEqual(self.panel.table.item(0, 3).text(), "10 µL/min")
-        self.assertEqual(self.panel.table.item(1, 0).text(), "1")
+        self.assertEqual(self.panel.table.rowCount(), 1)
+        self.assertEqual(self.panel.table.item(0, 1).text(), "0\n1\n2")
+        self.assertEqual(self.panel.table.item(0, 3).text(), "10 µL/min\n5 µL/min\n5 µL/min")
         self.assertIn("time: 0.15 s", self.panel.table.item(0, 4).text())
         self.assertIn("500", self.panel.summary.text())
         plan_id = self.panel.plan["plan_id"]
@@ -178,6 +178,36 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertTrue(self.panel.executable)
         self.panel.editor.insertPlainText(" ")
         self.assertFalse(self.panel.executable)
+
+    def test_plan_gates_are_clear_and_instructions_are_folded(self):
+        self.window._select_stage(self.experiment_index)
+        self.panel.set_document(self.panel.templates["gravimetry"])
+        self.panel.build_plan()
+        self.drain()
+        self.assertEqual(self.panel.table.rowCount(), 6)
+        self.assertEqual(self.panel.table.item(1, 2).text(), "confirm")
+        self.assertEqual(self.panel.table.item(1, 4).text(), "Operator: Weigh Oil L")
+        self.assertEqual(self.panel.table.item(0, 6).text(), "Before")
+        self.assertFalse(self.panel.details_box.isVisible())
+        self.panel.table.setCurrentCell(1, 0)
+        self.assertTrue(self.panel.details_box.isVisible())
+        self.assertIn("record empty and full masses", self.panel.details.text())
+        self.assertIn("Timeout:", self.panel.details.text())
+        self.assertEqual(self.panel.plan["steps"][1]["trigger_type"], "time")
+        self.assertEqual(self.panel.plan["steps"][1]["trigger_params"]["duration_s"], 0)
+        self.panel.details_box.hide()
+        self.assertFalse(self.panel.details_box.isVisible())
+
+    def test_preview_accepts_default_stability_parameters(self):
+        from admet.engines.acquisition.fluidics.config import STABILITY_DURATION_S
+
+        document = definition()
+        document["steps"][0].update(trigger_type="stability", trigger_params={"sensor_index": 0}, timeout_s=30)
+        self.panel.set_document(document)
+        self.panel.build_plan()
+        self.drain()
+        self.assertIsNotNone(self.panel.plan)
+        self.assertIn(f"for {STABILITY_DURATION_S:g} s", self.panel.table.item(0, 4).text())
 
     def test_plan_table_fits_all_rows_and_reflows_without_nested_scroll(self):
         from PySide6.QtCore import Qt

@@ -58,7 +58,11 @@ lock does not coordinate with those other programs.
 5. **Plan**, in the existing action bar, freezes the definition without setting any channel,
    starting a protocol, or recording.
 6. Review the table: **STEP / UNIT ID / TYPE / TARGET / TRIGGER & ETA / END /
-   CONFIRM**. Multiple channel rows with the same STEP execute simultaneously.
+   CONFIRM**. Each row is one step; aligned unit/type/target lines inside that row
+   execute simultaneously. Human-only gates say **confirm**, not off/time-zero.
+   **Before** means confirmation is required before that step applies targets.
+   Select a row for the full confirmation, exact trigger and timeout; **Hide details**
+   folds the instructions again. This changes only the preview, not the executable steps.
    Pressure limits and unmet guards appear above the table; hover over the summary
    for abort conditions, warnings and digest. ETA excludes operator waiting.
 7. **Execute** executes that reviewed plan ID only, without an extra approval prompt.

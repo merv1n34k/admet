@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from admet.ui import theme as ui
 from admet.ui.tables import GridTable, fit_table_height
+from admet.engines.acquisition.fluidics.config import STABILITY_DURATION_S, STABILITY_TOLERANCE_UL_MIN
 from admet.workflows.control import builtin_document
 from admet.workflows.json_protocol import load, loads, template_documents
 
@@ -30,10 +31,14 @@ def step_rows(plan):
             condition = f"volume ch {params['sensor_index']}: {params['target_volume_ul']:g} µL"
         elif trigger == "time":
             condition = f"time: {params['duration_s']:g} s"
+        elif trigger == "stability":
+            tolerance = params.get("tolerance_ul_min", STABILITY_TOLERANCE_UL_MIN)
+            window = params.get("window_s", STABILITY_DURATION_S)
+            condition = (f"stable ch {params['sensor_index']}: ±{tolerance:g} µL/min "
+                         f"for {window:g} s")
         else:
             condition = trigger + ": " + json.dumps(params, sort_keys=True)
-        condition += "\nETA " + value_text(step["expected_duration_s"], " s")
-        condition += " / timeout " + value_text(step["timeout_s"], " s")
+        condition += " · ETA " + value_text(step["expected_duration_s"], " s")
         controls = [
             (index, mode, value_text(target, unit))
             for key, mode, unit in (
@@ -41,13 +46,30 @@ def step_rows(plan):
                 ("pressure_setpoints_mbar", "pressure", " mbar"),
             )
             for index, target in step[key].items()
-        ] or [("—", "off", "—")]
-        for index, mode, target in controls:
-            rows.append([
-                str(step["number"]), index, mode, target, condition,
-                step["on_complete"], step["confirmation"] or "—",
-            ])
+        ]
+        gate_only = not controls and trigger == "time" and params["duration_s"] == 0 and step["confirmation"]
+        if gate_only:
+            condition = "Operator: " + step["name"]
+        controls = controls or [("—", "confirm" if gate_only else "off", "—")]
+        rows.append([
+            str(step["number"]),
+            "\n".join(str(index) for index, _, _ in controls),
+            "\n".join(mode for _, mode, _ in controls),
+            "\n".join(target for _, _, target in controls),
+            condition, step["on_complete"], "Before" if step["confirmation"] else "—",
+        ])
     return rows
+
+
+def step_details(step):
+    return (
+        f"Step {step['number']} — {step['name']}\n"
+        + (f"Confirm before applying targets: {step['confirmation']}\n" if step["confirmation"] else "")
+        + f"Trigger: {step['trigger_type']} {json.dumps(step['trigger_params'], sort_keys=True)}\n"
+        + f"ETA: {value_text(step['expected_duration_s'], ' s')} · "
+        + f"Timeout: {value_text(step['timeout_s'], ' s')} (operator waiting excluded) · "
+        + f"End: {step['on_complete']}"
+    )
 
 
 class PlanTable(GridTable):
@@ -58,6 +80,9 @@ class PlanTable(GridTable):
         self.verticalHeader().hide()
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.horizontalHeader().setMinimumSectionSize(24)
+        self.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setWordWrap(True)
         self.setTextElideMode(Qt.TextElideMode.ElideNone)
         self._fitting = False
@@ -68,13 +93,12 @@ class PlanTable(GridTable):
         self._fitting = True
         try:
             width = self.viewport().width()
-            compact = {0: 48, 1: 64, 2: 76, 3: 108, 5: 72}
+            compact = {0: 48, 1: 88, 2: 80, 3: 130, 5: 64, 6: 88}
             scale = min(1.0, width * 0.6 / sum(compact.values()))
             for column, preferred in compact.items():
                 self.setColumnWidth(column, max(24, int(preferred * scale)))
             remaining = width - sum(self.columnWidth(c) for c in compact)
-            self.setColumnWidth(4, max(24, remaining * 45 // 100))
-            self.setColumnWidth(6, max(24, remaining - self.columnWidth(4)))
+            self.setColumnWidth(4, max(24, remaining))
             self.resizeRowsToContents()
             fit_table_height(self)
         finally:
@@ -133,6 +157,20 @@ class ProtocolEditor(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         root.addWidget(self.table)
         self.table.hide()
+        self.details_box = QWidget()
+        detail_layout = QVBoxLayout(self.details_box)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        self.details = QLabel()
+        self.details.setWordWrap(True)
+        self.details.setTextFormat(Qt.TextFormat.PlainText)
+        detail_layout.addWidget(self.details)
+        hide_details = ui.button("Hide details")
+        hide_details.clicked.connect(self.details_box.hide)
+        detail_layout.addWidget(hide_details, alignment=Qt.AlignmentFlag.AlignLeft)
+        root.addWidget(self.details_box)
+        self.details_box.hide()
+        self.table.currentCellChanged.connect(self.show_step_details)
+        self.table.cellClicked.connect(self.show_step_details)
         self.editor.textChanged.connect(self.edited)
         self.update_library(window.protocol_library)
 
@@ -289,8 +327,22 @@ class ProtocolEditor(QWidget):
             for row, values in enumerate(rows):
                 for column, value in enumerate(values):
                     self.table.setItem(row, column, QTableWidgetItem(value))
+                    self.table.item(row, column).setToolTip(step_details(plan["steps"][row]))
+                    self.table.item(row, column).setTextAlignment(
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    )
+            self.table.clearSelection()
+            self.table.setCurrentCell(-1, -1)
+            self.details_box.hide()
             self.table.show()
             self.table.fit_contents()
+
+    def show_step_details(self, row, *_args):
+        if self.plan and 0 <= row < len(self.plan["steps"]):
+            self.details.setText(step_details(self.plan["steps"][row]))
+            self.details_box.show()
+        else:
+            self.details_box.hide()
 
     def execute(self):
         if not self.executable:
