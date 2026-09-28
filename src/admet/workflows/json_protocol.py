@@ -32,7 +32,7 @@ def normalize(document):
 
     if not isinstance(document, dict):
         raise ValueError("protocol must be a JSON object")
-    unknown = set(document) - {"name", "steps", "pressure_limits_mbar"}
+    unknown = set(document) - {"name", "steps", "pressure_limits_mbar", "analysis"}
     if unknown:
         raise ValueError(f"unknown protocol fields: {', '.join(sorted(unknown))}")
     name = document.get("name")
@@ -92,7 +92,12 @@ def normalize(document):
         normalized.append(step)
     if len(expand_protocol_steps([_step_from(step, i) for i, step in enumerate(normalized)])) > 1000:
         raise ValueError("expanded protocol exceeds 1000 steps")
-    return {"name": name, "pressure_limits_mbar": limits, "steps": normalized}
+    result = {"name": name, "pressure_limits_mbar": limits, "steps": normalized}
+    if "analysis" in document:
+        from admet.workflows.oil_density import normalize_analysis
+
+        result["analysis"] = normalize_analysis(document["analysis"], normalized)
+    return result
 
 
 def loads(text):
