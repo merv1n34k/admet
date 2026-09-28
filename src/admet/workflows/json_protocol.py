@@ -98,7 +98,7 @@ def normalize(document):
     return {"name": name, "pressure_limits_mbar": limits, "steps": normalized}
 
 
-def load(path):
+def loads(text):
     def pairs(entries):
         result = {}
         for key, value in entries:
@@ -107,7 +107,11 @@ def load(path):
             result[key] = value
         return result
 
-    return normalize(json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=pairs))
+    return normalize(json.loads(text, object_pairs_hook=pairs))
+
+
+def load(path):
+    return loads(Path(path).read_text(encoding="utf-8"))
 
 
 def validate_channels(document, channels):

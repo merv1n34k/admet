@@ -19,6 +19,14 @@ __all__ = [
 
 
 def __getattr__(name: str):
+    if name == "create_control_workflow":
+        from .control import create_control_workflow
+
+        return create_control_workflow
+    if name in {"Stage", "StageControl", "StageStatus", "StageAction", "Workflow", "WorkflowState"}:
+        from . import model
+
+        return getattr(model, name)
     # Imported on use: the analysis runner pulls in heavy scientific stacks that
     # a control-only installation has no reason to load.
     if name in set(__all__):
