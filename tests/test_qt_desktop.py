@@ -103,6 +103,46 @@ class DesktopWindowTests(unittest.TestCase):
         self.panel.editor.insertPlainText(" ")
         self.assertFalse(self.panel.executable)
 
+    def test_plan_table_fits_all_rows_and_reflows_without_nested_scroll(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        from admet.ui.protocols import PlanTable
+
+        table = PlanTable()
+        try:
+            table.setHorizontalHeaderLabels([
+                "STEP", "UNIT ID", "TYPE", "TARGET", "TRIGGER / ETA", "END", "CONFIRM",
+            ])
+            table.setRowCount(30)
+            for row in range(30):
+                for column, value in enumerate([
+                    str(row + 1), "0", "pressure", "1800 mbar",
+                    "volume ch 0: 50 µL\nETA 30 s / timeout 120 s", "zero",
+                    "Confirm the physical channel mapping and collection tube before continuing.",
+                ]):
+                    table.setItem(row, column, QTableWidgetItem(value))
+            table.resize(1100, 300)
+            table.show()
+            self.app.processEvents()
+            wide_height = table.height()
+            for width in (640, 900, 1100):
+                table.resize(width, table.height())
+                self.app.processEvents()
+                self.assertLessEqual(table.horizontalHeader().length(), table.viewport().width())
+                self.assertGreaterEqual(
+                    table.viewport().height(), sum(table.rowHeight(r) for r in range(30)),
+                )
+                self.assertEqual(table.verticalScrollBar().maximum(), 0)
+                self.assertEqual(table.horizontalScrollBar().maximum(), 0)
+                self.assertEqual(table.textElideMode(), Qt.TextElideMode.ElideNone)
+                if width == 640:
+                    self.assertGreater(table.height(), wide_height)
+            self.assertEqual(table.height(), wide_height)
+        finally:
+            table.close()
+            table.deleteLater()
+
     def test_custom_stages_stay_between_fixed_priming_and_wash(self):
         from PySide6.QtWidgets import QTabWidget
 

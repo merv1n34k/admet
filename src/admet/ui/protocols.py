@@ -2,13 +2,15 @@
 
 import json
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
     QLabel, QPlainTextEdit,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from admet.ui import theme as ui
+from admet.ui.tables import GridTable, fit_table_height
 from admet.workflows.control import builtin_document
 from admet.workflows.json_protocol import load, loads
 
@@ -48,6 +50,45 @@ def step_rows(plan):
     return rows
 
 
+class PlanTable(GridTable):
+    def __init__(self):
+        super().__init__(0, 7)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.verticalHeader().hide()
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self.horizontalHeader().setMinimumSectionSize(24)
+        self.setWordWrap(True)
+        self.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self._fitting = False
+
+    def fit_contents(self):
+        if self._fitting:
+            return
+        self._fitting = True
+        try:
+            width = self.viewport().width()
+            compact = {0: 48, 1: 64, 2: 76, 3: 108, 5: 72}
+            scale = min(1.0, width * 0.6 / sum(compact.values()))
+            for column, preferred in compact.items():
+                self.setColumnWidth(column, max(24, int(preferred * scale)))
+            remaining = width - sum(self.columnWidth(c) for c in compact)
+            self.setColumnWidth(4, max(24, remaining * 45 // 100))
+            self.setColumnWidth(6, max(24, remaining - self.columnWidth(4)))
+            self.resizeRowsToContents()
+            fit_table_height(self)
+        finally:
+            self._fitting = False
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self.fit_contents()
+
+    def showEvent(self, event):  # noqa: N802
+        super().showEvent(event)
+        self.fit_contents()
+
+
 class ProtocolEditor(QWidget):
     """Only the new definition/preview content; transport and logs stay in the window."""
 
@@ -85,14 +126,10 @@ class ProtocolEditor(QWidget):
         self.summary.setObjectName("StageSummary")
         self.summary.setWordWrap(True)
         root.addWidget(self.summary)
-        self.table = QTableWidget(0, 7)
+        self.table = PlanTable()
         self.table.setObjectName("RawConfigTable")
         self.table.setHorizontalHeaderLabels(["STEP", "UNIT ID", "TYPE", "TARGET", "TRIGGER / ETA", "END", "CONFIRM"])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
-        self.table.setMaximumHeight(280)
-        self.table.setWordWrap(True)
         root.addWidget(self.table)
         self.table.hide()
         self.editor.textChanged.connect(self.edited)
@@ -245,8 +282,8 @@ class ProtocolEditor(QWidget):
             for row, values in enumerate(rows):
                 for column, value in enumerate(values):
                     self.table.setItem(row, column, QTableWidgetItem(value))
-            self.table.resizeRowsToContents()
             self.table.show()
+            self.table.fit_contents()
 
     def execute(self):
         if not self.executable:
