@@ -596,12 +596,12 @@ class OnceTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
-    def test_watch_is_the_third_command(self):
+    def test_control_and_qt_are_available_commands(self):
         from admet.app import build_parser
 
         commands = build_parser()._subparsers._group_actions[0].choices
 
-        self.assertEqual(set(commands), {"describe", "serve", "control"})
+        self.assertEqual(set(commands), {"describe", "serve", "control", "qt"})
 
     def test_it_requires_a_runtime_directory(self):
         from admet.app import build_parser

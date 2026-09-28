@@ -11,6 +11,9 @@ uv sync --locked --extra control
 .\start-admet.cmd
 ```
 
+With the project environment activated, open the app with `admet qt`
+(optionally `--project PATH`). Without activation, use `uv run --extra control admet qt`.
+
 The desktop controls real devices; there is no live/simulated switch.
 Devices remain disconnected until you click Connect. Create/open an
 `.admetp` project, connect devices, apply corrections, then use the original

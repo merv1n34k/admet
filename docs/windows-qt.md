@@ -23,8 +23,8 @@ no chat session or agent.
 Double-click `start-admet.cmd`, or run:
 
 ```powershell
-uv run --locked --extra control admet-qt
-uv run --locked --extra control admet-qt --project "D:\Experiments\today.admetp"
+uv run --locked --extra control admet qt
+uv run --locked --extra control admet qt --project "D:\Experiments\today.admetp"
 ```
 
 The desktop is live-only; there are no mode flags or simulation selectors.

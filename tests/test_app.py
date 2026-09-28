@@ -9,6 +9,7 @@ import io
 import json
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest.mock import patch
 
 from admet.app import build_parser, main
 
@@ -26,7 +27,30 @@ def _commands() -> dict:
 
 class SurfaceTests(unittest.TestCase):
     def test_the_command_line_is_discovery_the_controller_and_the_monitor(self):
-        self.assertEqual(set(_commands()), {"describe", "serve", "control"})
+        self.assertEqual(set(_commands()), {"qt", "describe", "serve", "control"})
+
+    def test_qt_launches_desktop_and_forwards_only_project(self):
+        for args, forwarded in (
+            (["qt"], []),
+            (["qt", "--project", "test.admetp"], ["--project", "test.admetp"]),
+            (["--project", "test.admetp", "qt"], ["--project", "test.admetp"]),
+        ):
+            with self.subTest(args=args), patch("admet.ui.app.main", return_value=0) as desktop:
+                self.assertEqual(main(args), 0)
+                desktop.assert_called_once_with(forwarded)
+
+    def test_qt_help_does_not_launch_desktop(self):
+        with patch("admet.ui.app.main", side_effect=AssertionError("desktop launched")):
+            with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as caught:
+                main(["qt", "--help"])
+        self.assertEqual(caught.exception.code, 0)
+
+    def test_qt_rejects_server_options(self):
+        for option in (["--runtime", "runtime"], ["--create-project"]):
+            with self.subTest(option=option), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    main([*option, "qt"])
+                self.assertEqual(caught.exception.code, 2)
 
     def test_no_command_runs_an_experiment(self):
         # do, call, run, plan, operations and status are gone. One way to run

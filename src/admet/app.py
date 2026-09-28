@@ -1,8 +1,8 @@
 """Command line entry point.
 
-Three commands, and no more: find out what exists, start the one process that
-owns the instrument, and control it.
+Launch the standalone desktop, or discover, serve and control a headless owner.
 
+    admet qt [--project PATH]
     admet describe [TARGET]
     admet serve (--simulated | --live) [--project PATH] [--runtime PATH]
     admet control --runtime PATH [--once]
@@ -30,7 +30,7 @@ from typing import Any
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="admet", description="admet headless control")
+    parser = argparse.ArgumentParser(prog="admet", description="ADMET desktop and instrument control")
     parser.add_argument("--project", help="project to work in")
     parser.add_argument(
         "--create-project",
@@ -39,6 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--runtime", help="directory to publish runtime telemetry into")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    qt = sub.add_parser("qt", help="open the standalone Qt desktop")
+    qt.add_argument("--project", default=argparse.SUPPRESS, help="existing .admetp project")
 
     describe = sub.add_parser(
         "describe", help="what exists: every operation, or one operation or engine"
@@ -76,6 +79,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "qt":
+        if args.runtime or args.create_project:
+            parser.error("qt does not use --runtime or --create-project; create projects in the app")
+        from admet.ui.app import main as desktop_main
+
+        return desktop_main(["--project", args.project] if args.project else [])
 
     if args.command == "control":
         from admet.core.control import control
