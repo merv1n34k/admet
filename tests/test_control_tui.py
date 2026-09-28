@@ -182,7 +182,7 @@ class HonestyTests(unittest.TestCase):
         frame = render(None, directory="/tmp/rt")
 
         self.assertIn("Nothing is publishing", frame)
-        self.assertIn("serve --simulated", frame)
+        self.assertIn("Ask the agent", frame)
 
     def test_a_disconnected_rig_shows_no_channels_rather_than_empty_rows(self):
         frame = render(_state(channels=[], connection={"fluidics": False, "simulated": True}))

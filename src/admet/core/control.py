@@ -98,12 +98,11 @@ def render(
     if state is None:
         return "\n".join(
             [
-                paint("ADMET MONITOR", BOLD),
+                paint("ADMET CONTROL", BOLD),
                 "",
                 f"Nothing is publishing into {directory or 'this directory'} yet.",
                 "",
-                paint("Start the controller with:", DIM),
-                paint(f"  admet --runtime {directory or 'PATH'} serve --simulated", DIM),
+                paint("Ask the agent to start the ADMET owner for this runtime.", DIM),
                 "",
                 _footer(paint, interactive=interactive, notice=notice),
             ]
@@ -117,6 +116,8 @@ def render(
         rule,
         *_session(runtime, observation, paint),
         rule,
+        *_protocol(observation, paint, width),
+        rule,
         *_fluidics_configuration(observation, paint),
         rule,
         *_channels(observation, paint),
@@ -124,8 +125,6 @@ def render(
         *_camera(observation, paint),
         rule,
         *_plans(observation, paint, now, width),
-        rule,
-        *_protocol(observation, paint, width),
         rule,
         *_validation(observation, paint),
         rule,
@@ -374,6 +373,8 @@ def _plans(
                 f"{(expected_text if first else ''):<8.8}"
                 f"{(str(step.get('on_complete') or '') if first else ''):<8.8}"
             )
+        if len(condition) > 13:
+            lines.extend(_fold_plan_note("CONDITION: ", condition, paint, width, DIM))
         if step.get("confirmation"):
             lines.extend(
                 _fold_plan_note("CONFIRM: ", str(step["confirmation"]), paint, width, BOLD, YELLOW)
@@ -530,12 +531,10 @@ def _summarise(entry: dict[str, Any]) -> str:
 
 
 def _footer(paint: _Paint, *, interactive: bool = False, notice: str = "") -> str:
-    if notice:
-        return paint(f"  {notice}", BOLD, YELLOW)
     if interactive:
-        return paint(
-            "  [q/Esc] QUIT  [L] LOGS  [↑↓/Pg] SCROLL  [E] E-STOP  [X] KILL",
-            DIM,
+        message = paint(f"  {notice}", BOLD, YELLOW) + "\n" if notice else ""
+        return message + paint(
+            "  [q/Esc] QUIT  [L] LOGS  [↑↓/Pg] SCROLL  [E] E-STOP  [X] KILL", DIM,
         )
     return paint(
         "  read-only telemetry snapshot · physical emergency stop remains authoritative",
@@ -579,6 +578,48 @@ def _log_frame(directory: str, colour: bool, *, width: int) -> str:
         "─" * max(1, width),
         paint("  [q/Esc] BACK  [↑↓/Pg] SCROLL", DIM),
     ])
+    return "\n".join(lines)
+
+
+def _interactive_frame(directory, colour, width, session, view):
+    state = read_state(directory)
+    observation = (state or {}).get("observation") or {}
+    paint = _Paint(colour)
+    if view == "logs":
+        return _log_frame(directory, colour, width=width)
+    if view == "library":
+        lines = [paint("ADMET · SAVED PROTOCOLS", BOLD),
+                 "  ↑↓ select · Enter open and plan · C close"]
+        if not session.library:
+            lines.append("  No saved protocols. Ask the agent to save one in this project.")
+        for index, item in enumerate(session.library):
+            mark = ">" if index == session.library_index else " "
+            lines.append(f" {mark} {item['name']}   {item.get('steps', '—')} steps")
+            if item.get("error"):
+                lines.extend(textwrap.wrap(str(item["error"]), max(10, width - 4)))
+        lines.extend([session.notice, _footer(paint, interactive=True)])
+        return "\n".join(lines)
+    if view == "review" and session.plan:
+        plan_id = session.plan["plan_id"]
+        latest = next((p for p in observation.get("planned_protocols", [])
+                       if p["plan_id"] == plan_id), None)
+        if latest:
+            session.plan = latest
+        lines = [paint("ADMET · REVIEW PLAN", BOLD),
+                 "  R execute · Tab next plan · C close",
+                 "  Y proceed · S skip · P pause/resume · A abort"]
+        lines.extend(_plans({"planned_protocols": [session.plan]}, paint, None, width))
+        lines.extend(_protocol(observation, paint, width))
+        lines.append(_footer(paint, interactive=True, notice=session.notice))
+        session.reviewed_id = plan_id
+        return "\n".join(lines)
+    frame = render(state, read_events(directory, limit=20), directory=directory,
+                   colour=colour, width=width, interactive=True, notice=session.notice)
+    lines = frame.splitlines()
+    lines[1:1] = [
+        "  O open saved protocol · V review plan",
+        "  Y proceed · S skip · P pause/resume · A abort",
+    ]
     return "\n".join(lines)
 
 
@@ -638,14 +679,13 @@ def control(
         return 0
 
     session = ControlSession(directory)
-    notice = session.notice
     scroll_offset = 0
     view = "main"
     with _control_keys(out) as pressed:
         out.write("\x1b[?1049h\x1b[?25l")
         try:
             size = shutil.get_terminal_size(fallback=(80, 24))
-            raw_frame = _frame(directory, colour, width=size.columns, interactive=True, notice=notice)
+            raw_frame = _interactive_frame(directory, colour, size.columns, session, view)
             next_refresh = time.monotonic() + interval_s
             frame = _fit_frame(raw_frame, size.columns, size.lines, offset=scroll_offset)
             out.write("\x1b[H" + frame.replace("\n", "\x1b[K\n") + "\x1b[J")
@@ -656,7 +696,9 @@ def control(
                 now = time.monotonic()
                 update = session.poll()
                 if update:
-                    notice = session.notice
+                    if update in {"library", "review"}:
+                        view = update
+                        scroll_offset = 0
                     next_refresh = now
                 if key is None and now < next_refresh:
                     # An incomplete terminal escape sequence arrived. Read its
@@ -664,7 +706,7 @@ def control(
                     # next telemetry refresh.
                     continue
                 if key in {"q", "Q", "escape"}:
-                    if view == "logs":
+                    if view != "main":
                         view = "main"
                         scroll_offset = 0
                         refresh = True
@@ -672,29 +714,64 @@ def control(
                         break
                 else:
                     refresh = now >= next_refresh
+                if key in {"c", "C"}:
+                    view = "main"
+                    session.reviewed_id = None
+                    scroll_offset = 0
+                    refresh = True
                 if key in {"l", "L"} and view == "main":
                     view = "logs"
                     scroll_offset = 0
                     refresh = True
-                if key == "E" and view == "main":
-                    notice = _signal_owner(directory, signal.SIGUSR1, "emergency stop requested")
+                if key == "E":
+                    session.notice = _signal_owner(directory, signal.SIGUSR1, "emergency stop requested")
                     refresh = True
-                elif key == "X" and view == "main":
-                    notice = _signal_owner(directory, signal.SIGTERM, "server shutdown requested")
+                elif key == "X":
+                    session.notice = _signal_owner(directory, signal.SIGTERM, "server shutdown requested")
                     refresh = True
+                elif key in {"o", "O"} and view == "main":
+                    session.submit("list_protocols", {})
+                    refresh = True
+                elif key in {"v", "V"} and view == "main":
+                    observation = (read_state(directory) or {}).get("observation") or {}
+                    if session.review(observation):
+                        view = "review"
+                        scroll_offset = 0
+                    refresh = True
+                elif view == "library" and key in {"up", "k", "down", "j"}:
+                    delta = 1 if key in {"down", "j"} else -1
+                    session.library_index = min(max(0, len(session.library) - 1),
+                                                max(0, session.library_index + delta))
+                    scroll_offset = max(0, session.library_index - max(1, size.lines - 7))
+                    key = None
+                    refresh = True
+                elif view == "library" and key in {"\r", "\n"}:
+                    session.open_selected()
+                    refresh = True
+                elif view == "review" and key == "\t":
+                    observation = (read_state(directory) or {}).get("observation") or {}
+                    session.next_plan(observation)
+                    scroll_offset = 0
+                    refresh = True
+                elif view == "review" and key in {"r", "R"}:
+                    session.execute()
+                    refresh = True
+                elif view in {"main", "review"}:
+                    actions = {"y": "confirm", "s": "skip", "a": "abort"}
+                    action = actions.get((key or "").lower())
+                    if key in {"p", "P"}:
+                        observation = (read_state(directory) or {}).get("observation") or {}
+                        paused = (observation.get("protocol") or {}).get("state") == "paused"
+                        action = "resume" if paused else "pause"
+                    if action:
+                        session.action(action)
+                        refresh = True
                 latest_size = shutil.get_terminal_size(fallback=(80, 24))
                 if latest_size != size:
                     size = latest_size
                     refresh = True
                 if refresh:
-                    raw_frame = (
-                        _log_frame(directory, colour, width=size.columns)
-                        if view == "logs"
-                        else _frame(
-                            directory, colour, width=size.columns,
-                            interactive=True, notice=notice,
-                        )
-                    )
+                    raw_frame = _interactive_frame(directory, colour, size.columns, session, view)
                     next_refresh = now + interval_s
                 body_rows = max(0, len(raw_frame.splitlines()) - 1)
                 viewport_rows = max(0, size.lines - 1)
