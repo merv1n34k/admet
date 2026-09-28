@@ -21,8 +21,9 @@ import unittest.mock
 from pathlib import Path
 
 from admet.core.runtime import read_events, read_state
-from admet.core.watch import render
+from admet.core.control import render
 from admet.mcp.server import serve
+from admet.mcp.client import OwnerClient
 
 
 def _terminate_owner(runtime, timeout_s=10.0):
@@ -40,6 +41,27 @@ def _terminate_owner(runtime, timeout_s=10.0):
 
 
 class AcceptanceRun(unittest.TestCase):
+    def test_terminal_client_reattaches_to_same_owner_after_project_open(self):
+        self.call("create_project", path=str(self.project))
+        self._wait_for(
+            lambda: (read_state(self.runtime)["runtime"].get("project") == str(self.project)),
+            "project publication",
+        )
+        pid = read_state(self.runtime)["runtime"]["pid"]
+        client = OwnerClient(self.runtime)
+        try:
+            observed = client.call("observe")
+            self.assertEqual(observed["project"]["path"], str(self.project))
+            self.assertEqual(read_state(self.runtime)["runtime"]["pid"], pid)
+            self.assertIn("plan_protocol_file", {
+                tool["name"] for tool in client.request("tools/list", {})["tools"]
+            })
+            client.close()
+            client.connect()
+            self.assertEqual(client.call("observe")["project"]["path"], str(self.project))
+        finally:
+            client.close()
+
     def setUp(self):
         self.runtime = Path(tempfile.mkdtemp())
         self.project = Path(tempfile.mkdtemp()) / "oil.admetp"
@@ -176,7 +198,7 @@ class AcceptanceRun(unittest.TestCase):
         self.assertEqual(listed["steps"], plan["steps"])
         self._wait_for(
             lambda: plan["plan_id"] in render(read_state(self.runtime), read_events(self.runtime)),
-            "the plan to appear in watch",
+            "the plan to appear in control",
         )
         runtime_events = read_events(self.runtime, limit=0)
         self.assertTrue(any(event["type"] == "plans" for event in runtime_events))
@@ -438,7 +460,7 @@ class DocumentedCommandTests(unittest.TestCase):
                 while read_state(runtime) is None and time.monotonic() < deadline:
                     time.sleep(0.1)
 
-                watched = self._admet("watch", "--runtime", str(runtime), "--once")
+                watched = self._admet("control", "--runtime", str(runtime), "--once")
 
                 self.assertEqual(watched.returncode, 0, watched.stderr)
                 self.assertIn("SIMULATED", watched.stdout)
@@ -457,7 +479,7 @@ class DocumentedCommandTests(unittest.TestCase):
         import sys
 
         probe = (
-            "import sys; sys.argv = ['admet', 'watch', '--runtime', '/nonexistent', '--once'];"
+            "import sys; sys.argv = ['admet', 'control', '--runtime', '/nonexistent', '--once'];"
             "from admet.app import main; main();"
             "print('SERVICE', 'admet.core.service' in sys.modules);"
             "print('ENGINES', any(m.startswith('admet.engines') for m in sys.modules))"

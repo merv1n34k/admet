@@ -15,7 +15,6 @@ line, a stray print -- corrupts the stream, so diagnostics go to stderr.
 from __future__ import annotations
 
 import json
-import hashlib
 import os
 import select
 import signal
@@ -30,6 +29,7 @@ import traceback
 from typing import Any, TextIO
 
 from admet.core.service import Admet
+from admet.mcp.client import software_digest as _software_digest
 from admet.mcp.tools import DESCRIBE_TOOL, MCP_PROTOCOL_CONTROLS, PLAN_TOOLS, operation_tools
 from admet.workflows.operations import operation as find_operation
 
@@ -375,15 +375,6 @@ def _validate_owner(runtime: Path, *, simulated: bool, project: str | None) -> N
         )
 
 
-def _software_digest() -> str:
-    package = Path(__file__).resolve().parents[1]
-    digest = hashlib.sha256()
-    for path in sorted(package.rglob("*.py")):
-        digest.update(str(path.relative_to(package)).encode())
-        digest.update(path.read_bytes())
-    return digest.hexdigest()
-
-
 def _serve_owner(
     *, simulated: bool, project: str | None, create_project: bool, runtime: str
 ) -> int:
@@ -521,7 +512,8 @@ def _serve_client(
         if not first:
             return
         attach = json.loads(first)
-        expected_project = str(Path(project).resolve()) if project else None
+        current_project = server.admet.project
+        expected_project = str(current_project.path.resolve()) if current_project else None
         mismatch = None
         if attach.get("method") != ATTACH_METHOD:
             mismatch = "missing ADMET owner handshake"

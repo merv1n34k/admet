@@ -17,15 +17,15 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from admet.core.watch import (
+from admet.core.control import (
     RULE,
     STALE_AFTER_S,
     _fit_frame,
     _log_frame,
     _signal_owner,
-    _watch_keys,
+    _control_keys,
     render,
-    watch,
+    control,
 )
 
 
@@ -78,9 +78,9 @@ class SafetyOfTheMonitorTests(unittest.TestCase):
         # string saying "connected" is not mistaken for reaching a device.
         import ast
 
-        import admet.core.watch
+        import admet.core.control
 
-        tree = ast.parse(Path(admet.core.watch.__file__).read_text())
+        tree = ast.parse(Path(admet.core.control.__file__).read_text())
         imported = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -90,14 +90,14 @@ class SafetyOfTheMonitorTests(unittest.TestCase):
 
         self.assertEqual(
             {name for name in imported if name.startswith("admet")},
-            {"admet.core.runtime"},
+            {"admet.core.runtime", "admet.core.control_session"},
         )
         self.assertFalse({name for name in imported if "engine" in name or "fluigent" in name})
 
     def test_it_holds_no_service_and_no_engine(self):
-        import admet.core.watch
+        import admet.core.control
 
-        source = Path(admet.core.watch.__file__).read_text()
+        source = Path(admet.core.control.__file__).read_text()
 
         self.assertNotIn("Admet(", source)
         self.assertNotIn("engine_action", source)
@@ -119,7 +119,7 @@ class SafetyOfTheMonitorTests(unittest.TestCase):
         state["runtime"]["heartbeat"] = datetime.now().astimezone().isoformat()
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "state.json").write_text(json.dumps(state))
-            with unittest.mock.patch("admet.core.watch.os.kill") as kill:
+            with unittest.mock.patch("admet.core.control.os.kill") as kill:
                 emergency = _signal_owner(tmp, signal.SIGUSR1, "emergency")
                 shutdown = _signal_owner(tmp, signal.SIGTERM, "shutdown")
 
@@ -133,7 +133,7 @@ class SafetyOfTheMonitorTests(unittest.TestCase):
     def test_a_stale_runtime_pid_is_never_signalled(self):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "state.json").write_text(json.dumps(_state()))
-            with unittest.mock.patch("admet.core.watch.os.kill") as kill:
+            with unittest.mock.patch("admet.core.control.os.kill") as kill:
                 result = _signal_owner(tmp, signal.SIGTERM, "shutdown")
 
         self.assertIn("REFUSED", result)
@@ -472,11 +472,11 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(fitted.splitlines(), ["body 3", "body 4", "body 5", "controls"])
 
     def test_arrow_sequences_are_buffered_even_when_the_terminal_splits_them(self):
-        keys = _watch_keys(io.StringIO())
+        keys = _control_keys(io.StringIO())
         keys._fd = 10
         with (
             unittest.mock.patch("select.select", return_value=([object()], [], [])),
-            unittest.mock.patch("admet.core.watch.os.read", side_effect=[b"\x1b", b"[B"]),
+            unittest.mock.patch("admet.core.control.os.read", side_effect=[b"\x1b", b"[B"]),
         ):
             first = keys._pressed()
             second = keys._pressed()
@@ -485,7 +485,7 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(second, "down")
 
     def test_key_reader_waits_only_until_the_next_refresh(self):
-        keys = _watch_keys(io.StringIO())
+        keys = _control_keys(io.StringIO())
         keys._fd = 10
         with unittest.mock.patch("select.select", return_value=([], [], [])) as selected:
             result = keys._pressed(0.125)
@@ -494,11 +494,11 @@ class LayoutTests(unittest.TestCase):
         selected.assert_called_once_with([unittest.mock.ANY], [], [], 0.125)
 
     def test_buffered_key_after_an_arrow_is_returned_without_waiting_again(self):
-        keys = _watch_keys(io.StringIO())
+        keys = _control_keys(io.StringIO())
         keys._fd = 10
         with (
             unittest.mock.patch("select.select", return_value=([object()], [], [])) as selected,
-            unittest.mock.patch("admet.core.watch.os.read", return_value=b"\x1b[Bq"),
+            unittest.mock.patch("admet.core.control.os.read", return_value=b"\x1b[Bq"),
         ):
             first = keys._pressed(0.5)
             second = keys._pressed(0.5)
@@ -508,13 +508,13 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(selected.call_count, 1)
 
     def test_escape_is_returned_as_a_key_after_arrow_grace_period(self):
-        keys = _watch_keys(io.StringIO())
+        keys = _control_keys(io.StringIO())
         keys._fd = 10
         with (
             unittest.mock.patch("select.select", side_effect=[([object()], [], []), ([], [], [])]),
-            unittest.mock.patch("admet.core.watch.os.read", return_value=b"\x1b"),
+            unittest.mock.patch("admet.core.control.os.read", return_value=b"\x1b"),
             unittest.mock.patch(
-                "admet.core.watch.time.monotonic", side_effect=[1.0, 1.04, 1.04]
+                "admet.core.control.time.monotonic", side_effect=[1.0, 1.04, 1.04]
             ),
         ):
             first = keys._pressed(0.5)
@@ -529,7 +529,7 @@ class LayoutTests(unittest.TestCase):
              "detail": {"outcome": "running", "step": index}}
             for index in range(30)
         ]
-        with unittest.mock.patch("admet.core.watch.read_events", return_value=events) as read:
+        with unittest.mock.patch("admet.core.control.read_events", return_value=events) as read:
             frame = _log_frame("/runtime", False, width=80)
 
         read.assert_called_once_with("/runtime", limit=0)
@@ -559,7 +559,7 @@ class LayoutTests(unittest.TestCase):
     def test_no_colour_when_the_output_is_not_a_terminal(self):
         out = io.StringIO()
 
-        watch("/nonexistent", once=True, stream=out)
+        control("/nonexistent", once=True, stream=out)
 
         self.assertNotIn("\x1b[", out.getvalue())
 
@@ -568,7 +568,7 @@ class OnceTests(unittest.TestCase):
     def test_it_draws_one_frame_and_returns(self):
         out = io.StringIO()
 
-        code = watch("/nonexistent", once=True, stream=out)
+        code = control("/nonexistent", once=True, stream=out)
 
         self.assertEqual(code, 0)
         self.assertIn("Nothing is publishing", out.getvalue())
@@ -578,7 +578,7 @@ class OnceTests(unittest.TestCase):
             (Path(tmp) / "state.json").write_text(json.dumps(_state()))
             out = io.StringIO()
 
-            watch(tmp, once=True, stream=out)
+            control(tmp, once=True, stream=out)
 
             self.assertIn("Oil L", out.getvalue())
             self.assertIn("742.3", out.getvalue())
@@ -589,7 +589,7 @@ class OnceTests(unittest.TestCase):
             (Path(tmp) / "state.json").write_text(json.dumps(_state()))
             out = io.StringIO()
 
-            watch(tmp, once=True, stream=out)
+            control(tmp, once=True, stream=out)
 
             self.assertNotIn("\x1b[?25l", out.getvalue())
             self.assertNotIn("\x1b[H", out.getvalue())
@@ -601,19 +601,19 @@ class CommandTests(unittest.TestCase):
 
         commands = build_parser()._subparsers._group_actions[0].choices
 
-        self.assertEqual(set(commands), {"describe", "serve", "watch"})
+        self.assertEqual(set(commands), {"describe", "serve", "control"})
 
     def test_it_requires_a_runtime_directory(self):
         from admet.app import build_parser
 
         with self.assertRaises(SystemExit):
             with unittest.mock.patch("sys.stderr", io.StringIO()):
-                build_parser().parse_args(["watch"])
+                build_parser().parse_args(["control"])
 
     def test_once_is_offered(self):
         from admet.app import build_parser
 
-        args = build_parser().parse_args(["watch", "--runtime", "/tmp/rt", "--once"])
+        args = build_parser().parse_args(["control", "--runtime", "/tmp/rt", "--once"])
 
         self.assertTrue(args.once)
         self.assertEqual(args.runtime, "/tmp/rt")

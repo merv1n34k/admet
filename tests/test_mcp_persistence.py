@@ -14,6 +14,7 @@ from admet.mcp import server as mcp_server
 
 class _Admet:
     def __init__(self):
+        self.project = None
         self.stop_reasons = []
         self.shutdown_calls = 0
         self.stopped_channels = []

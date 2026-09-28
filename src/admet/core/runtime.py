@@ -39,7 +39,7 @@ STATE_FILE = "state.json"
 EVENTS_FILE = "events.jsonl"
 LOCK_FILE = "owner.lock"
 
-# Four times a second: fast enough to watch a flow settle, slow enough that the
+# Four times a second: fast enough to control a flow settle, slow enough that the
 # monitor is reading whole files rather than fighting the writer.
 PUBLISH_INTERVAL_S = 0.25
 

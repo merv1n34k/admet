@@ -137,7 +137,7 @@ def build_steps(settings: dict[str, Any], channel: dict[str, Any]) -> tuple[list
 
     # A lead-in at half the first target. Going from nothing straight to a
     # target is how a line that is already restricted gets a pressure spike
-    # before anything has had a chance to watch it.
+    # before anything has had a chance to control it.
     lead_in = round(targets[0] / 2.0, 3)
     if lead_in > 0:
         steps.append(
@@ -351,7 +351,7 @@ class ValidationRun(threading.Thread):
         with self._lock:
             self._state["artifacts"] = {**self._state["artifacts"], name: path}
 
-    # -- the watch ----------------------------------------------------------
+    # -- the control ----------------------------------------------------------
     def run(self) -> None:
         reason = ""
         try:

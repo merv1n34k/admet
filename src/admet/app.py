@@ -1,11 +1,11 @@
 """Command line entry point.
 
 Three commands, and no more: find out what exists, start the one process that
-owns the instrument, and watch it.
+owns the instrument, and control it.
 
     admet describe [TARGET]
     admet serve (--simulated | --live) [--project PATH] [--runtime PATH]
-    admet watch --runtime PATH [--once]
+    admet control --runtime PATH [--once]
 
 Running an experiment is deliberately not here. It happens through MCP or
 through the Python binding, both of which go through the same guarded
@@ -66,9 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--project", default=argparse.SUPPRESS)
     serve.add_argument("--create-project", action="store_true", default=argparse.SUPPRESS)
 
-    watch = sub.add_parser("watch", help="telemetry monitor with owner safety controls")
-    watch.add_argument("--runtime", required=True, help="the serving process's runtime directory")
-    watch.add_argument("--once", action="store_true", help="draw one frame and exit")
+    control = sub.add_parser("control", help="attach to the owner to review and control runs")
+    control.add_argument("--runtime", required=True, help="the serving process's runtime directory")
+    control.add_argument("--once", action="store_true", help="draw one frame and exit")
 
     return parser
 
@@ -77,10 +77,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "watch":
-        from admet.core.watch import watch
+    if args.command == "control":
+        from admet.core.control import control
 
-        return watch(args.runtime, once=args.once)
+        return control(args.runtime, once=args.once)
 
     if args.command == "serve":
         from admet.mcp.server import serve
@@ -93,9 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "describe":
-        # Imported here, not at the top: `watch` reads files and must not pull
-        # the service -- and through it every engine -- into a process whose
-        # whole claim is that it cannot touch the instrument.
+        # The terminal attaches over MCP and must not load the service or engines.
         from admet.core.service import Admet
 
         return _attempt(lambda: _open(Admet(), args).describe(args.target))

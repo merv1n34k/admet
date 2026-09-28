@@ -1,9 +1,8 @@
-"""A telemetry window onto the process that owns the instrument.
+"""A terminal attached to the process that owns the instrument.
 
-This reads two files and draws them. It opens no SDK, constructs no engine, and
-never becomes a second instrument controller. Its only mutations are process
-signals to the published owner PID: emergency stop and graceful shutdown. The
-owner remains solely responsible for zeroing and releasing hardware.
+Telemetry comes from runtime files; actions go through the owner's MCP socket.
+It opens no SDK and constructs no engine. Emergency stop and graceful shutdown
+also have an independent signal path to the published owner PID.
 
 Everything here is standard library and ANSI escapes. The renderer is a pure
 function of the two files' contents, so what the eye sees can be asserted
@@ -23,6 +22,7 @@ import time
 from typing import Any, TextIO
 
 from admet.core.runtime import heartbeat_age_s, read_events, read_state
+from admet.core.control_session import ControlSession
 
 # Past this, the process has missed several publishes and what is on screen can
 # no longer be trusted as current.
@@ -621,7 +621,7 @@ def _clip_ansi(line: str, width: int) -> str:
     return "".join(result)
 
 
-def watch(
+def control(
     directory: str,
     *,
     once: bool = False,
@@ -637,10 +637,11 @@ def watch(
         out.flush()
         return 0
 
-    notice = ""
+    session = ControlSession(directory)
+    notice = session.notice
     scroll_offset = 0
     view = "main"
-    with _watch_keys(out) as pressed:
+    with _control_keys(out) as pressed:
         out.write("\x1b[?1049h\x1b[?25l")
         try:
             size = shutil.get_terminal_size(fallback=(80, 24))
@@ -650,9 +651,13 @@ def watch(
             out.write("\x1b[H" + frame.replace("\n", "\x1b[K\n") + "\x1b[J")
             out.flush()
             while True:
-                wait_s = max(0.0, next_refresh - time.monotonic())
+                wait_s = min(0.05, max(0.0, next_refresh - time.monotonic()))
                 key = pressed(wait_s)
                 now = time.monotonic()
+                update = session.poll()
+                if update:
+                    notice = session.notice
+                    next_refresh = now
                 if key is None and now < next_refresh:
                     # An incomplete terminal escape sequence arrived. Read its
                     # remaining bytes immediately instead of waiting for the
@@ -717,6 +722,7 @@ def watch(
         except KeyboardInterrupt:
             pass
         finally:
+            session.close()
             out.write("\x1b[?25h\x1b[?1049l")
             out.flush()
     return 0
@@ -746,7 +752,7 @@ def _wants_colour(stream: TextIO) -> bool:
     return bool(getattr(stream, "isatty", lambda: False)())
 
 
-class _watch_keys:
+class _control_keys:
     """Read one-key lifecycle controls and restore the terminal afterwards.
 
     If stdin is not a terminal there is nothing to read and nothing to restore,
@@ -773,7 +779,7 @@ class _watch_keys:
             tty.setcbreak(self._fd)
         except Exception:
             self._settings = None
-            return lambda: False
+            return self._wait_without_input
         return self._pressed
 
     @staticmethod
