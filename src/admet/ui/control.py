@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMainWindow,
     QMenu,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QComboBox,
@@ -336,6 +337,7 @@ class ControlWindow(QMainWindow):
         self._action_show_all_params = False
         self.instruction_card: NotificationCard | None = None
         self.notification: NotificationCard | None = None
+        self._confirmation_dialog: QMessageBox | None = None
         self._instruction_text = ""
         self._notification_text = ""
         self._notification_kind = "primary"
@@ -2873,12 +2875,32 @@ class ControlWindow(QMainWindow):
         self._show_notification_card(text, kind=kind, timeout_ms=timeout_ms)
 
     def _confirm(self, text: str, on_confirm: Callable[[], None]) -> None:
-        self._show_notification_card(
-            text,
-            kind="warning",
-            on_confirm=on_confirm,
-            timeout_ms=0,
-        )
+        if self._confirmation_dialog is not None:
+            self._confirmation_dialog.raise_()
+            self._confirmation_dialog.activateWindow()
+            return
+        dialog = QMessageBox(QMessageBox.Icon.Warning, "Confirm — ADMET", text, parent=self)
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+        dialog.button(QMessageBox.StandardButton.Ok).setText("Confirm")
+        dialog.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        dialog.setEscapeButton(QMessageBox.StandardButton.Cancel)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self._confirmation_dialog = dialog
+
+        def finished(result):
+            if self._confirmation_dialog is not dialog:
+                return
+            self._confirmation_dialog = None
+            dialog.deleteLater()
+            if result == QMessageBox.StandardButton.Ok:
+                on_confirm()
+
+        dialog.finished.connect(finished)
+        dialog.open()
+        dialog.raise_()
+        dialog.activateWindow()
+        dialog.button(QMessageBox.StandardButton.Cancel).setFocus()
 
     def _dismiss_notification(self, *, restore_instruction: bool = True) -> None:
         card = self.notification
@@ -2922,17 +2944,12 @@ class ControlWindow(QMainWindow):
         text: str,
         *,
         kind: str,
-        on_confirm: Callable[[], None] | None = None,
         timeout_ms: int = 3500,
     ) -> None:
-        if (self.notification is not None and self.notification._on_confirm is not None
-                and on_confirm is None and kind not in {"danger", "error"}):
-            return
         if (
             self.notification is not None
             and self._notification_text == text
             and self._notification_kind == kind
-            and on_confirm is None
         ):
             return
         if self.notification is not None:
@@ -2940,7 +2957,7 @@ class ControlWindow(QMainWindow):
         parent = self.notification_host or self.centralWidget()
         if parent is None:
             return
-        self.notification = NotificationCard(parent, text, kind, on_confirm=on_confirm)
+        self.notification = NotificationCard(parent, text, kind)
         self._notification_text = text
         self._notification_kind = kind
         self.notification.closed.connect(self._clear_notification)
@@ -3505,11 +3522,8 @@ class NotificationCard(QFrame):
         parent: QWidget,
         text: str,
         kind: str,
-        *,
-        on_confirm: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
-        self._on_confirm = on_confirm
         self.setObjectName("NotificationCard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
@@ -3526,24 +3540,6 @@ class NotificationCard(QFrame):
         label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.text_label = label
         layout.addWidget(label)
-
-        if on_confirm is not None:
-            actions = QWidget()
-            actions_layout = QHBoxLayout(actions)
-            actions_layout.setContentsMargins(0, 0, 0, 0)
-            actions_layout.setSpacing(8)
-            actions_layout.addStretch()
-
-            cancel = QPushButton("Cancel")
-            cancel.setObjectName("NotificationButton")
-            cancel.clicked.connect(self.close)
-            actions_layout.addWidget(cancel)
-
-            confirm = QPushButton("Confirm")
-            confirm.setObjectName("NotificationButton")
-            confirm.clicked.connect(self._confirm)
-            actions_layout.addWidget(confirm)
-            layout.addWidget(actions)
 
         self.setStyleSheet(_notification_qss(kind))
 
@@ -3566,15 +3562,7 @@ class NotificationCard(QFrame):
         self.adjustSize()
         self.setFixedHeight(min(self.sizeHint().height(), available_height))
 
-    def _confirm(self) -> None:
-        callback = self._on_confirm
-        self._on_confirm = None
-        self.close()
-        if callback is not None:
-            callback()
-
     def closeEvent(self, event) -> None:
-        self._on_confirm = None
         self.closed.emit()
         super().closeEvent(event)
 

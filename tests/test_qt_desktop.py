@@ -261,11 +261,13 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertIn("—", table.table.item(0, 1).text())
 
     def test_window_close_waits_for_zero_and_disconnect(self):
+        from PySide6.QtWidgets import QMessageBox
+
         self.backend.call("connect_fluidics")
         self.window.close()
         self.assertTrue(self.backend.service.state()["fluidics"])
-        self.assertIn("Close ADMET?", self.window.notification.text_label.text())
-        self.window.notification._confirm()
+        self.assertIn("Close ADMET?", self.window._confirmation_dialog.text())
+        self.window._confirmation_dialog.button(QMessageBox.StandardButton.Ok).click()
         self.drain(lambda: self.window._shutdown_complete)
         self.assertFalse(self.backend.service.state()["fluidics"])
         self.assertTrue(self.backend.engine.safety_state()["tripped"])
@@ -282,7 +284,7 @@ class DesktopWindowTests(unittest.TestCase):
             self.drain()
         self.window._poll_pipeline_events()
         self.assertIn("Confirm physical", self.window._pending_pipeline_confirmation())
-        self.assertIsNone(self.window.notification._on_confirm)
+        self.assertIsNone(self.window._confirmation_dialog)
         observed = self.backend.call("observe")
         self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0) for c in observed["channels"]))
         self.panel.control("abort")
@@ -300,14 +302,16 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertNotIn("--simulated", output.getvalue())
         self.assertNotIn("--live", output.getvalue())
 
-    def test_reset_and_overwrite_use_inline_confirmation(self):
+    def test_reset_and_overwrite_use_popup_confirmation(self):
+        from PySide6.QtWidgets import QMessageBox
+
         self.backend.emergency_stop()
         self.window._run("reset_safety")
         self.assertTrue(self.backend.engine.safety_state()["tripped"])
-        self.window.notification.close()
+        self.window._confirmation_dialog.close()
         self.assertTrue(self.backend.engine.safety_state()["tripped"])
         self.window._run("reset_safety")
-        self.window.notification._confirm()
+        self.window._confirmation_dialog.button(QMessageBox.StandardButton.Ok).click()
         self.drain()
         self.assertFalse(self.backend.engine.safety_state()["tripped"])
         self.window._select_stage(4)
@@ -318,13 +322,43 @@ class DesktopWindowTests(unittest.TestCase):
         self.panel.set_document(replacement)
         self.panel.save()
         self.drain()
-        self.assertIn("Replace saved definition", self.window.notification.text_label.text())
+        self.assertIn("Replace saved definition", self.window._confirmation_dialog.text())
         stored = self.backend.call("list_protocols", {"name": "desktop_test"})["protocol"]
         self.assertEqual(stored["steps"][0]["trigger_params"]["duration_s"], 0.15)
-        self.window.notification._confirm()
+        self.window._confirmation_dialog.button(QMessageBox.StandardButton.Ok).click()
         self.drain()
         stored = self.backend.call("list_protocols", {"name": "desktop_test"})["protocol"]
         self.assertEqual(stored["steps"][0]["trigger_params"]["duration_s"], 2)
+
+    def test_program_confirmation_is_focused_modal_and_single_use(self):
+        from PySide6.QtCore import Qt, QTimer
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QMessageBox
+
+        calls = []
+        ticks = []
+        self.window._confirm("Reset?", lambda: calls.append("reset"))
+        dialog = self.window._confirmation_dialog
+        QTimer.singleShot(0, lambda: ticks.append(True))
+        self.app.processEvents()
+        self.assertIs(self.app.activeModalWidget(), dialog)
+        self.assertEqual(dialog.windowModality(), Qt.WindowModality.WindowModal)
+        self.assertIs(dialog.defaultButton(), dialog.button(QMessageBox.StandardButton.Cancel))
+        self.assertTrue(dialog.button(QMessageBox.StandardButton.Cancel).hasFocus())
+        self.assertTrue(ticks)
+        self.window._notify("Telemetry updated")
+        self.assertIs(self.window._confirmation_dialog, dialog)
+        self.window._confirm("Different action", lambda: calls.append("wrong"))
+        self.assertIs(self.window._confirmation_dialog, dialog)
+        QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        self.drain(lambda: self.window._confirmation_dialog is None)
+        self.assertIsNone(self.window._confirmation_dialog)
+        self.assertEqual(calls, [])
+        self.window._confirm("Reset?", lambda: calls.append("reset"))
+        dialog = self.window._confirmation_dialog
+        dialog.button(QMessageBox.StandardButton.Ok).click()
+        dialog.finished.emit(QMessageBox.StandardButton.Ok)
+        self.assertEqual(calls, ["reset"])
 
     def test_only_one_desktop_can_own_the_session(self):
         from admet.ui.app import desktop_lock

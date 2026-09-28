@@ -69,7 +69,9 @@ lock does not coordinate with those other programs.
 The protocol's own confirmation gates are the only run confirmations. A step
 with `confirm_message` waits inline before applying targets; a step without it
 runs immediately. Definition replacement, safety reset and closing connected
-devices use the old inline notification card with **Confirm** and **Cancel**.
+devices use a focused popup with **Confirm** and **Cancel**. Cancel is the default;
+Escape or closing the popup cancels without performing the action. Protocol gates
+remain inline and never open a confirmation popup.
 
 The old unbounded manual flow/pressure inputs are disabled. Put dispensing
 targets in bounded JSON steps with pressure trips and time/volume conditions.
