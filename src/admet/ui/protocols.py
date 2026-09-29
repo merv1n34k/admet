@@ -3,9 +3,10 @@
 import json
 import math
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView,
+    QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QPlainTextEdit,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -95,7 +96,7 @@ class PlanTable(GridTable):
         self._fitting = True
         try:
             width = self.viewport().width()
-            compact = {0: 48, 1: 88, 2: 80, 3: 130, 5: 64, 6: 88}
+            compact = {0: 96, 1: 78, 2: 70, 3: 130, 5: 64, 6: 78}
             scale = min(1.0, width * 0.6 / sum(compact.values()))
             for column, preferred in compact.items():
                 self.setColumnWidth(column, max(24, int(preferred * scale)))
@@ -227,6 +228,9 @@ class ProtocolEditor(QWidget):
         self.parameter_table = None
         self._table_digest = None
         self._edit_generation = 0
+        self._executing = False
+        self._current_row = None
+        self._last_sequence = 0
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         self.editor = QPlainTextEdit()
@@ -250,6 +254,9 @@ class ProtocolEditor(QWidget):
         self.summary.setObjectName("StageSummary")
         self.summary.setWordWrap(True)
         root.addWidget(self.summary)
+        self.follow = QCheckBox("Follow running step")
+        self.follow.setChecked(True)
+        root.addWidget(self.follow)
         self.table = PlanTable()
         self.table.setObjectName("RawConfigTable")
         self.table.setHorizontalHeaderLabels(["STEP", "UNIT ID", "TYPE", "TARGET", "TRIGGER / ETA", "END", "CONFIRM"])
@@ -272,6 +279,10 @@ class ProtocolEditor(QWidget):
         root.addWidget(self.measurements)
         self.table.currentCellChanged.connect(self.show_step_details)
         self.table.cellClicked.connect(self.show_step_details)
+        self.table.cellClicked.connect(lambda *_: self.follow.setChecked(False))
+        self.table.viewport().installEventFilter(self)
+        window.page_scroll.viewport().installEventFilter(self)
+        window.page_scroll.verticalScrollBar().sliderPressed.connect(lambda: self.follow.setChecked(False))
         self.editor.textChanged.connect(self.raw_edited)
         self.update_library(window.protocol_library)
 
@@ -417,6 +428,8 @@ class ProtocolEditor(QWidget):
     def add_plan(self, plan):
         self.plan = plan
         self.dirty = False
+        self._table_digest = None
+        self._current_row = None
         self.show_plan()
         self.editor.setVisible(not bool(self.builtin))
         self.window._append_log("Preview ready — nothing recorded or actuated")
@@ -464,6 +477,9 @@ class ProtocolEditor(QWidget):
         if not self.executable:
             return
         plan_id = self.plan["plan_id"]
+        self.window._poll_pipeline_events()
+        self.window._pipeline_stage_id = self.stage.id
+        self.lock_definition(True)
 
         def started(result):
             if result.get("run_id"):
@@ -473,9 +489,60 @@ class ProtocolEditor(QWidget):
             self.window._clear_pipeline_confirmation()
             self.result(result)
 
-        self.submit(lambda: self.backend.call("control_protocol", {
+        def failed(exc):
+            self.lock_definition(False)
+            self.error(exc)
+
+        self.window.tasks.submit(lambda: self.backend.call("control_protocol", {
             "action": "execute", "plan_id": plan_id, "timeout_s": 0.5,
-        }), started)
+        }), started, failed)
+
+    def lock_definition(self, active):
+        self._executing = active
+        self.editor.setReadOnly(active)
+        if not self.builtin:
+            self.library.setEnabled(not active)
+        for widget in self.parameter_editors.values():
+            widget.setEnabled(not active)
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if event.type() == QEvent.Type.Wheel and self.isVisible():
+            self.follow.setChecked(False)
+        return super().eventFilter(watched, event)
+
+    def pipeline_event(self, event):
+        if not self.plan or event.sequence <= self._last_sequence:
+            return
+        self._last_sequence = event.sequence
+        state, outcome = str(event.state), str(event.outcome)
+        self.lock_definition(state in {"running", "paused", "stopping"})
+        row = event.current_step
+        if not event.step_name or not 0 <= row < self.table.rowCount():
+            return
+        if outcome != "running":
+            status = outcome.replace("_", " ")
+        elif state == "paused":
+            status = "paused"
+        elif event.confirmation_message:
+            status = "confirm"
+        else:
+            status = f"running {event.progress:.0%}"
+        color = ("#fce3e3" if outcome in {"error", "timed_out", "cancelled"} else
+                 "#e0f1e9" if outcome == "completed" else
+                 "#edf3f7" if outcome == "skipped" else
+                 "#fff0c2" if status in {"paused", "confirm"} else "#dceefa")
+        self.table.item(row, 0).setText(f"{row + 1}\n{status}")
+        for column in range(self.table.columnCount()):
+            item = self.table.item(row, column)
+            item.setBackground(QColor(color))
+            item.setForeground(QColor("#16212b"))
+        if row != self._current_row:
+            self.table.fit_contents()
+            if self.follow.isChecked() and self.isVisible():
+                position = self.table.viewport().mapTo(
+                    self.window.page_scroll.widget(), QPoint(0, self.table.rowViewportPosition(row)))
+                self.window.page_scroll.ensureVisible(position.x(), position.y(), 0, 60)
+            self._current_row = row
 
     def control(self, action):
         def finished(result):
@@ -490,3 +557,4 @@ class ProtocolEditor(QWidget):
         if self.plan:
             self.plan = next((p for p in plans if p["plan_id"] == self.plan["plan_id"]), self.plan)
             self.show_plan()
+            self.lock_definition(self.plan["state"] == "executing")

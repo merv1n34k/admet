@@ -691,6 +691,48 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertEqual(restored.cells["before_mg"].text(), "12.5")
         self.assertEqual(restored.cells["after_mg"].text(), "")
 
+    def test_run_rows_show_gates_outcomes_and_respect_manual_browsing(self):
+        from admet.engines.acquisition.pipeline import PipelineEvent, PipelineState, StepOutcome
+        from tests.test_protocol_parameters import parameter_protocol
+
+        self.window._select_stage(self.experiment_index)
+        document = parameter_protocol()
+        document["steps"][0]["repeat"] = 2
+        self.panel.set_document(document)
+        self.panel.build_plan()
+        self.drain()
+        self.window._pipeline_stage_id = self.panel.stage.id
+
+        def event(sequence, row, **kwargs):
+            self.panel.pipeline_event(PipelineEvent(
+                state=PipelineState.RUNNING, current_step=row, total_steps=2,
+                step_name="point", sequence=sequence, **kwargs))
+
+        with patch.object(self.window.page_scroll, "ensureVisible") as follow:
+            event(1, 0, confirmation_message="Position vessel")
+            self.assertIn("confirm", self.panel.table.item(0, 0).text())
+            self.assertTrue(self.panel.editor.isReadOnly())
+            self.assertFalse(self.panel.library.isEnabled())
+            self.assertFalse(self.panel.parameter_editors["oil_base_flow"].isEnabled())
+            follow.assert_called_once()
+            event(2, 0, progress=0.25)
+            self.assertIn("25%", self.panel.table.item(0, 0).text())
+            follow.assert_called_once()
+            self.panel.table.cellClicked.emit(0, 0)
+            self.assertFalse(self.panel.follow.isChecked())
+            event(3, 0, outcome=StepOutcome.SKIPPED)
+            event(4, 1, progress=0.5)
+            follow.assert_called_once()
+            self.assertIn("skipped", self.panel.table.item(0, 0).text())
+            self.assertIn("50%", self.panel.table.item(1, 0).text())
+            event(5, 1, outcome=StepOutcome.COMPLETED)
+            self.panel.pipeline_event(PipelineEvent(
+                state=PipelineState.COMPLETED, current_step=1, total_steps=2,
+                sequence=6, outcome=StepOutcome.COMPLETED))
+            self.assertIn("completed", self.panel.table.item(1, 0).text())
+            self.assertFalse(self.panel.editor.isReadOnly())
+            self.assertTrue(self.panel.parameter_editors["oil_base_flow"].isEnabled())
+
     def test_program_confirmation_is_focused_modal_and_single_use(self):
         from PySide6.QtCore import Qt, QTimer
         from PySide6.QtTest import QTest

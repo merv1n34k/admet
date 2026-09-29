@@ -1335,6 +1335,10 @@ class ControlWindow(QMainWindow):
         return panel
 
     def _sync_action_box(self, stage: Stage) -> None:
+        editor = self.protocol_editors.get(stage.id)
+        if editor is not None and editor.builtin:
+            for widget in self._param_editors.values():
+                widget.setEnabled(not editor._executing)
         if self._protocol_status_label is not None:
             self._protocol_status_label.setText(self._pipeline_status_text(stage))
         if self._protocol_progress_bar is not None:
@@ -2191,6 +2195,9 @@ class ControlWindow(QMainWindow):
         while not queue.empty():
             try:
                 latest = queue.get_nowait()
+                editor = self.protocol_editors.get(self._pipeline_stage_id)
+                if editor is not None:
+                    editor.pipeline_event(latest)
                 signature = (str(latest.state), str(latest.outcome), latest.current_step,
                              latest.confirmation_message, latest.error_msg)
                 if signature != self._last_protocol_log:
