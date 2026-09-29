@@ -29,7 +29,17 @@ Checkup is a non-actuating design/calculation page; **Save Project** preserves
 the layout and entered readings. Gravimetry and pressure/flow checks are editable
 JSON templates in the protocol selector, not fixed experiment stages.
 
-**Calculations** is a separate TOC section: select **Oil density** or **Recording
+Custom JSON can declare editable parameters with arithmetic step expressions.
+They appear in the same settings table as Priming; change a base flow once to
+update every linked step when rebuilding the plan. See the
+[parameter syntax](docs/json_protocols.md#editable-parameters-in-qt).
+
+Start oil testing with **Template · flow stability scout**: a single-height M1
+flow sweep, with editable base flow and point duration. Review its settling/fit
+recommendations before preparing a density run. See
+[scout protocol and thresholds](docs/oil_density_experiment.md#first-separate-single-height-scout).
+
+**Calculations** is a separate TOC section: select **Flow stability scout**, **Oil density** or **Recording
 summary**, select a finished recorded run, then **Calculate**. It reads archived
 files, never operates devices, and saves each result separately under
 `records/protocols/<plan_id>/calculations/`. Saved results are available after

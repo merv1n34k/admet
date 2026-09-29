@@ -12,6 +12,7 @@ import uuid
 
 from admet.core.protocol_store import write_json
 from admet.workflows.oil_density import _finite, analyze_density_run
+from admet.workflows.flow_scout import analyze_scout
 
 
 def recorded_runs(project):
@@ -123,6 +124,12 @@ CALCULATIONS = {
                           "description": "Measured pressure/flow statistics and missing-sample counts."},
 }
 
+CALCULATIONS["flow_scout"] = {
+    "label": "Flow stability scout", "version": 2, "calculate": analyze_scout,
+    "files": ("protocol.json", "events.jsonl"),
+    "description": "Single-height flow sweep: settling, averaging windows and pressure/flow fit precision.",
+}
+
 
 def calculate_run(directory, calculation_id):
     calculation = CALCULATIONS.get(calculation_id)
@@ -189,6 +196,20 @@ def result_text(payload):
             lines.append(f"Pass disagreement: {difference:.2f}%")
         lines.append(result.get("note", ""))
         lines.extend(result.get("issues", []))
+    elif payload["calculation_id"] == "flow_scout":
+        lines = ["Flow scout: " + result["status"], result["note"]]
+        recommendation = result.get("recommendation")
+        if recommendation:
+            lines += ["Suggested flows (µL/min): " + ", ".join(f"{v:g}" for v in recommendation["targets_ul_min"]),
+                      f"Settling: {recommendation['settling_s']:g} s; averaging: {recommendation['averaging_s']:g} s",
+                      "Operator approval required; no density protocol is started automatically."]
+        lines += ["\nWINDOW (s) | FLOWS (µL/min) | P0 SD (mbar, forward/reverse) | RESULT"]
+        for fit in result["fits"]:
+            flows = ", ".join(f"{q:g}" for q in fit["usable_targets_ul_min"])
+            errors = "/".join(f"{p['p0_bootstrap_sd_mbar']:.3f}" for p in fit["passes"]) or "unavailable"
+            lines.append(f"{fit['averaging_s']:g} | {flows or 'none'} | {errors} | "
+                         + ("; ".join(fit["issues"]) or "usable"))
+        lines += ["\nThresholds: " + json.dumps(result["thresholds"], indent=2), *result["issues"]]
     else:
         lines = [result.get("note", ""), json.dumps(result, indent=2, ensure_ascii=False)]
     return "\n".join(lines) + "\n\nSaved: " + payload["path"]

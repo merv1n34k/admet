@@ -95,6 +95,8 @@ def resolve(document):
         if isinstance(result.get("pressure_limits_mbar"), dict):
             result["pressure_limits_mbar"] = {
                 k: expression(v, values) for k, v in result["pressure_limits_mbar"].items()}
+        if isinstance(result.get("analysis"), dict) and result["analysis"].get("type") == "flow_scout":
+            result["analysis"]["height_cm"] = expression(result["analysis"].get("height_cm"), values)
     return _normalize_resolved(result)
 
 
@@ -195,7 +197,10 @@ def _normalize_resolved(document):
         raise ValueError("expanded protocol exceeds 1000 steps")
     result = {"name": name, "pressure_limits_mbar": limits, "steps": normalized}
     if "analysis" in document:
-        from admet.workflows.oil_density import normalize_analysis
+        if isinstance(document["analysis"], dict) and document["analysis"].get("type") == "flow_scout":
+            from admet.workflows.flow_scout import normalize_analysis
+        else:
+            from admet.workflows.oil_density import normalize_analysis
 
         result["analysis"] = normalize_analysis(document["analysis"], normalized)
     return result

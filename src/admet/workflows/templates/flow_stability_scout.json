@@ -1,0 +1,207 @@
+{
+  "name": "flow_stability_scout",
+  "steps": [
+    {
+      "name": "M1 zero flow",
+      "sensor_setpoints": {
+        "1": 0
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": 0
+      },
+      "on_complete": "zero"
+    },
+    {
+      "name": "Flow scout pass 1 / 1x",
+      "sensor_setpoints": {
+        "1": "oil_base_flow * 1"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "point_duration_s"
+      },
+      "timeout_s": "point_duration_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Flow scout pass 1 / 3x",
+      "sensor_setpoints": {
+        "1": "oil_base_flow * 3"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "point_duration_s"
+      },
+      "timeout_s": "point_duration_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Flow scout pass 1 / 4x",
+      "sensor_setpoints": {
+        "1": "oil_base_flow * 4"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "point_duration_s"
+      },
+      "timeout_s": "point_duration_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Flow scout pass 1 / 6x",
+      "sensor_setpoints": {
+        "1": "oil_base_flow * 6"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "point_duration_s"
+      },
+      "timeout_s": "point_duration_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Flow scout pass 1 / 9x",
+      "sensor_setpoints": {
+        "1": "oil_base_flow * 9"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "point_duration_s"
+      },
+      "timeout_s": "point_duration_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Flow scout pass 2 / 9x",
+      "sensor_setpoints": {
+        "1": "oil_base_flow * 9"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "point_duration_s"
+      },
+      "timeout_s": "point_duration_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Flow scout pass 2 / 6x",
+      "sensor_setpoints": {
+        "1": "oil_base_flow * 6"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "point_duration_s"
+      },
+      "timeout_s": "point_duration_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Flow scout pass 2 / 4x",
+      "sensor_setpoints": {
+        "1": "oil_base_flow * 4"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "point_duration_s"
+      },
+      "timeout_s": "point_duration_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Flow scout pass 2 / 3x",
+      "sensor_setpoints": {
+        "1": "oil_base_flow * 3"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "point_duration_s"
+      },
+      "timeout_s": "point_duration_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Flow scout pass 2 / 1x",
+      "sensor_setpoints": {
+        "1": "oil_base_flow * 1"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "point_duration_s"
+      },
+      "timeout_s": "point_duration_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "M1 zero flow",
+      "sensor_setpoints": {
+        "1": 0
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": 0
+      },
+      "on_complete": "zero"
+    }
+  ],
+  "analysis": {
+    "type": "flow_scout",
+    "height_cm": "outlet_height_cm",
+    "points": [
+      {
+        "step": 2,
+        "pass": 1
+      },
+      {
+        "step": 3,
+        "pass": 1
+      },
+      {
+        "step": 4,
+        "pass": 1
+      },
+      {
+        "step": 5,
+        "pass": 1
+      },
+      {
+        "step": 6,
+        "pass": 1
+      },
+      {
+        "step": 7,
+        "pass": 2
+      },
+      {
+        "step": 8,
+        "pass": 2
+      },
+      {
+        "step": 9,
+        "pass": 2
+      },
+      {
+        "step": 10,
+        "pass": 2
+      },
+      {
+        "step": 11,
+        "pass": 2
+      }
+    ]
+  },
+  "parameters": {
+    "oil_base_flow": [
+      "Oil base flow, µL/min",
+      5
+    ],
+    "point_duration_s": [
+      "Time per flow point, s",
+      60
+    ],
+    "outlet_height_cm": [
+      "Fixed outlet height, cm",
+      5
+    ]
+  }
+}
