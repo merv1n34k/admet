@@ -283,15 +283,14 @@ def create_control_workflow() -> Workflow:
             ),
             protocol_stage("priming", "4. Priming", builtin="priming"),
             Stage(
-                "checkup", "5. Checkup / chip layout",
-                instructions=("Review your chip/tubing layout and calculations. Save the project to keep them. "
-                              "Measurement runs are editable JSON protocols in Experiment steps; this page does not actuate.",),
-                features=("checkup",),
+                "preflight", "5. Preflight",
+                instructions=("Review flow/phase ratios, fluidics layout and setup formulas. "
+                              "Experimental measurements and results belong to recorded runs and Calculations.",),
+                features=("preflight",),
                 actions=(StageAction("Continue", completes=True),),
-                settings_options={"sections": ("flow", "layout", "system", "gravimetric", "consumption")},
+                settings_options={"sections": ("flow", "layout", "consumption")},
             ),
             protocol_stage("experiment_1", "6. Experiment 1"),
-            protocol_stage("wash", "7. Wash", builtin="wash"),
             Stage(
                 "calculations", "Calculations",
                 instructions=("Choose a saved run and a calculation. Results stay with the recording in the project.",),
@@ -299,6 +298,7 @@ def create_control_workflow() -> Workflow:
                 actions=(StageAction("Continue", completes=True),),
                 show_settings=False,
             ),
+            protocol_stage("wash", "Wash", builtin="wash"),
             Stage(
                 "cleanup",
                 "Cleanup",

@@ -568,7 +568,7 @@ class ControlWindow(QMainWindow):
         layout.addWidget(title)
 
         for index, stage in enumerate(self.workflow.stages):
-            if stage.id == "wash":
+            if stage.id == "calculations":
                 add = ui.button("+ Protocol step")
                 add.clicked.connect(lambda: self._add_protocol_stage())
                 layout.addWidget(add)
@@ -640,7 +640,7 @@ class ControlWindow(QMainWindow):
                 return
         stage = protocol_stage("experiment_" + uuid.uuid4().hex[:8], label.strip())
         stages = list(self.workflow.stages)
-        index = next(i for i, item in enumerate(stages) if item.id == "wash")
+        index = next(i for i, item in enumerate(stages) if item.id == "calculations")
         stages.insert(index, stage)
         self.workflow.stages = tuple(stages)
         self.workflow_state = replace(self.workflow_state, statuses={
@@ -670,7 +670,7 @@ class ControlWindow(QMainWindow):
         stages = [s for s in self.workflow.stages if not (
             "json_protocol" in s.features and not s.settings_options.get("builtin")
         )]
-        position = next(i for i, s in enumerate(stages) if s.id == "wash")
+        position = next(i for i, s in enumerate(stages) if s.id == "calculations")
         restored = []
         for entry in entries:
             try:
@@ -1066,7 +1066,7 @@ class ControlWindow(QMainWindow):
         what did this rig read last time?
         """
         kind = self._check_kind(stage)
-        if not kind and "checkup" not in stage.features:
+        if not kind:
             return None
         panel, body = _panel_box(f"Previous {kind or 'system'} checks")
         hint = QLabel(
@@ -1196,7 +1196,7 @@ class ControlWindow(QMainWindow):
         return controls
 
     def _render_main(self, stage: Stage) -> None:
-        offline = bool({"checkup", "calculations"}.intersection(stage.features))
+        offline = bool({"preflight", "calculations"}.intersection(stage.features))
         self.main_panel.setVisible(not offline)
         if offline:
             return
@@ -1581,7 +1581,7 @@ class ControlWindow(QMainWindow):
         return table
 
     def _render_results(self, stage: Stage) -> None:
-        offline = bool({"checkup", "calculations"}.intersection(stage.features))
+        offline = bool({"preflight", "calculations"}.intersection(stage.features))
         self.results_panel.setVisible(not offline)
         if offline:
             return
@@ -1626,8 +1626,8 @@ class ControlWindow(QMainWindow):
         fit_table_height(self.video_table)
 
     def _render_action(self, stage: Stage) -> None:
-        self.action_panel.setVisible("checkup" not in stage.features)
-        if "checkup" in stage.features:
+        self.action_panel.setVisible("preflight" not in stage.features)
+        if "preflight" in stage.features:
             return
         if "calculations" in stage.features:
             from admet.ui.calculations import CalculationsPanel

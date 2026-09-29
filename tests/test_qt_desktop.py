@@ -267,13 +267,14 @@ class DesktopWindowTests(unittest.TestCase):
             self.window._set_value("simulated", False)
             self.assertTrue(self.window.values["simulated"])
 
-    def test_checkup_is_non_actuating_and_preserves_project_layout(self):
+    def test_preflight_is_non_actuating_and_preserves_project_layout(self):
         ids = [s.id for s in self.window.workflow.stages]
-        self.assertEqual(ids[3:6], ["priming", "checkup", "experiment_1"])
+        self.assertEqual(ids[3:6], ["priming", "preflight", "experiment_1"])
+        self.assertLess(ids.index("calculations"), ids.index("wash"))
         self.assertNotIn("gravimetry", ids)
         self.assertNotIn("characterise", ids)
         with patch.object(self.backend.engine, "run", side_effect=AssertionError("checkup actuated")):
-            self.window._select_stage(ids.index("checkup"))
+            self.window._select_stage(ids.index("preflight"))
             self.app.processEvents()
             panel = self.window._ensure_preflight()
             self.assertTrue(panel.scheme.isVisible())
@@ -281,7 +282,9 @@ class DesktopWindowTests(unittest.TestCase):
             self.assertEqual(panel.pressure_limit.value(), 2500)
             self.assertFalse(self.window.main_panel.isVisible())
             self.assertFalse(self.window.action_panel.isVisible())
-            stage = self.window.workflow.stages[ids.index("checkup")]
+            stage = self.window.workflow.stages[ids.index("preflight")]
+            self.assertEqual(stage.settings_options["sections"], ("flow", "layout", "consumption"))
+            self.assertIsNone(self.window._build_check_history(stage))
             self.assertFalse(stage.pipeline)
             self.assertNotIn("Execute", [s[0] for s in self.window._action_button_specs(stage)])
             length, _bore = panel._segment_inputs["Oil L"][0]
@@ -296,7 +299,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertEqual(saved["conditions"]["layout"]["channels"][1]["flow_ul_min"], 11)
         self.assertEqual(saved["conditions"]["layout"]["channels"][2]["flow_ul_min"], 22)
         self.window._load_project_path(Path(self.backend.workdir))
-        self.window._select_stage(ids.index("checkup"))
+        self.window._select_stage(ids.index("preflight"))
         panel = self.window._ensure_preflight()
         self.assertEqual(panel._segment_inputs["Oil L"][0][0].value(), 37)
         self.assertEqual(panel._system_rows[0][1][0].value(), 12)
