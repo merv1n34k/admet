@@ -237,7 +237,7 @@ class DesktopBackendTests(unittest.TestCase):
             else:
                 self.fail("accelerated density run did not finish")
             set_pressure.assert_not_called()
-        self.assertEqual(len(gates), 8)
+        self.assertEqual(len(gates), 6)
         self.assertNotIn("analysis_result", completed)
         from admet.workflows.calculations import calculate_run
 

@@ -54,6 +54,20 @@ def _recording_path(directory, summary):
 
 def _density(context):
     document = deepcopy(context["document"])
+    if "parameters" in document:
+        from admet.workflows.json_protocol import resolve
+
+        document = resolve(document)
+        recorded = context["summary"].get("steps", [])
+        if len(recorded) != len(document["steps"]):
+            raise ValueError("Parameterized density requires the recorded execution steps")
+        for expected, step in zip(recorded, document["steps"]):
+            if (expected.get("flow_setpoints_ul_min") != step["sensor_setpoints"]
+                    or expected.get("pressure_setpoints_mbar") != step["pressure_setpoints"]
+                    or expected.get("trigger_type") != step["trigger_type"]
+                    or expected.get("trigger_params") != step["trigger_params"]
+                    or (expected.get("confirmation") or "") != step.get("confirm_message", "")):
+                raise ValueError("Recorded density execution and protocol parameters disagree")
     if "analysis" not in document:
         # The protocol-only density templates store geometry in their explicit step labels.
         # Never infer heights from step order or quietly assume an arbitrary run is density.
@@ -116,7 +130,7 @@ def _recording_summary(context):
 
 
 CALCULATIONS = {
-    "oil_density": {"label": "Oil density", "version": 1, "calculate": _density,
+    "oil_density": {"label": "Oil density", "version": 2, "calculate": _density,
                     "files": ("protocol.json", "events.jsonl"),
                     "description": "Two height passes from a density protocol; excludes scout and settling."},
     "recording_summary": {"label": "Recording summary", "version": 1, "calculate": _recording_summary,
@@ -125,7 +139,7 @@ CALCULATIONS = {
 }
 
 CALCULATIONS["flow_scout"] = {
-    "label": "Flow stability scout", "version": 2, "calculate": analyze_scout,
+    "label": "Flow stability scout", "version": 3, "calculate": analyze_scout,
     "files": ("protocol.json", "events.jsonl"),
     "description": "Single-height flow sweep: settling, averaging windows and pressure/flow fit precision.",
 }
@@ -197,6 +211,7 @@ def result_text(payload):
             lines.append(f"Pass disagreement: {difference:.2f}%")
         lines.append(result.get("note", ""))
         lines.extend(result.get("issues", []))
+        lines.extend("Warning: " + warning for warning in result.get("warnings", []))
     elif payload["calculation_id"] == "flow_scout":
         lines = ["Flow scout: " + result["status"], result["note"]]
         recommendation = result.get("recommendation")
@@ -210,6 +225,7 @@ def result_text(payload):
             errors = "/".join(f"{p['p0_bootstrap_sd_mbar']:.3f}" for p in fit["passes"]) or "unavailable"
             lines.append(f"{fit['averaging_s']:g} | {flows or 'none'} | {errors} | "
                          + ("; ".join(fit["issues"]) or "usable"))
+        lines += ["Warning: " + warning for warning in result.get("warnings", [])]
         lines += ["\nThresholds: " + json.dumps(result["thresholds"], indent=2), *result["issues"]]
     else:
         lines = [result.get("note", ""), json.dumps(result, indent=2, ensure_ascii=False)]

@@ -97,6 +97,13 @@ def resolve(document):
                 k: expression(v, values) for k, v in result["pressure_limits_mbar"].items()}
         if isinstance(result.get("analysis"), dict) and result["analysis"].get("type") == "flow_scout":
             result["analysis"]["height_cm"] = expression(result["analysis"].get("height_cm"), values)
+        if isinstance(result.get("analysis"), dict) and result["analysis"].get("type") == "oil_density":
+            points = result["analysis"].get("points")
+            if not isinstance(points, list) or any(not isinstance(p, dict) for p in points):
+                raise ValueError("density analysis points must be a list of objects")
+            for point in points:
+                for key in ("height_cm", "settle_s"):
+                    point[key] = expression(point.get(key), values)
     return _normalize_resolved(result)
 
 

@@ -215,7 +215,7 @@ def relative_density(
     return ratio, abs(ratio) * math.sqrt(relative_variance)
 
 
-def density_protocol(oil_id):
+def density_protocol(oil_id, *, scouted=False):
     """Ordinary JSON steps; no acquisition or device access."""
     def zero():
         return {"name": "M1 zero flow", "sensor_setpoints": {"1": 0},
@@ -223,22 +223,44 @@ def density_protocol(oil_id):
 
     steps = [zero()]
     points = []
-    for repeat, heights, flows in ((0, (5,), (5, 15, 20)),
-                                   (1, (5, 15, 25), (5, 15, 20)),
-                                   (2, (25, 15, 5), (20, 15, 5))):
+    targets = (15, 30, 45) if scouted else (5, 15, 20)
+    sweeps = [(1, (5, 15, 25), targets), (2, (25, 15, 5), targets[::-1])]
+    if not scouted:
+        sweeps.insert(0, (0, (5,), targets))
+    for repeat, heights, flows in sweeps:
         for height in heights:
             for flow_index, flow in enumerate(flows):
                 steps.append({
                     "name": f"{'Scout' if repeat == 0 else f'Pass {repeat}'} {height} cm / {flow} uL-min",
                     "sensor_setpoints": {"1": flow},
-                    "trigger_type": "time", "trigger_params": {"duration_s": 20},
-                    "timeout_s": 25, "on_complete": "zero",
+                    "trigger_type": "time", "trigger_params": {"duration_s": 30 if scouted else 20},
+                    "timeout_s": 40 if scouted else 25, "on_complete": "zero",
                 })
                 points.append({"step": len(steps), "pass": repeat, "height_cm": height, "settle_s": 10})
                 if flow_index == 2 or (repeat == 0 and flow_index == 0):
                     steps.append(zero())
-    return {"name": f"density_{oil_id}", "steps": steps,
-            "analysis": {"type": "oil_density", "oil_id": oil_id, "points": points}}
+    document = {"name": f"density_{oil_id}", "steps": steps,
+                "analysis": {"type": "oil_density", "oil_id": oil_id, "points": points}}
+    if scouted:
+        document["parameters"] = {
+            "oil_base_flow": ["Oil base flow, µL/min (1x / 2x / 3x)", 15],
+            "settling_s": ["Settling time, s", 10],
+            "averaging_s": ["Measurement time, s", 20],
+            "height_low_cm": ["Low outlet height, cm", 5],
+            "height_mid_cm": ["Middle outlet height, cm", 15],
+            "height_high_cm": ["High outlet height, cm", 25],
+        }
+        heights = {5: "height_low_cm", 15: "height_mid_cm", 25: "height_high_cm"}
+        for point in points:
+            step = steps[point["step"] - 1]
+            multiplier = step["sensor_setpoints"]["1"] // 15
+            step["name"] = f"Pass {point['pass']} / {{{heights[point['height_cm']]}}} cm / {multiplier}x flow"
+            step["sensor_setpoints"]["1"] = f"oil_base_flow * {multiplier}"
+            step["trigger_params"]["duration_s"] = "settling_s + averaging_s"
+            step["timeout_s"] = "settling_s + averaging_s + 10"
+            point["height_cm"] = heights[point["height_cm"]]
+            point["settle_s"] = "settling_s"
+    return document
 
 
 def normalize_analysis(value, steps):
@@ -255,8 +277,9 @@ def normalize_analysis(value, steps):
     if not isinstance(oil, str) or not oil.strip() or len(oil) > 80:
         raise ValueError("oil_id must contain 1–80 characters")
     points = result["points"]
-    if not isinstance(points, list) or len(points) != 21:
-        raise ValueError("density needs 3 scout points and two passes of 3 heights × 3 points")
+    if not isinstance(points, list) or len(points) not in (18, 21):
+        raise ValueError("density needs two passes of 3 heights × 3 points, optionally preceded by 3 scout points")
+    scout_count = 3 if len(points) == 21 else 0
 
     def zero_step(step):
         # Accept archived pressure-zero runs for analysis; new recipes use flow zero.
@@ -286,9 +309,9 @@ def normalize_analysis(value, steps):
             raise ValueError("density point requires step, pass, height_cm and settle_s")
         if type(point["step"]) is not int or point["step"] != acquisition_steps[index]:
             raise ValueError("density points must reference every acquisition step in order (1-based)")
-        expected_pass = 0 if index < 3 else 1 if index < 12 else 2
+        expected_pass = 0 if index < scout_count else 1 if index < scout_count + 9 else 2
         if type(point["pass"]) is not int or point["pass"] != expected_pass:
-            raise ValueError("density requires scout pass 0, then passes 1 and 2")
+            raise ValueError("density requires optional scout pass 0, then passes 1 and 2")
         point["height_cm"] = number(point["height_cm"], "height_cm")
         point["settle_s"] = number(point["settle_s"], "settle_s", minimum=1)
         step = steps[point["step"] - 1]
@@ -300,35 +323,43 @@ def normalize_analysis(value, steps):
             raise ValueError("density needs at least 5 seconds of sampling after settling")
         if step.get("timeout_s", 0) <= duration:
             raise ValueError("density timeout must exceed the timed step duration")
-    groups = [points[i:i + 3] for i in range(0, 21, 3)]
+    groups = [points[i:i + 3] for i in range(0, len(points), 3)]
+    reference_targets = None
     for group_index, group in enumerate(groups):
         if len({p["height_cm"] for p in group}) != 1:
             raise ValueError("each density sweep must have one confirmed height")
         targets = [steps[p["step"] - 1]["sensor_setpoints"]["1"] for p in group]
         if len(set(targets)) != 3 or targets != sorted(targets, reverse=group[0]["pass"] == 2):
             raise ValueError("density sweep needs three distinct ordered flow targets")
+        if group[0]["pass"] != 0:
+            if reference_targets is not None and sorted(targets) != reference_targets:
+                raise ValueError("density requires identical flow targets at every height and pass")
+            reference_targets = sorted(targets)
         point = group[0]
         if not zero_step(steps[point["step"] - 2]):
             raise ValueError("density height gates require M1 zero immediately beforehand")
-        review = "Review scout pressure/flow: continue only if settled and expected. " if group_index == 1 else ""
+        review = "Review scout pressure/flow: continue only if settled and expected. " if group_index == scout_count // 3 else ""
         steps[point["step"] - 1]["confirm_message"] = (
             f"{review}{oil}: confirm oil is routed through M1 (channel 1). "
             f"Set outlet {point['height_cm']:g} cm ABOVE the current reservoir oil surface "
             f"({'scout' if point['pass'] == 0 else 'pass ' + str(point['pass'])}). "
             "Confirm only when this height is measured and correct; keep it constant during this sweep. "
+            "Keep the receiving container open to atmosphere and the outlet above collected liquid. "
             "Abort for unexpected pressure or unstable flow. Zero flow may retain pressure; verify no oil-column retreat."
         )
-    forward = [group[0]["height_cm"] for group in groups[1:4]]
-    reverse = [group[0]["height_cm"] for group in groups[4:]]
+    measured_groups = groups[scout_count // 3:]
+    forward = [group[0]["height_cm"] for group in measured_groups[:3]]
+    reverse = [group[0]["height_cm"] for group in measured_groups[3:]]
     if len(set(forward)) != 3 or forward != sorted(forward) or reverse != list(reversed(forward)):
         raise ValueError("density needs three increasing heights, then the same heights in reverse")
-    scout_review_step = points[1]["step"] - 1
-    if not zero_step(steps[scout_review_step - 1]):
-        raise ValueError("density scout review requires M1 zero beforehand")
-    steps[scout_review_step]["confirm_message"] = (
-        "First M1 scout point finished. Review measured pressure and flow before increasing. "
-        "Confirm only if stable and pressure is appropriate for this open path; otherwise abort."
-    )
+    if scout_count:
+        scout_review_step = points[1]["step"] - 1
+        if not zero_step(steps[scout_review_step - 1]):
+            raise ValueError("density scout review requires M1 zero beforehand")
+        steps[scout_review_step]["confirm_message"] = (
+            "First M1 scout point finished. Review measured pressure and flow before increasing. "
+            "Confirm only if stable and pressure is appropriate for this open path; otherwise abort."
+        )
     return result
 
 
@@ -391,13 +422,15 @@ def _point_statistics(point, step, rows, events, origin):
 
 def analyze_density_run(document, csv_path, events_path, polling_origin, *, completed):
     """Read closed artifacts only. Sensor samples are not independent replicates."""
-    from admet.workflows.json_protocol import normalize
+    from admet.workflows.json_protocol import resolve
 
-    document = normalize(document)
+    document = resolve(document)
     config = document["analysis"]
     result = {"type": "oil_density", "oil_id": config["oil_id"], "status": "inconclusive",
               "density_g_ml": None, "repeat_difference_percent": None, "ci95_g_ml": None,
-              "passes": [], "points": [], "issues": [],
+              "passes": [], "points": [], "issues": [], "warnings": [],
+              "thresholds": {"pressure_flow_r_squared_min": 0.95, "pressure_height_r_squared_min": 0.95,
+                             "repeat_difference_max_percent": 10},
               "note": "Two passes assess repeatability, not a robust confidence interval or absolute accuracy."}
     if not completed:
         result["issues"].append("protocol did not complete")
@@ -442,13 +475,17 @@ def analyze_density_run(document, csv_path, events_path, polling_origin, *, comp
                              "resistance_mbar_min_ul": fit.slope, "r_squared": fit.r_squared})
             if fit.slope <= 0 or fit.r_squared < 0.95:
                 result["issues"].append(f"pass {repeat}, {height:g} cm: poor pressure/flow fit")
+            elif fit.r_squared < 0.995:
+                result["warnings"].append(f"pass {repeat}, {height:g} cm: mild pressure/flow curvature; R²={fit.r_squared:.4f}")
         entry = {"pass": repeat, "density_g_ml": None, "r_squared": None, "balances": balances}
         if len(balances) == 3:
             fit = _linear_fit([b["height_cm"] for b in balances], [b["p0_mbar"] for b in balances])
             entry.update(density_g_ml=fit.slope / GRAVITY_CONVERSION_MBAR_PER_CM_PER_G_ML,
                          r_squared=fit.r_squared)
-            if fit.slope <= 0 or fit.r_squared < 0.98:
+            if fit.slope <= 0 or fit.r_squared < 0.95:
                 result["issues"].append(f"pass {repeat}: poor pressure/height fit")
+            elif fit.r_squared < 0.98:
+                result["warnings"].append(f"pass {repeat}: pressure/height R²={fit.r_squared:.4f}; review fitted points")
         else:
             result["issues"].append(f"pass {repeat}: fewer than three usable heights")
         result["passes"].append(entry)

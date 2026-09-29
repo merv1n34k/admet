@@ -14,30 +14,32 @@ from admet.workflows.oil_density import (
     density_protocol,
     analyze_density_run,
 )
-from admet.workflows.json_protocol import normalize, template_documents
+from admet.workflows.json_protocol import normalize, resolve, template_documents
 
 
-def recorded_density(directory, *, densities=(1.2, 1.2), missing=False, unsettled=False):
-    document = normalize(density_protocol("dsurf"))
+def recorded_density(directory, *, densities=(1.2, 1.2), missing=False, unsettled=False, scouted=False, curvature=0):
+    document = normalize(density_protocol("dsurf", scouted=scouted))
+    resolved = resolve(document)
     rows, events = [], []
     origin = 100.0
-    for index, point in enumerate(document["analysis"]["points"]):
+    for index, point in enumerate(resolved["analysis"]["points"]):
         start = index * 50 + 30
-        step = document["steps"][point["step"] - 1]
+        step = resolved["steps"][point["step"] - 1]
+        duration = step["trigger_params"]["duration_s"]
         flow = step["sensor_setpoints"]["1"]
         density = densities[max(0, point["pass"] - 1)]
-        pressure = 7 + density * 0.980665 * point["height_cm"] + (flow - 2) * 0.4
+        pressure = 7 + density * 0.980665 * point["height_cm"] + (flow - 2) * 0.4 + curvature * flow**2
         events.extend([
             {"monotonic": origin + start - 20, "step_index": point["step"] - 1,
              "step_name": step["name"], "state": "running", "outcome": "running",
              "confirmation_message": "height gate"},
             {"monotonic": origin + start, "step_index": point["step"] - 1,
              "step_name": step["name"], "state": "running", "outcome": "running"},
-            {"monotonic": origin + start + 20, "step_index": point["step"] - 1,
+            {"monotonic": origin + start + duration, "step_index": point["step"] - 1,
              "step_name": step["name"], "state": "running", "outcome": "completed"},
         ])
         rows.append((start - 10, 9999, 9999))  # Gate data must not enter the fit.
-        for tick in range(100):
+        for tick in range(int(duration * 5)):
             elapsed = tick / 5
             value = pressure if elapsed >= 10 else pressure + 100
             if unsettled and index == 3 and elapsed >= 15:
@@ -67,13 +69,35 @@ class RecordedDensityTests(unittest.TestCase):
                 plan = server.call("plan_protocol", {
                     "operation_id": "run_json_protocol", "settings": {"protocol": document},
                 })
-            self.assertEqual(plan["expected_duration_s"], 420)
-            self.assertEqual(len(plan["required_confirmations"]), 8)
+            self.assertEqual(plan["expected_duration_s"], 540)
+            self.assertEqual(len(plan["required_confirmations"]), 6)
             self.assertAlmostEqual(sum(s["sensor_setpoints"].get("1", 0)
                                        * s["trigger_params"]["duration_s"] / 60
-                                       for s in document["steps"]), 93.3333333)
-            self.assertNotIn("analysis", document)
+                                       for s in resolve(document)["steps"]), 270)
+            self.assertEqual(len(document["analysis"]["points"]), 18)
             self.assertTrue(all(s["on_complete"] == "zero" for s in document["steps"]))
+
+    def test_scouted_density_parameters_gates_and_curved_pressure_response(self):
+        source = normalize(density_protocol("dsurf", scouted=True))
+        source["parameter_values"].update(oil_base_flow=10, height_low_cm=6, settling_s=12)
+        resolved = resolve(source)
+        self.assertEqual(resolved["steps"][1]["sensor_setpoints"], {"1": 10})
+        self.assertEqual(resolved["steps"][1]["trigger_params"]["duration_s"], 32)
+        self.assertEqual(resolved["analysis"]["points"][0]["height_cm"], 6)
+        self.assertIn("6 cm ABOVE", resolved["steps"][1]["confirm_message"])
+        for step in resolved["steps"]:
+            self.assertEqual(set(step["sensor_setpoints"]), {"1"})
+            if step.get("confirm_message"):
+                self.assertIn("open to atmosphere", step["confirm_message"])
+        with tempfile.TemporaryDirectory() as tmp:
+            result = analyze_density_run(*recorded_density(
+                tmp, scouted=True, densities=(1.6, 1.6), curvature=0.008), completed=True)
+        self.assertEqual(result["status"], "consistent", result["issues"])
+        self.assertAlmostEqual(result["density_g_ml"], 1.6)
+        self.assertEqual(len(result["points"]), 18)
+        source["steps"][2]["sensor_setpoints"]["1"] = 25
+        with self.assertRaisesRegex(ValueError, "identical flow targets"):
+            normalize(source)
 
     def test_invalid_analysis_is_refused(self):
         for mutate in (

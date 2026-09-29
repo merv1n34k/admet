@@ -47,7 +47,7 @@ class ImperfectOil:
         return round(pressure / 0.02) * 0.02, measured_flow
 
 
-def scout_context(directory, *, drift=0, missing=False, short=False):
+def scout_context(directory, *, drift=0, missing=False, short=False, curved=False, return_offset=0):
     source = template_documents()["flow_stability_scout"]
     if short:
         source["parameter_values"]["point_duration_s"] = 15
@@ -67,6 +67,10 @@ def scout_context(directory, *, drift=0, missing=False, short=False):
         for tick in range(int(duration * 10)):
             now = clock + tick / 10
             p, q = plant.sample(now)
+            if curved:
+                q = target + 0.15 * math.sin(now * 3)
+                p = (8 + 0.55 * target + 0.008 * target**2 + 0.1 * math.sin(now)
+                     + return_offset * (point["pass"] - 1))
             rows.append((now, "" if missing else p, q))
         clock += duration + 2
     directory = Path(directory)
@@ -80,7 +84,7 @@ def scout_context(directory, *, drift=0, missing=False, short=False):
             "summary": {"state": "completed", "artifacts": {"polling_origin_monotonic": origin}}}
 
 
-def run_simulated_scout(project_path=None, *, speed=20):
+def run_simulated_scout(project_path=None, *, speed=20, protocol=None):
     """Execute the real plan/recording pipeline against explicitly simulated SDK instruments.
 
     Only the acquisition/trigger/event clocks are accelerated. Sensor reads receive a
@@ -133,7 +137,10 @@ def run_simulated_scout(project_path=None, *, speed=20):
             if not backend.engine.hardware.state.simulated:
                 raise AssertionError("not a simulated rig")
             backend.call("apply_corrections", {"cells_m_calibration": "IPA", "cells_m_scale": 2.25})
-            source = template_documents()["flow_stability_scout"]
+            source = protocol or template_documents()["flow_stability_scout"]
+            resolved = resolve(source)
+            heights = {p["step"] - 1: p["height_cm"] for p in resolved["analysis"]["points"]
+                       if "height_cm" in p}
             calls = setter.call_count
             plan = backend.call("plan_protocol", {
                 "operation_id": "run_json_protocol", "settings": {"protocol": source, "tick_s": 0.01}})
@@ -142,10 +149,13 @@ def run_simulated_scout(project_path=None, *, speed=20):
             backend.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"], "timeout_s": 1})
             deadline = time.monotonic() + 600 / speed + 30
             confirmed = False
+            last_gate = None
             while time.monotonic() < deadline:
                 current = backend.call("planned_protocols", {"plan_id": plan["plan_id"]})["plans"][0]
                 status = backend.engine.observation()["protocol"]
-                if status.get("confirmation_message") and not confirmed:
+                if status.get("confirmation_message") and status["step_index"] != last_gate:
+                    last_gate = status["step_index"]
+                    plant.height = heights.get(last_gate, plant.height)
                     backend.call("control_protocol", {"action": "confirm", "timeout_s": 0.1})
                     confirmed = True
                 if current["state"] in {"completed", "failed", "cancelled"}:
@@ -158,7 +168,7 @@ def run_simulated_scout(project_path=None, *, speed=20):
             if plant.target != 0:
                 raise AssertionError("M1 was not zeroed")
             directory = project_path / "records" / "protocols" / current["run_id"]
-            calculation = calculate_run(directory, "flow_scout")
+            calculation = calculate_run(directory, resolved["analysis"]["type"])
             return {"project": str(project_path), "plan_id": plan["plan_id"], "run_id": current["run_id"], "confirmed": confirmed,
                     "state": current["state"], "final_target_ul_min": plant.target,
                     "simulation": {"density_g_ml": 1.6, "scale": 2.25, "seed": 16000,
@@ -204,6 +214,22 @@ def density_recovery(directory, *, seed=16000, drift=0):
 
 
 class ScoutTests(unittest.TestCase):
+    def test_scouted_density_runs_and_calculates_with_imperfect_simulated_oil(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = run_simulated_scout(tmp, speed=5, protocol=template_documents()["density_dsurf"])
+            result = report["calculation"]["result"]
+            self.assertEqual(report["state"], "completed")
+            self.assertEqual(report["final_target_ul_min"], 0)
+            self.assertEqual(result["status"], "consistent", result["issues"])
+            self.assertAlmostEqual(result["density_g_ml"], 1.6, delta=0.016)
+            directory = Path(report["project"]) / "records" / "protocols" / report["run_id"]
+            summary_path = directory / "summary.json"
+            summary = json.loads(summary_path.read_text())
+            summary["steps"][1]["confirmation"] = "Set outlet 9 cm ABOVE the reservoir"
+            summary_path.write_text(json.dumps(summary))
+            with self.assertRaisesRegex(ValueError, "execution and protocol parameters disagree"):
+                calculate_run(directory, "oil_density")
+
     def test_full_simulated_plan_recording_and_calculation(self):
         with tempfile.TemporaryDirectory() as tmp:
             report = run_simulated_scout(tmp)
@@ -273,17 +299,32 @@ class ScoutTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             for row in rows:
                 elapsed = (float(row["elapsed_s"]) - 20) % 62
-                row["pressure_1_mbar"] = 10 + 0.4 * float(row["flow_1_ul_min"]) + 0.032 * elapsed
+                row["pressure_1_mbar"] = 10 + 0.4 * float(row["flow_1_ul_min"]) + 0.065 * elapsed
             with context["csv"].open("w", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
                 writer.writeheader()
                 writer.writerows(rows)
             result = analyze_scout(context)
-        stable = [(tick / 10, 10 + 0.032 * tick / 10, 20) for tick in range(600)]
+        stable = [(tick / 10, 10 + 0.065 * tick / 10, 20) for tick in range(600)]
         self.assertFalse(_window(stable, 10, 20, 20)["issues"])
         self.assertFalse(_window(stable, 30, 20, 20)["issues"])
         self.assertIsNone(result["recommendation"])
         self.assertIn("successive", " ".join(next(f for f in result["fits"] if f["averaging_s"] == 20)["issues"]))
+
+    def test_mild_curvature_and_sub_mbar_return_shift_are_usable_with_warnings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = analyze_scout(scout_context(tmp, curved=True, return_offset=0.6))
+        self.assertEqual(result["status"], "usable", result["issues"])
+        self.assertEqual(result["thresholds"]["fit_r_squared_min"], 0.95)
+        self.assertEqual(result["recommendation"]["averaging_s"], 20)
+        self.assertIn("curvature", " ".join(result["warnings"]))
+        self.assertIn("intercept difference", " ".join(result["warnings"]))
+        self.assertIsNone(result["density_g_ml"])
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = analyze_scout(scout_context(tmp, curved=True, return_offset=90))
+        self.assertEqual(bad["status"], "inconclusive")
+        self.assertIsNone(bad["recommendation"])
+        self.assertIn("longer averaging alone may not help", " ".join(bad["issues"]))
 
     def test_drift_missing_and_short_recordings_do_not_become_precise(self):
         for settings in ({"drift": 0.3}, {"missing": True}, {"short": True}):

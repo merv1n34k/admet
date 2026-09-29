@@ -43,7 +43,7 @@ class CalculationTests(unittest.TestCase):
         self.assertEqual(len(saved_results(self.directory)), 3)
         self.assertEqual(len(recorded_runs(self.tmp.name)), 1)
         self.assertEqual(len(first["inputs"]), 4)
-        self.assertEqual(first["calculation_version"], 1)
+        self.assertEqual(first["calculation_version"], 2)
         self.assertGreater(overview["result"]["statistics"]["flow_1_ul_min"]["samples"], 0)
         for path, contents in before.items():
             self.assertEqual(path.read_bytes(), contents)

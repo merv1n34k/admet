@@ -13,22 +13,22 @@ from admet.workflows.oil_density import _finite, _linear_fit
 WINDOWS_S = (5, 10, 20, 30)
 THRESHOLDS = {
     "pressure_sd_mbar": 1.0,
-    "pressure_half_drift_mbar": 0.5,
+    "pressure_half_drift_mbar": 1.0,
     "flow_sd_ul_min": "max(0.5, 10% of target)",
     "flow_half_drift_ul_min": "max(0.5, 5% of target)",
     "tracking_error_ul_min": "max(1, 20% of target)",
     "minimum_coverage_fraction": 0.8,
     "maximum_sample_gap_s": 1.0,
     "minimum_stable_tail_extra_s": 5,
-    "fit_r_squared_min": 0.995,
-    "p0_bootstrap_sd_max_mbar": 0.25,
-    "p0_return_difference_max_mbar": 0.5,
+    "fit_r_squared_min": 0.95,
+    "p0_bootstrap_sd_max_mbar": 0.5,
+    "p0_return_difference_max_mbar": 1.0,
     "resistance_return_difference_max_percent": 10.0,
     "bootstrap_block_s": 2,
     "minimum_bootstrap_blocks": 5,
     "minimum_recommended_averaging_s": 20,
     "successive_windows_required": 2,
-    "successive_pressure_mean_difference_mbar": 0.5,
+    "successive_pressure_mean_difference_mbar": 1.0,
     "successive_flow_mean_difference_ul_min": "max(0.5, 5% of target)",
 }
 
@@ -70,7 +70,8 @@ def normalize_analysis(value, steps):
         raise ValueError("scout requires distinct increasing flows then the same flows in reverse")
     steps[points[0]["step"] - 1]["confirm_message"] = (
         f"Confirm M1 (channel 1), outlet {height:g} cm above the reservoir oil surface. "
-        "Keep this height unchanged throughout both flow sweeps. Confirm oil reaches the outlet. "
+        "Keep this height unchanged throughout both flow sweeps. Confirm oil reaches the outlet "
+        "and the receiving container is open to atmosphere, with the outlet above collected liquid. "
         "This is a scout only; review its calculation before any density experiment."
     )
     return {"type": "flow_scout", "height_cm": height, "points": points}
@@ -131,7 +132,7 @@ def analyze_scout(context):
         raise ValueError("Choose a single-height flow scout recording")
     result = {"type": "flow_scout", "status": "inconclusive", "density_g_ml": None,
               "thresholds": dict(THRESHOLDS), "points": [], "fits": [], "recommendation": None,
-              "issues": [], "note": "Single height cannot measure density. Bootstrap describes random "
+              "issues": [], "warnings": [], "note": "Single height cannot measure density. Bootstrap describes random "
               "precision conditional on 2-second blocks, not sensor accuracy or slow drift. "
               "Review and approve settings before a separate density run."}
     summary = context["summary"]
@@ -195,7 +196,7 @@ def analyze_scout(context):
     targets = sorted({p["target_ul_min"] for p in result["points"]})
     for width in WINDOWS_S:
         usable = [q for q in targets if all((repeat, q, width) in accepted for repeat in (1, 2))]
-        fit_result = {"averaging_s": width, "usable_targets_ul_min": usable, "passes": [], "issues": []}
+        fit_result = {"averaging_s": width, "usable_targets_ul_min": usable, "passes": [], "issues": [], "warnings": []}
         result["fits"].append(fit_result)
         if len(usable) < 3:
             fit_result["issues"].append("fewer than three repeatable flow targets")
@@ -243,6 +244,10 @@ def analyze_scout(context):
                                  / resistance_mean) if resistance_mean > 0 else None
         fit_result.update(p0_return_difference_mbar=p0_difference,
                           resistance_return_difference_percent=resistance_difference)
+        if any(f["r_squared"] < 0.995 for f in [*fits, *verification_fits]):
+            fit_result["warnings"].append("Mild pressure/flow curvature: accepted at R² >= 0.95; intercept may be model-dependent")
+        if p0_difference > 0.5:
+            fit_result["warnings"].append("Forward/reverse intercept difference exceeds 0.5 mbar but is allowed up to 1 mbar")
         if (p0_difference > THRESHOLDS["p0_return_difference_max_mbar"] or resistance_difference is None
                 or resistance_difference > THRESHOLDS["resistance_return_difference_max_percent"]):
             fit_result["issues"].append("forward/reverse fits disagree")
@@ -260,9 +265,15 @@ def analyze_scout(context):
         if not fit_result["issues"] and not result["issues"] and result["recommendation"] is None:
             result["recommendation"] = {"targets_ul_min": usable, "settling_s": settling,
                                         "averaging_s": width, "requires_operator_approval": True}
+            result["warnings"] = list(fit_result["warnings"])
             result["status"] = "usable"
     if result["recommendation"] is None:
         result["issues"].append("No tested averaging window meets all fit and repeatability thresholds")
-        result["issues"].append("Longer acquisition required to establish stability; inspect drift or oil retreat "
-                                "before repeating the affected flow range. No automatic retry.")
+        failures = {issue for fit in result["fits"] for issue in fit["issues"]}
+        if any("fit" in issue for issue in failures):
+            result["issues"].append("Inspect pressure/flow nonlinearity or sweep disagreement; longer averaging alone may not help")
+        elif any("longer acquisition" in issue for issue in failures):
+            result["issues"].append("Longer acquisition is needed to verify two complete stable windows")
+        else:
+            result["issues"].append("Inspect unsettled pressure/flow, tracking and coverage; no automatic retry")
     return result

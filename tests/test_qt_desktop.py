@@ -337,10 +337,10 @@ class DesktopWindowTests(unittest.TestCase):
         with patch.object(self.backend.engine, "run", side_effect=AssertionError("actuation")):
             self.panel.build_plan()
             self.drain()
-        self.assertEqual(self.panel.plan["expected_duration_s"], 420)
+        self.assertEqual(self.panel.plan["expected_duration_s"], 540)
         self.assertIn("5 cm ABOVE", self.panel.plan["steps"][1]["confirmation"])
         self.assertNotIn("temperature", self.panel.editor.toPlainText())
-        self.assertNotIn("analysis", self.panel.document())
+        self.assertEqual(self.panel.document()["analysis"]["type"], "oil_density")
         calculation_index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "calculations")
         with patch.object(self.backend.engine, "run", side_effect=AssertionError("calculation actuated")):
             self.window._select_stage(calculation_index)
