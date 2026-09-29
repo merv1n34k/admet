@@ -698,13 +698,22 @@ class DesktopWindowTests(unittest.TestCase):
         with patch.object(self.window, "_confirm", side_effect=AssertionError("extra confirmation")):
             self.panel.execute()
             self.drain()
-        self.window._poll_pipeline_events()
+        with patch.object(self.window, "_notify", side_effect=AssertionError("duplicate gate card")):
+            self.window._poll_pipeline_events()
         self.assertIn("Confirm physical", self.window._pending_pipeline_confirmation())
         self.assertIsNone(self.window._confirmation_dialog)
         observed = self.backend.call("observe")
         self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0) for c in observed["channels"]))
-        self.panel.control("abort")
+        from PySide6.QtWidgets import QLabel
+
+        self.assertIsNone(self.window.notification)
+        label = self.window.findChild(QLabel, "ProtocolConfirmLabel")
+        self.assertIsNotNone(label)
+        self.assertIn("Confirm physical", label.text())
+        self.panel.control("confirm")
         self.drain()
+        self.window._poll_pipeline_events()
+        self.assertEqual(self.window._pending_pipeline_confirmation(), "")
 
     def test_desktop_launcher_has_no_mode_flags(self):
         import contextlib

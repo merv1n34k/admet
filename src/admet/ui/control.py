@@ -442,7 +442,6 @@ class ControlWindow(QMainWindow):
         self._latest_pipeline_event: Any | None = None
         self._pipeline_stage_id = ""
         self._pipeline_pending_confirmation = ""
-        self._pipeline_confirmation_notice = ""
         self._tube_switch_notice_step = -1
         self._mounted_signature: tuple[Any, ...] | None = None
         self._transport_button_refs: list[QPushButton] = []
@@ -1969,9 +1968,6 @@ class ControlWindow(QMainWindow):
         if result is None:
             self._render_current_stage()
             return
-        stage = self.workflow.current_stage(self.workflow_state)
-        if action == "resume_protocol" and stage.pipeline:
-            self._show_pipeline_confirmation_notice(stage, self._latest_pipeline_event)
         self._render_current_stage()
 
     def _pipeline_active(self) -> bool:
@@ -1997,7 +1993,6 @@ class ControlWindow(QMainWindow):
 
     def _clear_pipeline_confirmation(self) -> None:
         self._pipeline_pending_confirmation = ""
-        self._pipeline_confirmation_notice = ""
 
     def _pipeline_event_state(self, event: Any | None = None) -> str:
         if event is None:
@@ -2061,21 +2056,6 @@ class ControlWindow(QMainWindow):
         if self._pending_pipeline_confirmation() or state in {"running", "paused", "stopping"}:
             return Theme.WARNING
         return Theme.BORDER_HOVER
-
-    def _pipeline_notification_text(self, _stage: Stage, event: Any | None) -> str:
-        message = ""
-        if event is not None:
-            message = str(getattr(event, "confirmation_message", "") or "").strip()
-        return message or self._pending_pipeline_confirmation()
-
-    def _show_pipeline_confirmation_notice(self, stage: Stage, event: Any | None) -> None:
-        if not self._pending_pipeline_confirmation():
-            return
-        notice = self._pipeline_notification_text(stage, event)
-        if notice == self._pipeline_confirmation_notice and self.notification is not None:
-            return
-        self._pipeline_confirmation_notice = notice
-        self._notify(notice, "warning", timeout_ms=0)
 
     def _poll(self) -> None:
         self._poll_fluidics_plots()
@@ -2141,9 +2121,6 @@ class ControlWindow(QMainWindow):
                 self._pipeline_pending_confirmation = confirmation
                 if stage.completion_gate == "recording_confirmation":
                     self._sync_run_recording_for_confirmation(confirmation)
-                self._show_pipeline_confirmation_notice(stage, latest)
-            elif self._pending_pipeline_confirmation():
-                self._show_pipeline_confirmation_notice(stage, latest)
             elif self._pipeline_event_state(latest) not in {"paused"}:
                 self._clear_pipeline_confirmation()
             self._maybe_notify_tube_switch(stage, latest)
