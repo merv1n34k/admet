@@ -654,6 +654,8 @@ class ControlWindow(QMainWindow):
         return stage
 
     def _save_protocol_order(self):
+        for editor in self.protocol_editors.values():
+            editor.measurements.flush()
         entries = [
             {"id": stage.id, "label": stage.label, "json": editor.editor.toPlainText(),
              "source": editor.library.currentData(),

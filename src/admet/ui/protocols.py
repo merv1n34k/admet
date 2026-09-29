@@ -1,11 +1,12 @@
 """JSON definitions and immutable plan review in the standalone desktop."""
 
 import json
+import math
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView,
-    QLabel, QPlainTextEdit,
+    QLabel, QLineEdit, QPlainTextEdit,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -114,6 +115,103 @@ class PlanTable(GridTable):
         self.fit_contents()
 
 
+class Measurements(QWidget):
+    def __init__(self, editor):
+        super().__init__()
+        self.editor = editor
+        self.run_id = None
+        self.pending = {}
+        self.cells = {}
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(QLabel("Measurements — recorded only; Calculate processes them later"))
+        self.runs = QComboBox()
+        self.runs.currentIndexChanged.connect(self.select_run)
+        root.addWidget(self.runs)
+        self.table = GridTable(0, 3)
+        self.table.setHorizontalHeaderLabels(["Measurement", "Value", "Step / repeat"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        root.addWidget(self.table)
+        self.fields = {}
+        self.hide()
+
+    def preview(self, fields):
+        self.fields = fields
+        self.run_id = None
+        self.runs.blockSignals(True)
+        self.runs.clear()
+        self.runs.addItem("Next run — enabled on Execute", None)
+        for run in self.editor.backend.measurement_runs():
+            self.runs.addItem(f"{run['name']} · {run['at']} · {run['run_id'][-8:]}", run["run_id"])
+        self.runs.blockSignals(False)
+        self.render(fields, {})
+        self.setVisible(bool(fields) or self.runs.count() > 1)
+
+    def select_run(self):
+        run_id = self.runs.currentData()
+        if run_id:
+            self.attach(run_id)
+        else:
+            self.run_id = None
+            self.render(self.fields, {})
+
+    def attach(self, run_id):
+        try:
+            data = self.editor.backend.measurements(run_id)
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            self.editor.error(exc)
+            return
+        self.run_id = run_id
+        self.runs.blockSignals(True)
+        index = self.runs.findData(run_id)
+        if index < 0:
+            self.runs.addItem("Run " + run_id[-8:], run_id)
+            index = self.runs.count() - 1
+        self.runs.setCurrentIndex(index)
+        self.runs.blockSignals(False)
+        self.render(data["fields"], {**data["values"], **self.pending.get(run_id, {})})
+        self.show()
+
+    def render(self, fields, values):
+        self.cells = {}
+        self.table.setRowCount(0)
+        self.table.setRowCount(len(fields))
+        for row, (key, field) in enumerate(fields.items()):
+            self.table.setItem(row, 0, QTableWidgetItem(field["label"]))
+            self.table.setItem(row, 2, QTableWidgetItem(str(field.get("step", "—"))))
+            cell = QLineEdit("" if values.get(key) is None else str(values[key]))
+            cell.setPlaceholderText("Not measured")
+            cell.setEnabled(self.run_id is not None)
+            cell.editingFinished.connect(lambda k=key, c=cell: self.changed(k, c))
+            self.table.setCellWidget(row, 1, cell)
+            self.cells[key] = cell
+        self.table.resizeRowsToContents()
+        fit_table_height(self.table)
+
+    def changed(self, key, cell):
+        if not self.run_id:
+            return
+        try:
+            value = float(cell.text()) if cell.text().strip() else None
+            if value is not None and not math.isfinite(value):
+                raise ValueError("non-finite")
+        except ValueError:
+            cell.setStyleSheet("border: 1px solid #8b2b2b")
+            self.editor.error(ValueError("Measurement must be a finite number or empty (not measured)"))
+            return
+        cell.setStyleSheet("")
+        self.pending.setdefault(self.run_id, {})[key] = value
+        self.editor.window._draft_timer.start(200)
+
+    def flush(self):
+        for run_id, changes in list(self.pending.items()):
+            self.editor.backend.measurements(run_id, changes)
+            del self.pending[run_id]
+
+
 class ProtocolEditor(QWidget):
     """Only the new definition/preview content; transport and logs stay in the window."""
 
@@ -170,6 +268,8 @@ class ProtocolEditor(QWidget):
         detail_layout.addWidget(hide_details, alignment=Qt.AlignmentFlag.AlignLeft)
         root.addWidget(self.details_box)
         self.details_box.hide()
+        self.measurements = Measurements(self)
+        root.addWidget(self.measurements)
         self.table.currentCellChanged.connect(self.show_step_details)
         self.table.cellClicked.connect(self.show_step_details)
         self.editor.textChanged.connect(self.raw_edited)
@@ -194,6 +294,11 @@ class ProtocolEditor(QWidget):
     def raw_edited(self):
         self.edited()
         self.refresh_parameters()
+        try:
+            fields = loads(self.editor.toPlainText()).get("measurements", {})
+        except (ValueError, TypeError):
+            fields = {}
+        self.measurements.preview(fields)
 
     def refresh_parameters(self):
         if self.builtin:
@@ -363,6 +468,7 @@ class ProtocolEditor(QWidget):
         def started(result):
             if result.get("run_id"):
                 self.plan["run_id"] = result["run_id"]
+                self.measurements.attach(result["run_id"])
             self.window._pipeline_stage_id = self.stage.id
             self.window._clear_pipeline_confirmation()
             self.result(result)

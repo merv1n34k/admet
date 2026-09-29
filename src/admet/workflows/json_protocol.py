@@ -129,13 +129,27 @@ def channel_map(value, label):
     return result
 
 
+def measurement_fields(value, step_count):
+    if not isinstance(value, dict) or len(value) > 1000:
+        raise ValueError("measurements must be an object with at most 1000 fields")
+    for key, field in value.items():
+        if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{0,63}", key):
+            raise ValueError("invalid measurement key")
+        if (not isinstance(field, dict) or set(field) - {"label", "step"}
+                or not isinstance(field.get("label"), str) or not field["label"].strip()):
+            raise ValueError(f"measurement {key}: expected label and optional step")
+        if "step" in field and (type(field["step"]) is not int or not 1 <= field["step"] <= step_count):
+            raise ValueError(f"measurement {key}: step must identify an expanded step")
+    return deepcopy(value)
+
+
 def _normalize_resolved(document):
     from admet.workflows.operations import STEP_LIST_SCHEMA, Refused, _step_from
     from admet.engines.acquisition.pipeline import expand_protocol_steps
 
     if not isinstance(document, dict):
         raise ValueError("protocol must be a JSON object")
-    unknown = set(document) - {"name", "steps", "pressure_limits_mbar", "analysis"}
+    unknown = set(document) - {"name", "steps", "pressure_limits_mbar", "analysis", "measurements"}
     if unknown:
         raise ValueError(f"unknown protocol fields: {', '.join(sorted(unknown))}")
     name = document.get("name")
@@ -193,9 +207,12 @@ def _normalize_resolved(document):
         except Refused as exc:
             raise ValueError(str(exc)) from exc
         normalized.append(step)
-    if len(expand_protocol_steps([_step_from(step, i) for i, step in enumerate(normalized)])) > 1000:
+    expanded = expand_protocol_steps([_step_from(step, i) for i, step in enumerate(normalized)])
+    if len(expanded) > 1000:
         raise ValueError("expanded protocol exceeds 1000 steps")
     result = {"name": name, "pressure_limits_mbar": limits, "steps": normalized}
+    if "measurements" in document:
+        result["measurements"] = measurement_fields(document["measurements"], len(expanded))
     if "analysis" in document:
         if isinstance(document["analysis"], dict) and document["analysis"].get("type") == "flow_scout":
             from admet.workflows.flow_scout import normalize_analysis

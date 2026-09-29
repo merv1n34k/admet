@@ -87,6 +87,14 @@ class DesktopBackend:
             })
             project.save()
 
+    def measurements(self, run_id, changes=None):
+        with self.lock:
+            return self.service.protocol_store().measurements(run_id, changes)
+
+    def measurement_runs(self):
+        with self.lock:
+            return self.service.protocol_store().measurement_runs() if self.service.project else []
+
     def call(self, operation, settings=None):
         with self.lock:
             settings = dict(settings or {})

@@ -13,6 +13,25 @@ Internal preview IDs/digests are not experiment history or reusable execution pe
 
 ## Editable parameters in Qt
 
+### Manual run measurements
+
+Declare measurements separately from parameters:
+
+```json
+"measurements": {
+  "before_mg": {"label": "Vessel before (mg)", "step": 2},
+  "after_mg": {"label": "Vessel after (mg)", "step": 2},
+  "density": {"label": "Oil density (g/mL)"}
+}
+```
+
+`step` optionally identifies an expanded, one-based step (each repeat can have its
+own fields). There are no defaults: missing values are `null`. The separate table
+becomes editable on Execute. Entries save to that run's `measurements.json`; they
+never change execution or trigger calculations. The run selector restores earlier
+entries for review/correction. Repeating a protocol starts a fresh empty table.
+Calculate processes measurements only on request, after the recording finishes.
+
 Declare only the values the operator should edit. Qt renders them in the same
 **Parameter / Value** settings table as Priming, separate from the read-only plan.
 No new dialog or step-table editing is needed.

@@ -664,6 +664,33 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertFalse(restored.executable)
         self.assertFalse((Path(self.backend.workdir) / "plans").exists())
 
+    def test_measurements_enable_only_for_run_and_survive_reopen(self):
+        from tests.test_run_measurements import measured_protocol
+
+        self.backend.call("connect_fluidics")
+        self.backend.call("apply_corrections")
+        self.panel.set_document(measured_protocol())
+        measurements = self.panel.measurements
+        self.assertFalse(measurements.cells["before_mg"].isEnabled())
+        self.panel.build_plan()
+        self.drain()
+        self.panel.execute()
+        self.drain()
+        run_id = self.panel.plan["run_id"]
+        cell = measurements.cells["before_mg"]
+        self.assertTrue(cell.isEnabled())
+        cell.setText("12.5")
+        cell.editingFinished.emit()
+        self.window._autosave_drafts()
+        self.assertEqual(self.backend.measurements(run_id)["values"]["before_mg"], 12.5)
+        self.panel.control("abort")
+        self.drain()
+        self.window._load_project_path(Path(self.backend.workdir))
+        restored = self.window.protocol_editors["experiment_1"].measurements
+        restored.runs.setCurrentIndex(restored.runs.findData(run_id))
+        self.assertEqual(restored.cells["before_mg"].text(), "12.5")
+        self.assertEqual(restored.cells["after_mg"].text(), "")
+
     def test_program_confirmation_is_focused_modal_and_single_use(self):
         from PySide6.QtCore import Qt, QTimer
         from PySide6.QtTest import QTest
