@@ -2047,22 +2047,9 @@ class ControlWindow(QMainWindow):
     def _pipeline_progress_text(self, stage: Stage) -> str:
         if "json_protocol" in stage.features and stage.id != self._pipeline_stage_id:
             return "Not running"
-        event = self._latest_pipeline_event
-        state = self._pipeline_event_state(event)
-        step = self._pipeline_step_label(stage, event)
-        if self._pending_pipeline_confirmation() and state == "paused":
-            return f"{step}: paused"
-        if self._pending_pipeline_confirmation():
-            return f"{step}: waiting"
-        if state == "completed":
-            return "Protocol complete"
-        if state == "error":
-            return f"{step}: error"
-        if state == "paused":
-            return f"{step}: paused"
         return (
-            f"{step}: step {self._pipeline_step_progress_percent():.0f}% "
-            f"/ total {self._pipeline_total_progress_percent():.0f}%"
+            f"Step {self._pipeline_step_progress_percent():.0f}% "
+            f"/ Total {self._pipeline_total_progress_percent():.0f}%"
         )
 
     def _pipeline_progress_color(self) -> str:

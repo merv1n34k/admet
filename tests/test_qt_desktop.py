@@ -788,6 +788,33 @@ class DesktopWindowTests(unittest.TestCase):
             self.assertTrue(self.panel.editor.isVisible())
 
 
+    def test_action_progress_shows_percentages_without_repeating_status(self):
+        from admet.engines.acquisition.pipeline import PipelineEvent, PipelineState
+
+        self.window._select_stage(self.experiment_index)
+        stage = self.panel.stage
+        self.window._pipeline_stage_id = stage.id
+        for state, confirmation, status, expected in (
+            (PipelineState.RUNNING, "", "Running: Flow scout pass 1", "Step 25% / Total 31%"),
+            (PipelineState.RUNNING, "Confirm setup", "Waiting: Flow scout pass 1", "Step 25% / Total 31%"),
+            (PipelineState.PAUSED, "", "Paused: Flow scout pass 1", "Step 25% / Total 31%"),
+            (PipelineState.PAUSED, "Confirm setup", "Paused: Flow scout pass 1", "Step 25% / Total 31%"),
+            (PipelineState.STOPPING, "", "Stopping: Flow scout pass 1", "Step 25% / Total 31%"),
+            (PipelineState.COMPLETED, "", "Protocol complete", "Step 100% / Total 100%"),
+            (PipelineState.ERROR, "", "Protocol error", "Step 0% / Total 0%"),
+        ):
+            with self.subTest(state=state, confirmation=confirmation):
+                self.window._latest_pipeline_event = PipelineEvent(
+                    state=state, current_step=1, total_steps=4, progress=0.25,
+                    step_name="Flow scout pass 1", confirmation_message=confirmation,
+                )
+                self.window._sync_action_box(stage)
+                self.assertEqual(self.window._protocol_status_label.text(), status)
+                self.assertEqual(self.window._protocol_progress_bar.format(), expected)
+        self.window._pipeline_stage_id = "another_experiment"
+        self.window._sync_action_box(stage)
+        self.assertEqual(self.window._protocol_progress_bar.format(), "Not running")
+
     def test_program_confirmation_is_focused_modal_and_single_use(self):
         from PySide6.QtCore import Qt, QTimer
         from PySide6.QtTest import QTest
