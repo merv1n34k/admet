@@ -6,7 +6,7 @@ import math
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView,
+    QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QPlainTextEdit,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -16,7 +16,7 @@ from admet.ui.tables import GridTable, fit_table_height
 from admet.core.engine import Param, ParamKind
 from admet.engines.acquisition.fluidics.config import STABILITY_DURATION_S, STABILITY_TOLERANCE_UL_MIN
 from admet.workflows.control import builtin_document
-from admet.workflows.json_protocol import loads, template_documents
+from admet.workflows.json_protocol import loads, parameter_declarations, parameter_text, template_documents
 
 
 def value_text(value, unit=""):
@@ -315,20 +315,43 @@ class ProtocolEditor(QWidget):
             document = loads(self.editor.toPlainText())
         except (ValueError, TypeError):
             return
-        declarations = document.get("parameters", {})
+        declarations = parameter_declarations(document)
         if not declarations:
             return
         from admet.ui.control import NumericParamEdit
 
         def make_editor(param):
-            widget = NumericParamEdit(param, document["parameter_values"][param.name])
-            widget.textEdited.connect(self.edited)
-            widget.rejected.connect(self.error)
-            widget.committed.connect(lambda value, name=param.name: self.set_parameter(name, value))
+            value = document["parameter_values"][param.name]
+            if param.kind == ParamKind.FLOAT:
+                widget = NumericParamEdit(param, value)
+                widget.textEdited.connect(self.edited)
+                widget.rejected.connect(self.error)
+                widget.committed.connect(lambda value, name=param.name: self.set_parameter(name, value))
+            elif param.kind == ParamKind.BOOLEAN:
+                widget = QCheckBox()
+                widget.setChecked(value)
+                widget.toggled.connect(lambda value, name=param.name: self.set_parameter(name, value))
+            elif param.kind == ParamKind.CHOICE:
+                widget = QComboBox()
+                for index, option in enumerate(declarations[param.name]["options"]):
+                    widget.addItem(parameter_text(option), option)
+                    if type(option) is type(value) and option == value:
+                        widget.setCurrentIndex(index)
+                widget.currentIndexChanged.connect(
+                    lambda _index, name=param.name, widget=widget: self.set_parameter(name, widget.currentData()))
+            else:
+                widget = QLineEdit(value)
+                widget.setMaxLength(4096)
+                widget.textEdited.connect(self.edited)
+                widget.editingFinished.connect(
+                    lambda name=param.name, widget=widget: self.set_parameter(name, widget.text()))
             self.parameter_editors[param.name] = widget
+            widget.setEnabled(not self._executing)
             return widget
 
-        params = [Param(name, declaration[0], ParamKind.FLOAT, default=declaration[1], minimum=0)
+        kinds = {"number": ParamKind.FLOAT, "text": ParamKind.TEXT, "boolean": ParamKind.BOOLEAN, "choice": ParamKind.CHOICE}
+        params = [Param(name, declaration["label"], kinds[declaration["type"]], default=declaration["default"],
+                        minimum=declaration.get("min"), maximum=declaration.get("max"))
                   for name, declaration in declarations.items()]
         self.parameter_table = self.window._param_table(params, editor_factory=make_editor)
         self.parameter_box.addWidget(self.parameter_table)
@@ -358,8 +381,14 @@ class ProtocolEditor(QWidget):
     def document(self):
         if self.builtin:
             return builtin_document(self.builtin, self.window.values)
-        if not all([widget.commit() for widget in self.parameter_editors.values()]):
+        from admet.ui.control import NumericParamEdit
+
+        if not all([widget.commit() for widget in self.parameter_editors.values() if isinstance(widget, NumericParamEdit)]):
             raise ValueError("Correct invalid parameter values before building or saving")
+        for name, widget in self.parameter_editors.items():
+            if isinstance(widget, QLineEdit) and not isinstance(widget, NumericParamEdit):
+                if json.loads(self.editor.toPlainText()).get("parameter_values", {}).get(name) != widget.text():
+                    self.set_parameter(name, widget.text())
         return loads(self.editor.toPlainText())
 
     def populate_templates(self):

@@ -82,6 +82,36 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertIsNone(self.panel.parameter_table)
         self.assertEqual(self.panel.parameter_editors, {})
 
+    def test_typed_parameters_use_native_editors_and_lock_with_execution(self):
+        from PySide6.QtWidgets import QCheckBox, QComboBox, QLineEdit
+        from tests.test_protocol_parameters import typed_parameter_protocol
+        from admet.ui.control import NumericParamEdit
+        from admet.workflows.json_protocol import resolve
+
+        self.panel.set_document(typed_parameter_protocol())
+        editors = self.panel.parameter_editors
+        for name, kind in (("oil", QLineEdit), ("offset", NumericParamEdit),
+                           ("filtered", QCheckBox), ("finish", QComboBox)):
+            self.assertIsInstance(editors[name], kind)
+        editors["oil"].setText("custom mix")
+        editors["filtered"].setChecked(False)
+        editors["finish"].setCurrentIndex(1)
+        editors["offset"].setText("-0.5")
+        editors["offset"].pending = True
+        self.panel.build_plan()
+        self.drain()
+        document = self.panel.document()
+        self.assertEqual(document["parameter_values"]["offset"], -0.5)
+        self.assertIs(document["parameter_values"]["filtered"], False)
+        self.assertEqual(resolve(document)["steps"][0]["name"], "custom mix, filtered=false")
+        self.assertEqual(self.panel.plan["steps"][0]["on_complete"], "hold")
+        editors["oil"].textEdited.emit("other")
+        self.assertTrue(self.panel.dirty)
+        self.panel.lock_definition(True)
+        self.assertTrue(all(not e.isEnabled() for e in editors.values()))
+        self.panel.lock_definition(False)
+        self.assertTrue(all(e.isEnabled() for e in editors.values()))
+
     def test_restored_device_stages_and_nonblocking_connections(self):
         for index in range(len(self.window.workflow.stages)):
             self.window._select_stage(index)
@@ -333,7 +363,7 @@ class DesktopWindowTests(unittest.TestCase):
 
         archived_density(self.backend.workdir)
         self.window._select_stage(self.experiment_index)
-        self.panel.library.setCurrentIndex(self.panel.library.findData("@density_dsurf"))
+        self.panel.library.setCurrentIndex(self.panel.library.findData("@density"))
         with patch.object(self.backend.engine, "run", side_effect=AssertionError("actuation")):
             self.panel.build_plan()
             self.drain()

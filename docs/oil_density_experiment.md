@@ -91,7 +91,7 @@ unverified. No live hardware is accessed by these tests.
 
 ## Density recipes after scout review
 
-Open `density_dsurf`, `density_evagreen`, or `density_custom_mix` in the Experiment
+Open `density` and set the **Oil name** parameter (dSurf, EvaGreen or your mix) in the Experiment
 selector. These ordinary JSON templates control **M1/channel 1 only**; normal
 execution leaves channels 0 and 2 untouched. Emergency stop remains global.
 The recipe does not configure corrections or ask for temperature/extra metadata.

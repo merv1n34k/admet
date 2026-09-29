@@ -63,8 +63,22 @@ No new dialog or step-table editing is needed.
 }
 ```
 
-Each declaration is `[label, numeric default]`. Values are finite nonnegative
-numbers. Type a complete value and press Enter or leave the cell, as in Priming.
+Parameters support text, number, boolean and choice declarations:
+
+```json
+"parameters": {
+  "oil_name": {"type":"text","label":"Oil name","default":"dSurf"},
+  "flow": {"type":"number","label":"Flow, µL/min","default":15,"min":0,"max":100},
+  "filtered": {"type":"boolean","label":"Filtered","default":true},
+  "finish": {"type":"choice","label":"Completion","default":"zero","options":["zero","hold"]}
+}
+```
+
+Qt renders text/numeric cells, checkboxes and dropdowns in the Parameters table.
+Number bounds are optional; values must be finite. Choices must contain distinct
+scalar values (text, number or boolean), and retain their native JSON types.
+The shorthand `[label, numeric default]` still means a nonnegative number.
+Type a complete value and press Enter or leave the cell, as in Priming.
 Several parameters can be edited before **Plan**. Changing a parameter invalidates
 the current preview; it never changes an already executing plan or actuates a device.
 Edits and plan previews are memory-only. Execute archives declarations, expressions
@@ -76,8 +90,13 @@ They work in flow/pressure setpoints, numeric trigger parameters, timeout, repea
 and optional pressure limits. Integer fields must resolve to integers. There are
 no functions, Python evaluation, attributes, imports or dependency chains between
 parameters. Unknown names, division by zero, invalid results and hardware-range
-violations are refused. `{parameter_name}` in step names/confirmation text displays
-the resolved value. Raw JSON editing remains available.
+violations are refused. Only numeric parameters can enter arithmetic; booleans are
+not converted to 0/1. `{parameter_name}` substitutes text in protocol/step names,
+confirmation messages, groups, trigger type, completion action and density oil ID.
+Resolved fields still pass their ordinary validation (including filename-safe
+protocol names and valid trigger/completion choices). Substitution is single-pass;
+inserted text is never evaluated. Booleans can label a run but do not conditionally
+skip steps. Raw JSON editing remains available.
 
 The archived `protocol.json` preserves the template and chosen values;
 `plan.json` preserves exact resolved, expanded steps and the executable digest.

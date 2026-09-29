@@ -1,5 +1,5 @@
 {
-  "name": "density_custom_mix",
+  "name": "density",
   "steps": [
     {"name":"M1 zero flow","sensor_setpoints":{"1":0},"trigger_type":"time","trigger_params":{"duration_s":0},"on_complete":"zero"},
     {"name":"Pass 1 / {height_low_cm} cm / 1x flow","sensor_setpoints":{"1":"oil_base_flow * 1"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
@@ -29,7 +29,7 @@
   ],
   "analysis": {
     "type": "oil_density",
-    "oil_id": "custom_mix",
+    "oil_id": "{oil_name}",
     "points": [
       {"step":2,"pass":1,"height_cm":"height_low_cm","settle_s":"settling_s"},
       {"step":3,"pass":1,"height_cm":"height_low_cm","settle_s":"settling_s"},
@@ -52,6 +52,7 @@
     ]
   },
   "parameters": {
+    "oil_name": {"type":"text","label":"Oil name","default":"dSurf"},
     "oil_base_flow": ["Oil base flow, µL/min (1x / 2x / 3x)",15],
     "settling_s": ["Settling time, s",10],
     "averaging_s": ["Measurement time, s",20],

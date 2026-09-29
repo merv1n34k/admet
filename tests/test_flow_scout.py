@@ -216,7 +216,7 @@ def density_recovery(directory, *, seed=16000, drift=0):
 class ScoutTests(unittest.TestCase):
     def test_scouted_density_runs_and_calculates_with_imperfect_simulated_oil(self):
         with tempfile.TemporaryDirectory() as tmp:
-            report = run_simulated_scout(tmp, speed=5, protocol=template_documents()["density_dsurf"])
+            report = run_simulated_scout(tmp, speed=5, protocol=template_documents()["density"])
             result = report["calculation"]["result"]
             self.assertEqual(report["state"], "completed")
             self.assertEqual(report["final_target_ul_min"], 0)

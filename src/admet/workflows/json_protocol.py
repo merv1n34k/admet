@@ -8,23 +8,90 @@ from pathlib import Path
 import re
 
 
-def parameter_values(document):
+def parameter_declarations(document):
     declarations = document.get("parameters", {})
-    overrides = document.get("parameter_values", {})
-    if not isinstance(declarations, dict) or not isinstance(overrides, dict):
-        raise ValueError("parameters and parameter_values must be objects")
-    if len(declarations) > 100 or set(overrides) - set(declarations):
-        raise ValueError("too many parameters or undeclared parameter values")
-    values = {}
+    if not isinstance(declarations, dict) or len(declarations) > 100:
+        raise ValueError("parameters must be an object with at most 100 declarations")
+    result = {}
     for name, declaration in declarations.items():
-        if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{0,63}", name):
+        if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{0,63}", name):
             raise ValueError(f"invalid parameter name: {name}")
-        if (not isinstance(declaration, list) or len(declaration) != 2
-                or not isinstance(declaration[0], str) or not declaration[0].strip()):
-            raise ValueError(f"{name}: expected [label, numeric default]")
-        number(declaration[1], name)
-        values[name] = number(overrides.get(name, declaration[1]), name)
-    return values
+        if isinstance(declaration, list) and len(declaration) == 2:
+            declaration = {"type": "number", "label": declaration[0], "default": declaration[1], "min": 0}
+        if not isinstance(declaration, dict):
+            raise ValueError(f"{name}: expected a typed declaration or [label, numeric default]")
+        declaration = deepcopy(declaration)
+        kind = declaration.get("type")
+        if kind not in ("text", "number", "boolean", "choice"):
+            raise ValueError(f"{name}: type must be text, number, boolean or choice")
+        allowed = {"type", "label", "default"} | ({"min", "max"} if kind == "number" else
+                                                  {"options"} if kind == "choice" else set())
+        if (set(declaration) - allowed or not {"label", "default"} <= set(declaration)
+                or not isinstance(declaration["label"], str) or not declaration["label"].strip()):
+            raise ValueError(f"{name}: invalid declaration fields or label")
+        if kind == "number":
+            for bound in ("min", "max"):
+                if bound in declaration:
+                    declaration[bound] = number(declaration[bound], name, minimum=-math.inf)
+            if declaration.get("min", -math.inf) > declaration.get("max", math.inf):
+                raise ValueError(f"{name}: min must not exceed max")
+        if kind == "choice":
+            options = declaration.get("options")
+            if not isinstance(options, list) or not 1 <= len(options) <= 100:
+                raise ValueError(f"{name}: choice needs 1–100 options")
+            keys = [(_parameter_scalar_kind(value), value) for value in options]
+            if len(set(keys)) != len(keys):
+                raise ValueError(f"{name}: duplicate choice options")
+        _parameter_value(name, declaration, declaration["default"])
+        result[name] = declaration
+    return result
+
+
+def _parameter_scalar_kind(value):
+    if isinstance(value, str) and len(value) <= 4096:
+        return "text"
+    if type(value) is bool:
+        return "boolean"
+    if type(value) in (int, float) and math.isfinite(value):
+        return "number"
+    raise ValueError("parameter values must be finite numbers, booleans or text up to 4096 characters")
+
+
+def _parameter_value(name, declaration, value):
+    kind = _parameter_scalar_kind(value)
+    expected = declaration["type"]
+    if expected == "choice":
+        for option in declaration["options"]:
+            if kind == _parameter_scalar_kind(option) and value == option:
+                return option
+        raise ValueError(f"{name}: value is not one of its choice options")
+    elif kind != expected:
+        raise ValueError(f"{name}: expected {expected}, got {kind}")
+    if expected == "number" and not declaration.get("min", -math.inf) <= value <= declaration.get("max", math.inf):
+        raise ValueError(f"{name}: number is outside declared bounds")
+    return value
+
+
+def parameter_values(document):
+    declarations = parameter_declarations(document)
+    overrides = document.get("parameter_values", {})
+    if not isinstance(overrides, dict) or set(overrides) - set(declarations):
+        raise ValueError("parameter_values must be an object containing only declared parameters")
+    return {name: _parameter_value(name, declaration, overrides.get(name, declaration["default"]))
+            for name, declaration in declarations.items()}
+
+
+def parameter_text(value):
+    if type(value) is bool:
+        return "true" if value else "false"
+    return f"{value:g}" if type(value) in (int, float) else value
+
+
+def interpolate(value, values):
+    if not isinstance(value, str):
+        return value
+    return re.sub(r"\{([a-zA-Z][a-zA-Z0-9_]*)\}",
+                  lambda match: parameter_text(values[match[1]]) if match[1] in values else match[0], value)
 
 
 def expression(value, values):
@@ -42,6 +109,8 @@ def expression(value, values):
                 result = node.value
             elif isinstance(node, ast.Name) and node.id in values:
                 result = values[node.id]
+                if type(result) not in (int, float):
+                    raise ValueError(f"{node.id} is not numeric")
             elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
                 result = evaluate(node.operand) * (-1 if isinstance(node.op, ast.USub) else 1)
             elif isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
@@ -75,6 +144,7 @@ def resolve(document):
     result.pop("parameters", None)
     result.pop("parameter_values", None)
     if values:
+        result["name"] = interpolate(result.get("name"), values)
         steps = result.get("steps")
         if not isinstance(steps, list) or not 1 <= len(steps) <= 1000:
             raise ValueError("steps must contain 1–1000 steps")
@@ -83,21 +153,21 @@ def resolve(document):
                 raise ValueError("each step must be an object")
             for key in ("sensor_setpoints", "pressure_setpoints", "trigger_params"):
                 if isinstance(step.get(key), dict):
-                    step[key] = {k: v if k == "message" else expression(v, values)
+                    step[key] = {k: interpolate(v, values) if k == "message" else expression(v, values)
                                  for k, v in step[key].items()}
             for key in ("timeout_s", "repeat"):
                 if key in step:
                     step[key] = expression(step[key], values)
-            for key in ("name", "confirm_message"):
+            for key in ("name", "confirm_message", "group", "trigger_type", "on_complete"):
                 if isinstance(step.get(key), str):
-                    for name, value in values.items():
-                        step[key] = step[key].replace("{" + name + "}", f"{value:g}")
+                    step[key] = interpolate(step[key], values)
         if isinstance(result.get("pressure_limits_mbar"), dict):
             result["pressure_limits_mbar"] = {
                 k: expression(v, values) for k, v in result["pressure_limits_mbar"].items()}
         if isinstance(result.get("analysis"), dict) and result["analysis"].get("type") == "flow_scout":
             result["analysis"]["height_cm"] = expression(result["analysis"].get("height_cm"), values)
         if isinstance(result.get("analysis"), dict) and result["analysis"].get("type") == "oil_density":
+            result["analysis"]["oil_id"] = interpolate(result["analysis"].get("oil_id"), values)
             points = result["analysis"].get("points")
             if not isinstance(points, list) or any(not isinstance(p, dict) for p in points):
                 raise ValueError("density analysis points must be a list of objects")

@@ -60,8 +60,10 @@ class RecordedDensityTests(unittest.TestCase):
         from admet.mcp.server import AdmetServer
 
         server = AdmetServer(simulated=True)
-        for oil in ("dsurf", "evagreen", "custom_mix"):
-            document = template_documents()[f"density_{oil}"]
+        for oil in ("dSurf", "EvaGreen", "custom mix"):
+            document = template_documents()["density"]
+            document["parameter_values"]["oil_name"] = oil
+            self.assertEqual(resolve(document)["analysis"]["oil_id"], oil)
             self.assertEqual(normalize(document), document)
             self.assertNotIn("temperature", json.dumps(document))
             self.assertEqual(document["pressure_limits_mbar"], {})

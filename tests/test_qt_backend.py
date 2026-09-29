@@ -112,6 +112,26 @@ class DesktopBackendTests(unittest.TestCase):
         self.assertEqual(reopened.call("planned_protocols")["plans"], [])
         self.assertTrue(reopened.service.project.session.files)
 
+    def test_typed_parameters_are_frozen_in_executed_run(self):
+        from tests.test_protocol_parameters import typed_parameter_protocol
+        from admet.workflows.json_protocol import normalize
+
+        self.connect()
+        document = normalize(typed_parameter_protocol())
+        document["parameter_values"].update(oil="EvaGreen mix", filtered=False)
+        document["steps"][0]["trigger_params"]["duration_s"] = 0.1
+        plan = self.plan(document)
+        document["parameter_values"].update(oil="different oil", filtered=True)
+        self.backend.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"], "timeout_s": 1})
+        self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 1})
+        completed = self.wait_completed(plan["plan_id"])
+        directory = Path(self.backend.workdir) / "records" / "protocols" / completed["run_id"]
+        archived = json.loads((directory / "protocol.json").read_text())
+        self.assertEqual(archived["parameter_values"]["oil"], "EvaGreen mix")
+        self.assertIs(archived["parameter_values"]["filtered"], False)
+        self.assertEqual(archived["parameter_values"]["finish"], "zero")
+        self.assertEqual(archived["parameter_values"]["offset"], -1)
+
     def test_dropseq_template_simulated_collection_gates_and_artifacts(self):
         self.connect()
         document = template_documents()["dropseq"]
@@ -208,7 +228,7 @@ class DesktopBackendTests(unittest.TestCase):
         channels = self.backend.engine.channel_manager
         channels.user_set_pressure(0, 13)
         channels.user_set_pressure(2, 17)
-        plan = self.plan(template_documents()["density_dsurf"])
+        plan = self.plan(template_documents()["density"])
         # Only the clock trigger is accelerated; device access remains simulated.
         from admet.engines.acquisition import triggers
 
