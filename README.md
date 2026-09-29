@@ -25,8 +25,9 @@ Confirmation gates, pause/skip/abort, emergency stop, and run artifacts use the
 existing backend. Closing the window stops and disconnects; it does not detach.
 Execute uses the protocol's own confirmation gates, without an extra approval prompt.
 The selector, parameter table and JSON editor stay visible alongside the preview.
-Working drafts (including unfinished JSON) autosave in the project, without changing
-bundled templates. Plan replaces the current preview; only Execute saves a run.
+Protocol edits and plan previews stay in memory, without changing bundled templates.
+Closing the app or switching/reopening projects discards them. Only Execute saves
+the exact protocol, parameters and run. Run measurements/results remain persistent.
 
 Preflight is a non-actuating setup page for flow/phase ratios, fluidics layout and
 consumption formulas; **Save Project** preserves the layout. Legacy check data
@@ -374,9 +375,9 @@ cannot complete cleanup.
 
 ## Writing a protocol
 
-Prefer reusable JSON files saved in the project's `protocols/` directory.
-The agent uses `save_protocol`, `list_protocols`, and `plan_protocol_file` to
-save, reopen, and plan them. Each execution records the exact definition, plan,
+In Qt, select a bundled template and edit its parameters or JSON in memory.
+There is no draft autosave or separate project `protocols/` library
+in this workflow. Each execution records the exact definition, plan,
 events, fluidics CSV, and outcome in the `.admetp` project. See the
 [JSON protocol guide](docs/json_protocols.md) for the small format and MCP examples.
 

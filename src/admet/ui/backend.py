@@ -49,11 +49,20 @@ class DesktopBackend:
 
     def create_project(self, path):
         with self.lock:
-            return self.service.create_project(path)
+            project = self.service.create_project(path)
+            self._discard_previews()
+            return project
 
     def open_project(self, path):
         with self.lock:
-            return self.service.open_project(path)
+            project = self.service.open_project(path)
+            self._discard_previews()
+            return project
+
+    def _discard_previews(self):
+        for plan_id in self._previews.values():
+            self.service.discard_protocol_preview(plan_id)
+        self._previews.clear()
 
     def save_project(self, *, checkup=None):
         with self.lock:
@@ -65,27 +74,6 @@ class DesktopBackend:
                         **project.session.metadata, "qt_checkup": checkup,
                     })
                 self.service.project.save()
-
-    def save_protocol_order(self, entries):
-        with self.lock:
-            self.service._require_project_idle()
-            project = self.service.project
-            if project is None:
-                raise RuntimeError("Open a project first")
-            project.session = replace(project.session, metadata={
-                **project.session.metadata, "qt_protocol_stages": entries,
-            })
-            project.save()
-
-    def save_drafts(self, entries):
-        with self.lock:
-            project = self.service.project
-            if project is None:
-                return
-            project.session = replace(project.session, metadata={
-                **project.session.metadata, "qt_protocol_stages": entries,
-            })
-            project.save()
 
     def measurements(self, run_id, changes=None):
         with self.lock:

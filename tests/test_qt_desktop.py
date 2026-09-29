@@ -1,5 +1,4 @@
 import importlib.util
-import json
 import os
 from pathlib import Path
 import tempfile
@@ -318,15 +317,14 @@ class DesktopWindowTests(unittest.TestCase):
                 self.drain()
             self.assertEqual(self.panel.plan["operation_id"], "run_json_protocol")
             self.assertEqual(self.panel.document()["name"], name)
-            self.assertTrue(self.panel.plan["steps"][0]["confirmation"])
+            self.assertTrue(any(step["confirmation"] for step in self.panel.plan["steps"]))
             self.assertTrue(all(s["on_complete"] == "zero" for s in self.panel.plan["steps"]))
         document = self.panel.document()
         document["name"] = "my_flow_check"
         document["steps"][0]["sensor_setpoints"]["0"] = 25
         self.panel.set_document(document)
         self.assertFalse(self.panel.executable)
-        self.window._save_protocol_order()
-        stored = json.loads(self.backend.session.metadata["qt_protocol_stages"][0]["json"])
+        stored = self.panel.document()
         self.assertEqual(stored["steps"][0]["sensor_setpoints"]["0"], 25)
         self.assertEqual(self.panel.templates["pressure_flow_check"]["steps"][0]["sensor_setpoints"]["0"], 50)
 
@@ -372,15 +370,14 @@ class DesktopWindowTests(unittest.TestCase):
         self.backend.call("apply_corrections")
         self.window._select_stage(self.experiment_index)
         self.panel.set_document(definition())
-        self.window._save_protocol_order()
-        self.assertEqual(len(self.backend.session.metadata["qt_protocol_stages"]), 1)
+        self.assertNotIn("qt_protocol_stages", self.backend.session.metadata)
         with patch.object(self.backend.engine, "run", side_effect=AssertionError("planning actuated")):
             self.panel.build_plan()
             self.drain()
         self.assertEqual(self.panel.table.rowCount(), 1)
-        self.assertEqual(self.panel.table.item(0, 1).text(), "0\n1\n2")
-        self.assertEqual(self.panel.table.item(0, 3).text(), "10 µL/min\n5 µL/min\n5 µL/min")
-        self.assertIn("time: 0.15 s", self.panel.table.item(0, 4).text())
+        self.assertEqual(self.panel.table.item(0, 2).text(), "0\n1\n2")
+        self.assertEqual(self.panel.table.item(0, 4).text(), "10 µL/min\n5 µL/min\n5 µL/min")
+        self.assertIn("time: 0.15 s", self.panel.table.item(0, 5).text())
         self.assertIn("500", self.panel.summary.text())
         plan_id = self.panel.plan["plan_id"]
         self.panel.execute()
@@ -407,13 +404,18 @@ class DesktopWindowTests(unittest.TestCase):
 
     def test_plan_gates_are_clear_and_instructions_are_folded(self):
         self.window._select_stage(self.experiment_index)
-        self.panel.set_document(self.panel.templates["gravimetry"])
+        document = definition()
+        document["steps"].append({
+            "name": "Weigh Oil L", "trigger_type": "time", "trigger_params": {"duration_s": 0},
+            "confirm_message": "Weigh the tube and record empty and full masses", "on_complete": "zero",
+        })
+        self.panel.set_document(document)
         self.panel.build_plan()
         self.drain()
-        self.assertEqual(self.panel.table.rowCount(), 6)
-        self.assertEqual(self.panel.table.item(1, 2).text(), "confirm")
-        self.assertEqual(self.panel.table.item(1, 4).text(), "Operator: Weigh Oil L")
-        self.assertEqual(self.panel.table.item(0, 6).text(), "Before")
+        self.assertEqual(self.panel.table.rowCount(), 2)
+        self.assertEqual(self.panel.table.item(1, 3).text(), "confirm")
+        self.assertEqual(self.panel.table.item(1, 5).text(), "Operator: Weigh Oil L")
+        self.assertEqual(self.panel.table.item(0, 7).text(), "Before")
         self.assertFalse(self.panel.details_box.isVisible())
         self.panel.table.setCurrentCell(1, 0)
         self.assertTrue(self.panel.details_box.isVisible())
@@ -433,7 +435,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.panel.build_plan()
         self.drain()
         self.assertIsNotNone(self.panel.plan)
-        self.assertIn(f"for {STABILITY_DURATION_S:g} s", self.panel.table.item(0, 4).text())
+        self.assertIn(f"for {STABILITY_DURATION_S:g} s", self.panel.table.item(0, 5).text())
 
     def test_plan_table_fits_all_rows_and_reflows_without_nested_scroll(self):
         from PySide6.QtCore import Qt
@@ -444,12 +446,12 @@ class DesktopWindowTests(unittest.TestCase):
         table = PlanTable()
         try:
             table.setHorizontalHeaderLabels([
-                "STEP", "UNIT ID", "TYPE", "TARGET", "TRIGGER / ETA", "END", "CONFIRM",
+                "STEP", "STATUS", "UNIT ID", "TYPE", "TARGET", "TRIGGER / ETA", "END", "CONFIRM",
             ])
             table.setRowCount(30)
             for row in range(30):
                 for column, value in enumerate([
-                    str(row + 1), "0", "pressure", "1800 mbar",
+                    str(row + 1), "pending", "0", "pressure", "1800 mbar",
                     "volume ch 0: 50 µL\nETA 30 s / timeout 120 s", "zero",
                     "Confirm the physical channel mapping and collection tube before continuing.",
                 ]):
@@ -519,12 +521,9 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertLess(page.action_panel.y(), page.main_panel.y())
         self.assertTrue(self.panel.library.isVisible())
         self.assertTrue(self.panel.isVisible())
-        self.backend.call("save_protocol", {"protocol": definition()})
-        self.window._refresh_protocol_library()
+        self.panel.library.setCurrentIndex(self.panel.library.findData("@flow_stability_scout"))
         self.drain()
-        self.panel.library.setCurrentIndex(1)
-        self.drain()
-        self.assertEqual(self.panel.document()["name"], "desktop_test")
+        self.assertEqual(self.panel.document()["name"], "flow_stability_scout")
         self.panel.build_plan()
         self.drain()
         self.assertTrue(self.panel.table.isVisible())
@@ -534,23 +533,61 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertTrue(self.panel.library.isVisible())
         self.assertTrue(self.panel.table.isVisible())
 
-    def test_saved_custom_toc_order_survives_project_reopen(self):
+    def test_custom_protocol_edits_and_toc_are_memory_only(self):
         self.window._select_stage(self.experiment_index)
         self.panel.set_document(definition())
-        self.window._save_protocol_order()
         stage = self.window._add_protocol_stage("Follow-up")
         second = self.window._protocol_editor(stage)
         document = definition()
         document["name"] = "follow_up"
         second.set_document(document)
-        self.window._save_protocol_order()
+        self.window._save_project()
+        self.assertNotIn("qt_protocol_stages", self.backend.session.metadata)
         path = Path(self.backend.workdir)
         self.window._load_project_path(path)
         middle = [s for s in self.window.workflow.stages if "json_protocol" in s.features
                   and not s.settings_options.get("builtin")]
-        self.assertEqual([s.id for s in middle], ["experiment_1", stage.id])
-        self.assertEqual([self.window._protocol_editor(s).document()["name"] for s in middle],
-                         ["desktop_test", "follow_up"])
+        self.assertEqual([s.id for s in middle], ["experiment_1"])
+        self.assertEqual(self.window._protocol_editor(middle[0]).editor.toPlainText(), "")
+        self.assertFalse((path / "protocols").exists())
+
+    def test_editor_changes_and_plan_do_not_write_project_files(self):
+        from tests.test_protocol_parameters import parameter_protocol
+
+        root = Path(self.backend.workdir)
+        before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+        with patch.object(self.backend.service.project, "save", side_effect=AssertionError("draft saved")):
+            self.panel.set_document(parameter_protocol())
+            self.panel.set_parameter("oil_base_flow", 10)
+            self.panel.build_plan()
+            self.drain()
+            self.assertIsNotNone(self.panel.plan)
+            self.panel.editor.insertPlainText(" ")
+            self.window._autosave_measurements()
+        after = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+        self.assertEqual(before, after)
+
+    def test_old_draft_metadata_is_not_restored(self):
+        self.backend.service.project.update_metadata(qt_protocol_stages=[{
+            "id": "old_step", "label": "Old draft", "json": '{"unfinished":',
+        }])
+        self.window._load_project_path(Path(self.backend.workdir))
+        self.assertNotIn("old_step", {stage.id for stage in self.window.workflow.stages})
+
+    def test_template_selector_and_poll_do_not_use_project_protocol_library(self):
+        def call(operation, settings=None):
+            self.assertNotIn(operation, {"save_protocol", "list_protocols"})
+            return original(operation, settings)
+
+        original = self.backend.call
+        with patch.object(self.backend, "call", side_effect=call):
+            self.panel.library.setCurrentIndex(self.panel.library.findData("@flow_stability_scout"))
+            self.window._last_status_poll = 0
+            self.window._poll()
+            self.drain()
+        self.assertTrue(all(self.panel.library.itemData(i).startswith("@")
+                            for i in range(1, self.panel.library.count())))
+        self.assertFalse((Path(self.backend.workdir) / "protocols").exists())
 
     def test_event_loop_and_emergency_remain_responsive_during_command(self):
         from PySide6.QtCore import QTimer
@@ -644,7 +681,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.drain()
         self.assertFalse(self.backend.engine.safety_state()["tripped"])
 
-    def test_json_remains_visible_after_plan_and_invalid_draft_survives_reopen(self):
+    def test_json_remains_visible_but_draft_and_preview_are_discarded_on_reopen(self):
         from PySide6.QtWidgets import QPushButton
 
         self.window._select_stage(self.experiment_index)
@@ -657,11 +694,15 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertTrue(self.panel.table.isVisible())
         self.assertFalse({"Open", "Import JSON", "Save JSON", "Edit JSON"} &
                          {b.text() for b in self.panel.findChildren(QPushButton)})
+        plan_id = self.panel.plan["plan_id"]
         self.panel.editor.setPlainText('{"unfinished":')
         self.window._load_project_path(Path(self.backend.workdir))
-        restored = self.window.protocol_editors["experiment_1"]
-        self.assertEqual(restored.editor.toPlainText(), '{"unfinished":')
+        stage = next(s for s in self.window.workflow.stages if s.id == "experiment_1")
+        restored = self.window._protocol_editor(stage)
+        self.assertEqual(restored.editor.toPlainText(), "")
         self.assertFalse(restored.executable)
+        self.assertIsNone(restored.plan)
+        self.assertNotIn(plan_id, {p["plan_id"] for p in self.backend.call("planned_protocols")["plans"]})
         self.assertFalse((Path(self.backend.workdir) / "plans").exists())
 
     def test_measurements_enable_only_for_run_and_survive_reopen(self):
@@ -681,18 +722,20 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertTrue(cell.isEnabled())
         cell.setText("12.5")
         cell.editingFinished.emit()
-        self.window._autosave_drafts()
+        self.window._autosave_measurements()
         self.assertEqual(self.backend.measurements(run_id)["values"]["before_mg"], 12.5)
         self.panel.control("abort")
         self.drain()
         self.window._load_project_path(Path(self.backend.workdir))
-        restored = self.window.protocol_editors["experiment_1"].measurements
+        stage = next(s for s in self.window.workflow.stages if s.id == "experiment_1")
+        restored = self.window._protocol_editor(stage).measurements
         restored.runs.setCurrentIndex(restored.runs.findData(run_id))
         self.assertEqual(restored.cells["before_mg"].text(), "12.5")
         self.assertEqual(restored.cells["after_mg"].text(), "")
 
     def test_run_rows_show_gates_outcomes_and_respect_manual_browsing(self):
         from admet.engines.acquisition.pipeline import PipelineEvent, PipelineState, StepOutcome
+        from PySide6.QtWidgets import QCheckBox
         from tests.test_protocol_parameters import parameter_protocol
 
         self.window._select_stage(self.experiment_index)
@@ -702,6 +745,10 @@ class DesktopWindowTests(unittest.TestCase):
         self.panel.build_plan()
         self.drain()
         self.window._pipeline_stage_id = self.panel.stage.id
+        self.assertEqual(self.panel.table.horizontalHeaderItem(1).text(), "STATUS")
+        self.assertEqual(self.panel.table.item(0, 0).text(), "1")
+        self.assertEqual(self.panel.table.item(0, 1).text(), "pending")
+        self.assertFalse(any("Follow" in box.text() for box in self.panel.findChildren(QCheckBox)))
 
         def event(sequence, row, **kwargs):
             self.panel.pipeline_event(PipelineEvent(
@@ -710,28 +757,30 @@ class DesktopWindowTests(unittest.TestCase):
 
         with patch.object(self.window.page_scroll, "ensureVisible") as follow:
             event(1, 0, confirmation_message="Position vessel")
-            self.assertIn("confirm", self.panel.table.item(0, 0).text())
+            self.assertEqual(self.panel.table.item(0, 1).text(), "confirm")
             self.assertTrue(self.panel.editor.isReadOnly())
             self.assertFalse(self.panel.library.isEnabled())
             self.assertFalse(self.panel.parameter_editors["oil_base_flow"].isEnabled())
-            follow.assert_called_once()
+            follow.assert_not_called()
             event(2, 0, progress=0.25)
-            self.assertIn("25%", self.panel.table.item(0, 0).text())
-            follow.assert_called_once()
+            self.assertIn("25%", self.panel.table.item(0, 1).text())
+            follow.assert_not_called()
             self.panel.table.cellClicked.emit(0, 0)
-            self.assertFalse(self.panel.follow.isChecked())
             event(3, 0, outcome=StepOutcome.SKIPPED)
             event(4, 1, progress=0.5)
-            follow.assert_called_once()
-            self.assertIn("skipped", self.panel.table.item(0, 0).text())
-            self.assertIn("50%", self.panel.table.item(1, 0).text())
+            follow.assert_not_called()
+            self.assertEqual(self.panel.table.item(0, 1).text(), "skipped")
+            self.assertIn("50%", self.panel.table.item(1, 1).text())
             event(5, 1, outcome=StepOutcome.COMPLETED)
             self.panel.pipeline_event(PipelineEvent(
                 state=PipelineState.COMPLETED, current_step=1, total_steps=2,
                 sequence=6, outcome=StepOutcome.COMPLETED))
-            self.assertIn("completed", self.panel.table.item(1, 0).text())
+            self.assertEqual(self.panel.table.item(1, 1).text(), "completed")
+            self.assertEqual(self.panel.table.item(0, 0).text(), "1")
+            self.assertEqual(self.panel.table.item(1, 0).text(), "2")
             self.assertFalse(self.panel.editor.isReadOnly())
             self.assertTrue(self.panel.parameter_editors["oil_base_flow"].isEnabled())
+
 
     def test_program_confirmation_is_focused_modal_and_single_use(self):
         from PySide6.QtCore import Qt, QTimer

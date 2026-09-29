@@ -67,8 +67,9 @@ Each declaration is `[label, numeric default]`. Values are finite nonnegative
 numbers. Type a complete value and press Enter or leave the cell, as in Priming.
 Several parameters can be edited before **Plan**. Changing a parameter invalidates
 the current preview; it never changes an already executing plan or actuates a device.
-Project draft autosave preserves declarations, expressions and selected `parameter_values`
-overrides. Reopen/import restores the selected values, not just the defaults.
+Edits and plan previews are memory-only. Execute archives declarations, expressions
+and selected `parameter_values` for that run. Closing the app or switching/reopening
+projects discards unexecuted edits; Save Project does not save protocol drafts.
 
 Expressions accept declared names, numbers, `+ - * /`, unary signs and parentheses.
 They work in flow/pressure setpoints, numeric trigger parameters, timeout, repeat,
@@ -122,7 +123,7 @@ zeros the channels. Optional `name`, `repeat`, and `group` retain their existing
 step meanings. Completion defaults to `zero`; `hold` and `revert` are explicit
 choices. Use `confirm_message` to gate a step before its targets are applied.
 
-MCP operations:
+MCP operations (separate from the template-based Qt workflow):
 
 - `save_protocol`: `{"protocol": <definition>, "replace": false}` saves in the open project.
 - `list_protocols`: `{}` lists files; `{"name": "short_run"}` reads one.
@@ -139,14 +140,21 @@ changing an already-created plan. Reload it to create a new plan.
 
 ```text
 experiment.admetp/
-  protocols/short_run.json
+  manifest.json             # project index and run references
   records/protocols/run_…/
     protocol.json
     plan.json
     events.jsonl
     summary.json
+    measurements.json       # when declared by the protocol
+    calculations/           # results calculated on request
   records/fluidics/…csv
 ```
+
+Qt does not create or browse a top-level `protocols/` directory. Its selector
+uses bundled templates, and edits stay in memory until execution. The older MCP
+`save_protocol`/`list_protocols` file library remains separate; existing files
+are not deleted or modified by this Qt change.
 
 JSON protocol execution automatically records fluidics. The run summary references
 that CSV and contains the plan, settings, digest, rig mapping, corrections, limits,

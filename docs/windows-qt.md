@@ -203,12 +203,17 @@ on protocol completion, and no calculation is added to Checkup.
 The schema is unchanged; see [JSON protocols](json_protocols.md). No YAML or
 alternate runner is used.
 
-- `protocols/<name>.json`: reusable definitions.
-- `plans/<plan_id>.json`: plan audit records.
-- `records/protocols/<plan_id>/`: exact definition, plan, event log and summary.
-- `records/protocols/<plan_id>/calculations/`: separately saved calculation results.
+- `manifest.json`: project index, saved setup and run references.
+- `records/protocols/<run_id>/`: executed definition, plan, event log and summary.
+- `records/protocols/<run_id>/measurements.json`: manual measurements, when declared.
+- `records/protocols/<run_id>/calculations/`: separately saved calculation results.
 - `records/fluidics/`: CSV recordings referenced by the run summary.
-- `manifest.json`: project definitions and run references.
+
+The selector contains bundled templates. JSON edits, parameter edits, custom
+experiment TOC entries and plan previews stay in memory. Closing the app or
+switching/reopening projects discards them, without a draft-save prompt.
+Only execution creates a run archive. Manual run measurements and calculation
+results are still saved. Older draft metadata is ignored, not restored.
 
 JSON runs automatically record fluidics. Camera live preview is available;
 JSON runs currently do **not** record video. The GUI does not silently turn on

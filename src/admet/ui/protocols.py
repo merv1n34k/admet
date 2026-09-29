@@ -3,10 +3,10 @@
 import json
 import math
 
-from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QHeaderView,
+    QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QPlainTextEdit,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -55,7 +55,7 @@ def step_rows(plan):
             condition = "Operator: " + step["name"]
         controls = controls or [("—", "confirm" if gate_only else "off", "—")]
         rows.append([
-            str(step["number"]),
+            str(step["number"]), "pending",
             "\n".join(str(index) for index, _, _ in controls),
             "\n".join(mode for _, mode, _ in controls),
             "\n".join(target for _, _, target in controls),
@@ -77,7 +77,7 @@ def step_details(step):
 
 class PlanTable(GridTable):
     def __init__(self):
-        super().__init__(0, 7)
+        super().__init__(0, 8)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.verticalHeader().hide()
@@ -96,12 +96,12 @@ class PlanTable(GridTable):
         self._fitting = True
         try:
             width = self.viewport().width()
-            compact = {0: 96, 1: 78, 2: 70, 3: 130, 5: 64, 6: 78}
+            compact = {0: 48, 1: 108, 2: 78, 3: 70, 4: 130, 6: 64, 7: 78}
             scale = min(1.0, width * 0.6 / sum(compact.values()))
             for column, preferred in compact.items():
                 self.setColumnWidth(column, max(24, int(preferred * scale)))
             remaining = width - sum(self.columnWidth(c) for c in compact)
-            self.setColumnWidth(4, max(24, remaining))
+            self.setColumnWidth(5, max(24, remaining))
             self.resizeRowsToContents()
             fit_table_height(self)
         finally:
@@ -205,7 +205,7 @@ class Measurements(QWidget):
             return
         cell.setStyleSheet("")
         self.pending.setdefault(self.run_id, {})[key] = value
-        self.editor.window._draft_timer.start(200)
+        self.editor.window._measurement_save_timer.start(200)
 
     def flush(self):
         for run_id, changes in list(self.pending.items()):
@@ -223,19 +223,17 @@ class ProtocolEditor(QWidget):
         self.backend = window.api
         self.plan = None
         self.dirty = True
-        self.saved_name = None
         self.parameter_editors = {}
         self.parameter_table = None
         self._table_digest = None
         self._edit_generation = 0
         self._executing = False
-        self._current_row = None
         self._last_sequence = 0
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         self.editor = QPlainTextEdit()
         self.editor.setMaximumHeight(180)
-        self.editor.setPlaceholderText("Open a saved JSON protocol or paste a definition here.")
+        self.editor.setPlaceholderText("Select a template or edit the JSON definition here.")
         self.builtin = stage.settings_options.get("builtin", "")
         if not self.builtin:
             self.templates = template_documents()
@@ -243,7 +241,7 @@ class ProtocolEditor(QWidget):
             self.library = QComboBox()
             self.library.setMinimumWidth(170)
             bar.addWidget(self.library, 1)
-            self.library.currentIndexChanged.connect(self.open_saved)
+            self.library.currentIndexChanged.connect(self.open_template)
             root.addLayout(bar)
             self.parameter_box = QVBoxLayout()
             root.addLayout(self.parameter_box)
@@ -254,12 +252,9 @@ class ProtocolEditor(QWidget):
         self.summary.setObjectName("StageSummary")
         self.summary.setWordWrap(True)
         root.addWidget(self.summary)
-        self.follow = QCheckBox("Follow running step")
-        self.follow.setChecked(True)
-        root.addWidget(self.follow)
         self.table = PlanTable()
         self.table.setObjectName("RawConfigTable")
-        self.table.setHorizontalHeaderLabels(["STEP", "UNIT ID", "TYPE", "TARGET", "TRIGGER / ETA", "END", "CONFIRM"])
+        self.table.setHorizontalHeaderLabels(["STEP", "STATUS", "UNIT ID", "TYPE", "TARGET", "TRIGGER / ETA", "END", "CONFIRM"])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         root.addWidget(self.table)
         self.table.hide()
@@ -279,12 +274,10 @@ class ProtocolEditor(QWidget):
         root.addWidget(self.measurements)
         self.table.currentCellChanged.connect(self.show_step_details)
         self.table.cellClicked.connect(self.show_step_details)
-        self.table.cellClicked.connect(lambda *_: self.follow.setChecked(False))
-        self.table.viewport().installEventFilter(self)
-        window.page_scroll.viewport().installEventFilter(self)
-        window.page_scroll.verticalScrollBar().sliderPressed.connect(lambda: self.follow.setChecked(False))
         self.editor.textChanged.connect(self.raw_edited)
-        self.update_library(window.protocol_library)
+        self.populate_templates()
+        if not self.builtin:
+            self.measurements.preview({})
 
     @property
     def executable(self):
@@ -299,8 +292,6 @@ class ProtocolEditor(QWidget):
         if self.plan:
             self.summary.setText("Definition changed. Build a new plan before execution.")
         self.window._protocol_changed()
-        if not self.builtin:
-            self.window._draft_timer.start(350)
 
     def raw_edited(self):
         self.edited()
@@ -370,41 +361,23 @@ class ProtocolEditor(QWidget):
             raise ValueError("Correct invalid parameter values before building or saving")
         return loads(self.editor.toPlainText())
 
-    def update_library(self, entries):
+    def populate_templates(self):
         if self.builtin:
             return
-        names = [entry["name"] for entry in entries if not entry.get("error")]
-        items = [(name, name) for name in names] + [
+        items = [
             ("@" + name, "Template · " + name.replace("_", " ")) for name in sorted(self.templates)
         ]
-        if [key for key, _ in items] == [self.library.itemData(i) for i in range(1, self.library.count())]:
-            if self.library.count():
-                return
-        selected = self.library.currentData()
         self.library.blockSignals(True)
         self.library.clear()
-        self.library.addItem("Select protocol or template…", None)
+        self.library.addItem("Select template…", None)
         for key, label in items:
             self.library.addItem(label, key)
-        self.library.setCurrentIndex(max(0, self.library.findData(selected)))
         self.library.blockSignals(False)
 
-    def open_saved(self):
+    def open_template(self):
         name = self.library.currentData()
         if name and name.startswith("@"):
             self.set_document(self.templates[name[1:]])
-            return
-        if name:
-            generation = self._edit_generation
-
-            def loaded(result):
-                if generation == self._edit_generation and name == self.library.currentData():
-                    self.set_document(result["protocol"])
-
-            self.submit(
-                lambda: self.backend.call("list_protocols", {"name": name}),
-                loaded,
-            )
 
     def set_document(self, document):
         self.editor.setPlainText(json.dumps(document, indent=2, ensure_ascii=False))
@@ -429,7 +402,6 @@ class ProtocolEditor(QWidget):
         self.plan = plan
         self.dirty = False
         self._table_digest = None
-        self._current_row = None
         self.show_plan()
         self.editor.setVisible(not bool(self.builtin))
         self.window._append_log("Preview ready — nothing recorded or actuated")
@@ -505,11 +477,6 @@ class ProtocolEditor(QWidget):
         for widget in self.parameter_editors.values():
             widget.setEnabled(not active)
 
-    def eventFilter(self, watched, event):  # noqa: N802
-        if event.type() == QEvent.Type.Wheel and self.isVisible():
-            self.follow.setChecked(False)
-        return super().eventFilter(watched, event)
-
     def pipeline_event(self, event):
         if not self.plan or event.sequence <= self._last_sequence:
             return
@@ -531,18 +498,14 @@ class ProtocolEditor(QWidget):
                  "#e0f1e9" if outcome == "completed" else
                  "#edf3f7" if outcome == "skipped" else
                  "#fff0c2" if status in {"paused", "confirm"} else "#dceefa")
-        self.table.item(row, 0).setText(f"{row + 1}\n{status}")
+        if self.table.item(row, 1).text() != status:
+            self.table.item(row, 1).setText(status)
+            self.table.resizeRowToContents(row)
+            fit_table_height(self.table)
         for column in range(self.table.columnCount()):
             item = self.table.item(row, column)
             item.setBackground(QColor(color))
             item.setForeground(QColor("#16212b"))
-        if row != self._current_row:
-            self.table.fit_contents()
-            if self.follow.isChecked() and self.isVisible():
-                position = self.table.viewport().mapTo(
-                    self.window.page_scroll.widget(), QPoint(0, self.table.rowViewportPosition(row)))
-                self.window.page_scroll.ensureVisible(position.x(), position.y(), 0, 60)
-            self._current_row = row
 
     def control(self, action):
         def finished(result):

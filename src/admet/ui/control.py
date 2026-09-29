@@ -356,7 +356,6 @@ class ControlWindow(QMainWindow):
             self.values.update(stage.settings.defaults())
         self.values["simulated"] = api.simulated
         self.protocol_editors = {}
-        self.protocol_library = []
         self._last_protocol_log = None
         self.last_result: RunResult | None = None
         self.last_metadata: dict[str, Any] = {}
@@ -464,11 +463,10 @@ class ControlWindow(QMainWindow):
         self._correction_apply_timer.setSingleShot(True)
         self._correction_apply_timer.timeout.connect(self._apply_correction_values)
 
-        self._draft_timer = QTimer(self)
-        self._draft_timer.setSingleShot(True)
-        self._draft_timer.timeout.connect(self._autosave_drafts)
+        self._measurement_save_timer = QTimer(self)
+        self._measurement_save_timer.setSingleShot(True)
+        self._measurement_save_timer.timeout.connect(self._autosave_measurements)
         self._build_ui()
-        self._restore_protocol_order()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll)
@@ -613,19 +611,6 @@ class ControlWindow(QMainWindow):
         if self.current_stage_page is not None:
             self._sync_action_box(self.workflow.current_stage(self.workflow_state))
 
-    def _refresh_protocol_library(self):
-        if self.api.session and not self.tasks.busy:
-            self.tasks.submit(
-                lambda: self.api.call("list_protocols")["protocols"],
-                self._library_received,
-                lambda exc: self._notify(str(exc), "danger"),
-            )
-
-    def _library_received(self, entries):
-        self.protocol_library = entries
-        for editor in self.protocol_editors.values():
-            editor.update_library(entries)
-
     def _rebuild_toc(self):
         old = self.workflow_toc_panel
         self.toc_rows = []
@@ -653,69 +638,21 @@ class ControlWindow(QMainWindow):
         self._select_stage(index)
         return stage
 
-    def _save_protocol_order(self):
+    def _flush_measurements(self):
         for editor in self.protocol_editors.values():
             editor.measurements.flush()
-        entries = [
-            {"id": stage.id, "label": stage.label, "json": editor.editor.toPlainText(),
-             "source": editor.library.currentData(),
-             "parameter_drafts": {key: widget.text() for key, widget in editor.parameter_editors.items()
-                                  if widget.pending}}
-            for stage in self.workflow.stages
-            if (editor := self.protocol_editors.get(stage.id)) is not None
-            and not editor.builtin
-        ]
-        self.api.save_drafts(entries)
 
-    def _autosave_drafts(self):
+    def _autosave_measurements(self):
         if self.tasks.busy or self.emergency_tasks.busy:
-            self._draft_timer.start(350)
+            self._measurement_save_timer.start(200)
             return
         try:
-            self._save_protocol_order()
+            self._flush_measurements()
         except Exception as exc:
-            self._notify(f"Draft save failed: {exc}", "danger", timeout_ms=0)
-
-    def _restore_protocol_order(self):
-        from admet.workflows.control import protocol_stage
-
-        if not self.api.session:
-            return
-        entries = self.api.session.metadata.get("qt_protocol_stages", [])
-        if not entries:
-            return
-        stages = [s for s in self.workflow.stages if not (
-            "json_protocol" in s.features and not s.settings_options.get("builtin")
-        )]
-        position = next(i for i, s in enumerate(stages) if s.id == "calculations")
-        restored = []
-        for entry in entries:
-            try:
-                stage = protocol_stage(entry["id"], entry["label"])
-                editor = self._protocol_editor(stage)
-                if "json" in entry:
-                    editor.editor.setPlainText(entry["json"])
-                    editor.library.blockSignals(True)
-                    editor.library.setCurrentIndex(max(0, editor.library.findData(entry.get("source"))))
-                    editor.library.blockSignals(False)
-                    for key, value in entry.get("parameter_drafts", {}).items():
-                        if key in editor.parameter_editors:
-                            widget = editor.parameter_editors[key]
-                            widget.setText(value)
-                            widget.pending = True
-                else:
-                    document = self.api.service.protocol_store().read(entry["protocol"])["protocol"]
-                    editor.set_document(document)
-                restored.append(stage)
-            except Exception as exc:
-                self._append_log(f"Cannot restore protocol step: {exc}")
-        self.workflow.stages = tuple(stages[:position] + restored + stages[position:])
-        self.workflow_state = self.workflow.initial_state()
-        self._rebuild_toc()
-        self._render_current_stage()
+            self._notify(f"Measurement save failed: {exc}", "danger", timeout_ms=0)
 
     def _reset_project_workflow(self):
-        self._draft_timer.stop()
+        self._measurement_save_timer.stop()
         self._detach_live_widgets()
         if self._calculations is not None:
             self._calculations.setParent(None)
@@ -829,7 +766,7 @@ class ControlWindow(QMainWindow):
             return
         target = session_path(Path(path))
         try:
-            self._save_protocol_order()
+            self._flush_measurements()
             self.project_path = self.api.create_project(target).path
         except Exception as exc:
             self._set_status("Project create failed", "danger")
@@ -906,7 +843,7 @@ class ControlWindow(QMainWindow):
             self._notify("Wait for the current command before changing project.", "warning")
             return
         try:
-            self._save_protocol_order()
+            self._flush_measurements()
             self.project_path = self.api.open_project(path).path
         except Exception as exc:
             self._set_status("Project load failed", "danger")
@@ -918,7 +855,6 @@ class ControlWindow(QMainWindow):
         self._notify("Project selected", "success")
         self._append_log(f"project: selected {path}")
         self._reset_project_workflow()
-        self._restore_protocol_order()
         self._render_current_stage()
 
     def _save_project(self) -> None:
@@ -928,7 +864,7 @@ class ControlWindow(QMainWindow):
         if self.api.session is None:
             self._new_project()
             return
-        self._save_protocol_order()
+        self._flush_measurements()
         target = self.project_path
         if target is None:
             path, _filter = QFileDialog.getSaveFileName(
@@ -2163,15 +2099,13 @@ class ControlWindow(QMainWindow):
             self.tasks.submit(
                 lambda: (self.api.run(RunJob(
                     id="qt_status", engine="acquisition", action="camera_status",
-                )), self.api.call("planned_protocols")["plans"],
-                    self.api.call("list_protocols")["protocols"] if self.api.session else []),
+                )), self.api.call("planned_protocols")["plans"]),
                 self._status_received,
                 lambda exc: self._append_log(f"status: {exc}"),
             )
 
     def _status_received(self, received):
-        result, plans, library = received
-        self._library_received(library)
+        result, plans = received
         for editor in self.protocol_editors.values():
             editor.update_plan(plans)
         self.last_result = result
@@ -3192,7 +3126,7 @@ class ControlWindow(QMainWindow):
     def _begin_shutdown(self):
         if self.emergency_tasks.busy:
             return
-        self._draft_timer.stop()
+        self._measurement_save_timer.stop()
         if self._camera_frame_unsubscribe is not None:
             self._camera_frame_unsubscribe()
             self._camera_frame_unsubscribe = None
@@ -3206,7 +3140,7 @@ class ControlWindow(QMainWindow):
 
     def _closed_safely(self, _result):
         try:
-            self._save_protocol_order()
+            self._flush_measurements()
         except Exception as exc:
             self._close_failed(exc)
             return
