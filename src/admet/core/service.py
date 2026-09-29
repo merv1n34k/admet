@@ -443,7 +443,9 @@ class Admet:
             else {}
         )
         if operation_id == "run_json_protocol":
-            pressure_limits = normalized["protocol"]["pressure_limits_mbar"]
+            from admet.workflows.json_protocol import resolve
+
+            pressure_limits = resolve(normalized["protocol"])["pressure_limits_mbar"]
         warnings = ([] if all(g["met"] for g in guards.values()) else [
             "one or more execution guards are currently unmet"
         ])

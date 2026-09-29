@@ -53,6 +53,35 @@ class DesktopWindowTests(unittest.TestCase):
             time.sleep(0.005)
         self.fail("Qt worker did not yield")
 
+    def test_json_parameters_use_existing_numeric_settings_table(self):
+        from tests.test_protocol_parameters import parameter_protocol
+        from admet.ui.control import NumericParamEdit
+        from admet.workflows.json_protocol import resolve
+
+        self.panel.set_document(parameter_protocol())
+        table = self.panel.parameter_table
+        self.assertEqual(table.horizontalHeaderItem(0).text(), "Parameter")
+        self.assertEqual(table.item(0, 0).text(), "Oil flow rate, µL/min")
+        widget = self.panel.parameter_editors["oil_base_flow"]
+        self.assertIsInstance(widget, NumericParamEdit)
+        widget.setText("10")
+        widget.pending = True
+        self.panel.build_plan()
+        self.drain()
+        self.assertEqual(self.panel.plan["steps"][0]["flow_setpoints_ul_min"], {"1": 15})
+        widget.setText("20")
+        widget.textEdited.emit("20")
+        self.assertFalse(self.panel.executable)
+        self.assertEqual(resolve(self.panel.document())["steps"][0]["sensor_setpoints"], {"1": 30})
+        self.assertEqual(self.panel.plan["steps"][0]["flow_setpoints_ul_min"], {"1": 15})
+        widget.setText("broken")
+        widget.pending = True
+        with self.assertRaisesRegex(ValueError, "invalid parameter"):
+            self.panel.document()
+        self.panel.set_document(definition())
+        self.assertIsNone(self.panel.parameter_table)
+        self.assertEqual(self.panel.parameter_editors, {})
+
     def test_restored_device_stages_and_nonblocking_connections(self):
         for index in range(len(self.window.workflow.stages)):
             self.window._select_stage(index)

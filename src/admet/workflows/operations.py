@@ -564,11 +564,11 @@ def build_protocol_steps(
     if not operation.starts_protocol:
         raise Refused(f"{operation.id} does not produce a protocol")
     if operation.id == "run_json_protocol":
-        from admet.workflows.json_protocol import normalize, validate_channels
+        from admet.workflows.json_protocol import normalize, resolve, validate_channels
 
-        document = normalize(settings.get("protocol"))
+        settings["protocol"] = normalize(settings.get("protocol"))
+        document = resolve(settings["protocol"])
         validate_channels(document, channels)
-        settings["protocol"] = document
         return [_step_from(entry, index) for index, entry in enumerate(document["steps"])]
     if operation.id == "run_steps":
         declared = settings.get("steps") or []
@@ -589,9 +589,9 @@ def build_protocol_steps(
 
 
 def _run_json_protocol(runner, settings):
-    from admet.workflows.json_protocol import normalize, validate_channels
+    from admet.workflows.json_protocol import resolve, validate_channels
 
-    document = normalize(settings["protocol"])
+    document = resolve(settings["protocol"])
     observed = runner.engine_action("acquisition", "read_observation", {}).metadata
     channels = observed.get("channels") or []
     if not channels:

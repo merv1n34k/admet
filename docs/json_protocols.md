@@ -1,8 +1,63 @@
 # Saved protocols
 
-The agent configures the rig and saves JSON protocols through MCP. A definition
-contains only a name, optional pressure trips, and ordered steps. Saving and planning do
+The Qt desktop or agent saves JSON protocols in the project. A definition
+contains a name, optional parameters/pressure trips, and ordered steps. Saving and planning do
 not actuate hardware. Execution always takes the reviewed plan ID.
+
+## Editable parameters in Qt
+
+Declare only the values the operator should edit. Qt renders them in the same
+**Parameter / Value** settings table as Priming, separate from the read-only plan.
+No new dialog or step-table editing is needed.
+
+```json
+{
+  "name": "parameter_example",
+  "steps": [
+    {
+      "sensor_setpoints": {"1": "oil_base_flow * 1.5"},
+      "trigger_type": "time",
+      "trigger_params": {"duration_s": "measurement_s"},
+      "timeout_s": "measurement_s + 10",
+      "on_complete": "zero",
+      "confirm_message": "Confirm M1 mapping before starting."
+    },
+    {
+      "sensor_setpoints": {"1": "oil_base_flow * 2.5"},
+      "trigger_type": "time",
+      "trigger_params": {"duration_s": "measurement_s"},
+      "timeout_s": "measurement_s + 10",
+      "on_complete": "zero"
+    }
+  ],
+  "parameters": {
+    "oil_base_flow": ["Oil flow rate, µL/min", 5],
+    "measurement_s": ["Measurement duration, s", 20]
+  }
+}
+```
+
+Each declaration is `[label, numeric default]`. Values are finite nonnegative
+numbers. Type a complete value and press Enter or leave the cell, as in Priming.
+Several parameters can be edited before **Plan**. Changing a parameter invalidates
+the current preview; it never changes an already executing plan or actuates a device.
+**Save JSON** preserves declarations, expressions and selected `parameter_values`
+overrides. Reopen/import restores the selected values, not just the defaults.
+
+Expressions accept declared names, numbers, `+ - * /`, unary signs and parentheses.
+They work in flow/pressure setpoints, numeric trigger parameters, timeout, repeat,
+and optional pressure limits. Integer fields must resolve to integers. There are
+no functions, Python evaluation, attributes, imports or dependency chains between
+parameters. Unknown names, division by zero, invalid results and hardware-range
+violations are refused. `{parameter_name}` in step names/confirmation text displays
+the resolved value. Raw JSON editing remains available.
+
+The archived `protocol.json` preserves the template and chosen values;
+`plan.json` preserves exact resolved, expanded steps and the executable digest.
+Calculations resolve archived inputs, not current GUI values. Existing plain JSON
+files continue to work without parameters.
+
+## Plain definitions
 
 ```json
 {

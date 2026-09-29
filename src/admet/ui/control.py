@@ -1551,7 +1551,7 @@ class ControlWindow(QMainWindow):
     def _param_row_count(params: list[Param]) -> int:
         return max(1, (len(params) + 1) // 2)
 
-    def _param_table(self, params: list[Param]) -> QTableWidget:
+    def _param_table(self, params: list[Param], editor_factory=None) -> QTableWidget:
         rows = self._param_row_count(params)
         table = GridTable(rows, 4)
         table.setObjectName("RawConfigTable")
@@ -1573,7 +1573,7 @@ class ControlWindow(QMainWindow):
             key = QTableWidgetItem(param.label)
             key.setFlags(key.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row, column, key)
-            table.setCellWidget(row, column + 1, self._param_editor(param))
+            table.setCellWidget(row, column + 1, (editor_factory or self._param_editor)(param))
         self._syncing_table = False
 
         table.resizeRowsToContents()

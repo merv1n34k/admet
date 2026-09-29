@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from admet.ui import theme as ui
 from admet.ui.tables import GridTable, fit_table_height
+from admet.core.engine import Param, ParamKind
 from admet.engines.acquisition.fluidics.config import STABILITY_DURATION_S, STABILITY_TOLERANCE_UL_MIN
 from admet.workflows.control import builtin_document
 from admet.workflows.json_protocol import load, loads, template_documents
@@ -124,6 +125,8 @@ class ProtocolEditor(QWidget):
         self.plan = None
         self.dirty = True
         self.saved_name = None
+        self.parameter_editors = {}
+        self.parameter_table = None
         self._table_digest = None
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -144,6 +147,8 @@ class ProtocolEditor(QWidget):
                 button.clicked.connect(callback)
                 bar.addWidget(button)
             root.addLayout(bar)
+            self.parameter_box = QVBoxLayout()
+            root.addLayout(self.parameter_box)
             root.addWidget(self.editor)
         else:
             self.editor.hide()
@@ -171,7 +176,7 @@ class ProtocolEditor(QWidget):
         self.details_box.hide()
         self.table.currentCellChanged.connect(self.show_step_details)
         self.table.cellClicked.connect(self.show_step_details)
-        self.editor.textChanged.connect(self.edited)
+        self.editor.textChanged.connect(self.raw_edited)
         self.update_library(window.protocol_library)
 
     @property
@@ -183,6 +188,49 @@ class ProtocolEditor(QWidget):
         if self.plan:
             self.summary.setText("Definition changed. Build a new plan before execution.")
         self.window._protocol_changed()
+
+    def raw_edited(self):
+        self.edited()
+        self.refresh_parameters()
+
+    def refresh_parameters(self):
+        if self.builtin:
+            return
+        if self.parameter_table is not None:
+            self.parameter_box.removeWidget(self.parameter_table)
+            self.parameter_table.deleteLater()
+            self.parameter_table = None
+        self.parameter_editors = {}
+        try:
+            document = loads(self.editor.toPlainText())
+        except (ValueError, TypeError):
+            return
+        declarations = document.get("parameters", {})
+        if not declarations:
+            return
+        from admet.ui.control import NumericParamEdit
+
+        def make_editor(param):
+            widget = NumericParamEdit(param, document["parameter_values"][param.name])
+            widget.textEdited.connect(self.edited)
+            widget.rejected.connect(self.error)
+            widget.committed.connect(lambda value, name=param.name: self.set_parameter(name, value))
+            self.parameter_editors[param.name] = widget
+            return widget
+
+        params = [Param(name, declaration[0], ParamKind.FLOAT, default=declaration[1], minimum=0)
+                  for name, declaration in declarations.items()]
+        self.parameter_table = self.window._param_table(params, editor_factory=make_editor)
+        self.parameter_box.addWidget(self.parameter_table)
+
+    def set_parameter(self, name, value):
+        # Keep other pending cells intact; validation of all resolved steps happens on Build/Save.
+        document = json.loads(self.editor.toPlainText())
+        document.setdefault("parameter_values", {})[name] = value
+        self.editor.blockSignals(True)
+        self.editor.setPlainText(json.dumps(document, indent=2, ensure_ascii=False))
+        self.editor.blockSignals(False)
+        self.edited()
 
     def toggle_editor(self):
         self.editor.setVisible(not self.editor.isVisible())
@@ -203,6 +251,8 @@ class ProtocolEditor(QWidget):
     def document(self):
         if self.builtin:
             return builtin_document(self.builtin, self.window.values)
+        if not all([widget.commit() for widget in self.parameter_editors.values()]):
+            raise ValueError("Correct invalid parameter values before building or saving")
         return loads(self.editor.toPlainText())
 
     def update_library(self, entries):
@@ -226,7 +276,7 @@ class ProtocolEditor(QWidget):
         name = self.library.currentData()
         if name and name.startswith("@"):
             self.set_document(self.templates[name[1:]])
-            self.editor.show()
+            self.editor.setVisible(not bool(self.parameter_editors))
             return
         if name:
             self.submit(
