@@ -19,11 +19,14 @@ for Fluigent; choose before connecting. This does not simulate the camera.
 Devices remain disconnected until you click Connect. Create/open an
 `.admetp` project, connect devices, apply corrections, then use the original
 TOC: **Priming → Preflight → Experiment steps → Calculations → Wash → Cleanup**. Add experiments with **+ Protocol
-step**. Select/import JSON and review the plan directly between the existing
+step**. Select a protocol and review the plan directly between the existing
 action bar and graphs/camera; use **Plan** and **Execute** in that action bar.
 Confirmation gates, pause/skip/abort, emergency stop, and run artifacts use the
 existing backend. Closing the window stops and disconnects; it does not detach.
 Execute uses the protocol's own confirmation gates, without an extra approval prompt.
+The selector, parameter table and JSON editor stay visible alongside the preview.
+Working drafts (including unfinished JSON) autosave in the project, without changing
+bundled templates. Plan replaces the current preview; only Execute saves a run.
 
 Preflight is a non-actuating setup page for flow/phase ratios, fluidics layout and
 consumption formulas; **Save Project** preserves the layout. Legacy check data

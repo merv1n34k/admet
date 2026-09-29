@@ -464,6 +464,9 @@ class ControlWindow(QMainWindow):
         self._correction_apply_timer.setSingleShot(True)
         self._correction_apply_timer.timeout.connect(self._apply_correction_values)
 
+        self._draft_timer = QTimer(self)
+        self._draft_timer.setSingleShot(True)
+        self._draft_timer.timeout.connect(self._autosave_drafts)
         self._build_ui()
         self._restore_protocol_order()
 
@@ -652,12 +655,24 @@ class ControlWindow(QMainWindow):
 
     def _save_protocol_order(self):
         entries = [
-            {"id": stage.id, "label": stage.label, "protocol": editor.saved_name}
+            {"id": stage.id, "label": stage.label, "json": editor.editor.toPlainText(),
+             "source": editor.library.currentData(),
+             "parameter_drafts": {key: widget.text() for key, widget in editor.parameter_editors.items()
+                                  if widget.pending}}
             for stage in self.workflow.stages
             if (editor := self.protocol_editors.get(stage.id)) is not None
-            and not editor.builtin and editor.saved_name
+            and not editor.builtin
         ]
-        self.api.save_protocol_order(entries)
+        self.api.save_drafts(entries)
+
+    def _autosave_drafts(self):
+        if self.tasks.busy or self.emergency_tasks.busy:
+            self._draft_timer.start(350)
+            return
+        try:
+            self._save_protocol_order()
+        except Exception as exc:
+            self._notify(f"Draft save failed: {exc}", "danger", timeout_ms=0)
 
     def _restore_protocol_order(self):
         from admet.workflows.control import protocol_stage
@@ -674,12 +689,21 @@ class ControlWindow(QMainWindow):
         restored = []
         for entry in entries:
             try:
-                document = self.api.service.protocol_store().read(entry["protocol"])["protocol"]
                 stage = protocol_stage(entry["id"], entry["label"])
                 editor = self._protocol_editor(stage)
-                editor.set_document(document)
-                editor.saved_name = entry["protocol"]
-                editor.editor.hide()
+                if "json" in entry:
+                    editor.editor.setPlainText(entry["json"])
+                    editor.library.blockSignals(True)
+                    editor.library.setCurrentIndex(max(0, editor.library.findData(entry.get("source"))))
+                    editor.library.blockSignals(False)
+                    for key, value in entry.get("parameter_drafts", {}).items():
+                        if key in editor.parameter_editors:
+                            widget = editor.parameter_editors[key]
+                            widget.setText(value)
+                            widget.pending = True
+                else:
+                    document = self.api.service.protocol_store().read(entry["protocol"])["protocol"]
+                    editor.set_document(document)
                 restored.append(stage)
             except Exception as exc:
                 self._append_log(f"Cannot restore protocol step: {exc}")
@@ -689,6 +713,7 @@ class ControlWindow(QMainWindow):
         self._render_current_stage()
 
     def _reset_project_workflow(self):
+        self._draft_timer.stop()
         self._detach_live_widgets()
         if self._calculations is not None:
             self._calculations.setParent(None)
@@ -802,6 +827,7 @@ class ControlWindow(QMainWindow):
             return
         target = session_path(Path(path))
         try:
+            self._save_protocol_order()
             self.project_path = self.api.create_project(target).path
         except Exception as exc:
             self._set_status("Project create failed", "danger")
@@ -878,6 +904,7 @@ class ControlWindow(QMainWindow):
             self._notify("Wait for the current command before changing project.", "warning")
             return
         try:
+            self._save_protocol_order()
             self.project_path = self.api.open_project(path).path
         except Exception as exc:
             self._set_status("Project load failed", "danger")
@@ -899,6 +926,7 @@ class ControlWindow(QMainWindow):
         if self.api.session is None:
             self._new_project()
             return
+        self._save_protocol_order()
         target = self.project_path
         if target is None:
             path, _filter = QFileDialog.getSaveFileName(
@@ -3155,6 +3183,7 @@ class ControlWindow(QMainWindow):
     def _begin_shutdown(self):
         if self.emergency_tasks.busy:
             return
+        self._draft_timer.stop()
         if self._camera_frame_unsubscribe is not None:
             self._camera_frame_unsubscribe()
             self._camera_frame_unsubscribe = None
@@ -3167,6 +3196,11 @@ class ControlWindow(QMainWindow):
         self.emergency_tasks.submit(self.api.shutdown, self._closed_safely, self._close_failed)
 
     def _closed_safely(self, _result):
+        try:
+            self._save_protocol_order()
+        except Exception as exc:
+            self._close_failed(exc)
+            return
         self._shutdown_complete = True
         self.close()
 

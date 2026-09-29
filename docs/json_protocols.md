@@ -48,7 +48,7 @@ Each declaration is `[label, numeric default]`. Values are finite nonnegative
 numbers. Type a complete value and press Enter or leave the cell, as in Priming.
 Several parameters can be edited before **Plan**. Changing a parameter invalidates
 the current preview; it never changes an already executing plan or actuates a device.
-**Save JSON** preserves declarations, expressions and selected `parameter_values`
+Project draft autosave preserves declarations, expressions and selected `parameter_values`
 overrides. Reopen/import restores the selected values, not just the defaults.
 
 Expressions accept declared names, numbers, `+ - * /`, unary signs and parentheses.

@@ -77,6 +77,16 @@ class DesktopBackend:
             })
             project.save()
 
+    def save_drafts(self, entries):
+        with self.lock:
+            project = self.service.project
+            if project is None:
+                return
+            project.session = replace(project.session, metadata={
+                **project.session.metadata, "qt_protocol_stages": entries,
+            })
+            project.save()
+
     def call(self, operation, settings=None):
         with self.lock:
             settings = dict(settings or {})

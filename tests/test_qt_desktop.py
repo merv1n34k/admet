@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -313,7 +314,6 @@ class DesktopWindowTests(unittest.TestCase):
         for name in ("dropseq", "gravimetry", "pressure_flow_check"):
             self.panel.library.setCurrentIndex(self.panel.library.findData("@" + name))
             with patch.object(self.backend.engine, "run", side_effect=AssertionError("template actuated")):
-                self.panel.open_saved()
                 self.panel.build_plan()
                 self.drain()
             self.assertEqual(self.panel.plan["operation_id"], "run_json_protocol")
@@ -325,9 +325,8 @@ class DesktopWindowTests(unittest.TestCase):
         document["steps"][0]["sensor_setpoints"]["0"] = 25
         self.panel.set_document(document)
         self.assertFalse(self.panel.executable)
-        self.panel.save()
-        self.drain()
-        stored = self.backend.call("list_protocols", {"name": "my_flow_check"})["protocol"]
+        self.window._save_protocol_order()
+        stored = json.loads(self.backend.session.metadata["qt_protocol_stages"][0]["json"])
         self.assertEqual(stored["steps"][0]["sensor_setpoints"]["0"], 25)
         self.assertEqual(self.panel.templates["pressure_flow_check"]["steps"][0]["sensor_setpoints"]["0"], 50)
 
@@ -338,7 +337,6 @@ class DesktopWindowTests(unittest.TestCase):
         self.window._select_stage(self.experiment_index)
         self.panel.library.setCurrentIndex(self.panel.library.findData("@density_dsurf"))
         with patch.object(self.backend.engine, "run", side_effect=AssertionError("actuation")):
-            self.panel.open_saved()
             self.panel.build_plan()
             self.drain()
         self.assertEqual(self.panel.plan["expected_duration_s"], 420)
@@ -374,9 +372,8 @@ class DesktopWindowTests(unittest.TestCase):
         self.backend.call("apply_corrections")
         self.window._select_stage(self.experiment_index)
         self.panel.set_document(definition())
-        self.panel.save()
-        self.drain()
-        self.assertEqual(len(self.backend.call("list_protocols")["protocols"]), 1)
+        self.window._save_protocol_order()
+        self.assertEqual(len(self.backend.session.metadata["qt_protocol_stages"]), 1)
         with patch.object(self.backend.engine, "run", side_effect=AssertionError("planning actuated")):
             self.panel.build_plan()
             self.drain()
@@ -526,7 +523,6 @@ class DesktopWindowTests(unittest.TestCase):
         self.window._refresh_protocol_library()
         self.drain()
         self.panel.library.setCurrentIndex(1)
-        self.panel.open_saved()
         self.drain()
         self.assertEqual(self.panel.document()["name"], "desktop_test")
         self.panel.build_plan()
@@ -541,15 +537,13 @@ class DesktopWindowTests(unittest.TestCase):
     def test_saved_custom_toc_order_survives_project_reopen(self):
         self.window._select_stage(self.experiment_index)
         self.panel.set_document(definition())
-        self.panel.save()
-        self.drain()
+        self.window._save_protocol_order()
         stage = self.window._add_protocol_stage("Follow-up")
         second = self.window._protocol_editor(stage)
         document = definition()
         document["name"] = "follow_up"
         second.set_document(document)
-        second.save()
-        self.drain()
+        self.window._save_protocol_order()
         path = Path(self.backend.workdir)
         self.window._load_project_path(path)
         middle = [s for s in self.window.workflow.stages if "json_protocol" in s.features
@@ -637,7 +631,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertNotIn("--simulated", output.getvalue())
         self.assertNotIn("--live", output.getvalue())
 
-    def test_reset_and_overwrite_use_popup_confirmation(self):
+    def test_reset_uses_popup_confirmation(self):
         from PySide6.QtWidgets import QMessageBox
 
         self.backend.emergency_stop()
@@ -649,21 +643,26 @@ class DesktopWindowTests(unittest.TestCase):
         self.window._confirmation_dialog.button(QMessageBox.StandardButton.Ok).click()
         self.drain()
         self.assertFalse(self.backend.engine.safety_state()["tripped"])
+
+    def test_json_remains_visible_after_plan_and_invalid_draft_survives_reopen(self):
+        from PySide6.QtWidgets import QPushButton
+
         self.window._select_stage(self.experiment_index)
-        self.panel.set_document(definition())
-        self.panel.save()
+        self.panel.library.setCurrentIndex(self.panel.library.findData("@flow_stability_scout"))
+        self.assertEqual(self.panel.document()["name"], "flow_stability_scout")
+        self.panel.build_plan()
         self.drain()
-        replacement = definition(2)
-        self.panel.set_document(replacement)
-        self.panel.save()
-        self.drain()
-        self.assertIn("Replace saved definition", self.window._confirmation_dialog.text())
-        stored = self.backend.call("list_protocols", {"name": "desktop_test"})["protocol"]
-        self.assertEqual(stored["steps"][0]["trigger_params"]["duration_s"], 0.15)
-        self.window._confirmation_dialog.button(QMessageBox.StandardButton.Ok).click()
-        self.drain()
-        stored = self.backend.call("list_protocols", {"name": "desktop_test"})["protocol"]
-        self.assertEqual(stored["steps"][0]["trigger_params"]["duration_s"], 2)
+        self.assertTrue(self.panel.editor.isVisible())
+        self.assertTrue(self.panel.parameter_table.isVisible())
+        self.assertTrue(self.panel.table.isVisible())
+        self.assertFalse({"Open", "Import JSON", "Save JSON", "Edit JSON"} &
+                         {b.text() for b in self.panel.findChildren(QPushButton)})
+        self.panel.editor.setPlainText('{"unfinished":')
+        self.window._load_project_path(Path(self.backend.workdir))
+        restored = self.window.protocol_editors["experiment_1"]
+        self.assertEqual(restored.editor.toPlainText(), '{"unfinished":')
+        self.assertFalse(restored.executable)
+        self.assertFalse((Path(self.backend.workdir) / "plans").exists())
 
     def test_program_confirmation_is_focused_modal_and_single_use(self):
         from PySide6.QtCore import Qt, QTimer

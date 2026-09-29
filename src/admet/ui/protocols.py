@@ -4,7 +4,7 @@ import json
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
+    QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView,
     QLabel, QPlainTextEdit,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -14,7 +14,7 @@ from admet.ui.tables import GridTable, fit_table_height
 from admet.core.engine import Param, ParamKind
 from admet.engines.acquisition.fluidics.config import STABILITY_DURATION_S, STABILITY_TOLERANCE_UL_MIN
 from admet.workflows.control import builtin_document
-from admet.workflows.json_protocol import load, loads, template_documents
+from admet.workflows.json_protocol import loads, template_documents
 
 
 def value_text(value, unit=""):
@@ -141,12 +141,7 @@ class ProtocolEditor(QWidget):
             self.library = QComboBox()
             self.library.setMinimumWidth(170)
             bar.addWidget(self.library, 1)
-            for label, callback in (("Open", self.open_saved),
-                                    ("Import JSON", self.import_json), ("Save JSON", self.save),
-                                    ("Edit JSON", self.toggle_editor)):
-                button = ui.button(label)
-                button.clicked.connect(callback)
-                bar.addWidget(button)
+            self.library.currentIndexChanged.connect(self.open_saved)
             root.addLayout(bar)
             self.parameter_box = QVBoxLayout()
             root.addLayout(self.parameter_box)
@@ -193,6 +188,8 @@ class ProtocolEditor(QWidget):
         if self.plan:
             self.summary.setText("Definition changed. Build a new plan before execution.")
         self.window._protocol_changed()
+        if not self.builtin:
+            self.window._draft_timer.start(350)
 
     def raw_edited(self):
         self.edited()
@@ -237,9 +234,6 @@ class ProtocolEditor(QWidget):
         self.editor.blockSignals(False)
         self.edited()
 
-    def toggle_editor(self):
-        self.editor.setVisible(not self.editor.isVisible())
-
     def error(self, exc):
         self.window._notify(str(exc), "danger", timeout_ms=0)
         self.window._append_log(str(exc))
@@ -271,75 +265,33 @@ class ProtocolEditor(QWidget):
             if self.library.count():
                 return
         selected = self.library.currentData()
+        self.library.blockSignals(True)
         self.library.clear()
         self.library.addItem("Select protocol or template…", None)
         for key, label in items:
             self.library.addItem(label, key)
         self.library.setCurrentIndex(max(0, self.library.findData(selected)))
+        self.library.blockSignals(False)
 
     def open_saved(self):
         name = self.library.currentData()
         if name and name.startswith("@"):
             self.set_document(self.templates[name[1:]])
-            self.editor.setVisible(not bool(self.parameter_editors))
             return
         if name:
+            generation = self._edit_generation
+
+            def loaded(result):
+                if generation == self._edit_generation and name == self.library.currentData():
+                    self.set_document(result["protocol"])
+
             self.submit(
                 lambda: self.backend.call("list_protocols", {"name": name}),
-                lambda result: self.set_document(result["protocol"]),
+                loaded,
             )
 
     def set_document(self, document):
         self.editor.setPlainText(json.dumps(document, indent=2, ensure_ascii=False))
-
-    def import_json(self):
-        root = str(self.backend.service.project.path / "protocols") if self.backend.service.project else ""
-        path, _ = QFileDialog.getOpenFileName(self, "Open protocol", root, "JSON (*.json)")
-        if path:
-            try:
-                self.set_document(load(path))
-                self.editor.hide()
-            except Exception as exc:
-                self.error(exc)
-
-    def save(self):
-        try:
-            document = self.document()
-        except Exception as exc:
-            self.error(exc)
-            return
-
-        def saved(_result):
-            self.saved_name = document["name"]
-            try:
-                self.window._save_protocol_order()
-            except Exception as exc:
-                self.error(exc)
-                return
-            self.window._append_log("Saved " + document["name"])
-            self.window._refresh_protocol_library()
-
-        def replace_saved():
-            try:
-                if self.document() != document:
-                    raise RuntimeError("Definition changed; Save JSON again to review the replacement")
-            except Exception as exc:
-                self.error(exc)
-                return
-            self.submit(lambda: self.backend.call("save_protocol", {"protocol": document, "replace": True}), saved)
-
-        def failed(exc):
-            if isinstance(exc, FileExistsError):
-                self.window._confirm(
-                    f"Replace saved definition {document['name']}?",
-                    replace_saved,
-                )
-            else:
-                self.error(exc)
-
-        self.window.tasks.submit(
-            lambda: self.backend.call("save_protocol", {"protocol": document}), saved, failed,
-        )
 
     def build_plan(self):
         if self.builtin and not self.window._commit_numeric_settings(self.stage):
@@ -361,7 +313,7 @@ class ProtocolEditor(QWidget):
         self.plan = plan
         self.dirty = False
         self.show_plan()
-        self.editor.hide()
+        self.editor.setVisible(not bool(self.builtin))
         self.window._append_log("Preview ready — nothing recorded or actuated")
         self.window._protocol_changed()
 
