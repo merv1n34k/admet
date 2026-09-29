@@ -287,6 +287,7 @@ class ProtocolEditor(QWidget):
         self._edit_generation += 1
         self._table_digest = None
         self.dirty = True
+        self.editor.setVisible(not self.builtin and not self._executing)
         self.table.hide()
         self.details_box.hide()
         if self.plan:
@@ -463,6 +464,7 @@ class ProtocolEditor(QWidget):
 
         def failed(exc):
             self.lock_definition(False)
+            self.editor.setVisible(not bool(self.builtin))
             self.error(exc)
 
         self.window.tasks.submit(lambda: self.backend.call("control_protocol", {
@@ -472,6 +474,8 @@ class ProtocolEditor(QWidget):
     def lock_definition(self, active):
         self._executing = active
         self.editor.setReadOnly(active)
+        if active:
+            self.editor.hide()
         if not self.builtin:
             self.library.setEnabled(not active)
         for widget in self.parameter_editors.values():

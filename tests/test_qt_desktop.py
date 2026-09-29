@@ -759,6 +759,9 @@ class DesktopWindowTests(unittest.TestCase):
             event(1, 0, confirmation_message="Position vessel")
             self.assertEqual(self.panel.table.item(0, 1).text(), "confirm")
             self.assertTrue(self.panel.editor.isReadOnly())
+            self.assertFalse(self.panel.editor.isVisible())
+            self.assertTrue(self.panel.parameter_table.isVisible())
+            self.assertTrue(self.panel.table.isVisible())
             self.assertFalse(self.panel.library.isEnabled())
             self.assertFalse(self.panel.parameter_editors["oil_base_flow"].isEnabled())
             follow.assert_not_called()
@@ -779,7 +782,10 @@ class DesktopWindowTests(unittest.TestCase):
             self.assertEqual(self.panel.table.item(0, 0).text(), "1")
             self.assertEqual(self.panel.table.item(1, 0).text(), "2")
             self.assertFalse(self.panel.editor.isReadOnly())
+            self.assertFalse(self.panel.editor.isVisible())
             self.assertTrue(self.panel.parameter_editors["oil_base_flow"].isEnabled())
+            self.panel.set_parameter("oil_base_flow", 6)
+            self.assertTrue(self.panel.editor.isVisible())
 
 
     def test_program_confirmation_is_focused_modal_and_single_use(self):

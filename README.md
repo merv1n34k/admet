@@ -25,6 +25,8 @@ Confirmation gates, pause/skip/abort, emergency stop, and run artifacts use the
 existing backend. Closing the window stops and disconnects; it does not detach.
 Execute uses the protocol's own confirmation gates, without an extra approval prompt.
 The selector, parameter table and JSON editor stay visible alongside the preview.
+Execution hides the JSON editor, leaving parameters and the run table visible.
+Editing parameters, selecting a template or building another plan shows JSON again.
 Protocol edits and plan previews stay in memory, without changing bundled templates.
 Closing the app or switching/reopening projects discards them. Only Execute saves
 the exact protocol, parameters and run. Run measurements/results remain persistent.
