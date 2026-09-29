@@ -521,6 +521,9 @@ QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
    sitting inside a field that no longer matches it. The button is part of the
    field: no border, no fill of its own, just the arrow. */
 QComboBox {{
+    combobox-popup: 0;
+    selection-background-color: {Theme.ACCENT};
+    selection-color: #ffffff;
     padding-left: 7px;
     padding-right: 0;
 }}
@@ -609,6 +612,14 @@ QComboBox QAbstractItemView::item {{
     min-height: 22px;
     padding: 0 6px;
     border-radius: 3px;
+}}
+QComboBox QAbstractItemView::item:selected {{
+    background-color: {Theme.ACCENT};
+    color: #ffffff;
+}}
+QComboBox QAbstractItemView::item:hover {{
+    background-color: {Theme.ACCENT_HOVER};
+    color: #ffffff;
 }}
 /* An editor dropped into a table cell is the cell. Rounded corners and an inset
    frame made it read as a small box floating inside a larger one, so in a table
