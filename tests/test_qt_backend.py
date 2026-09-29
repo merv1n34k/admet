@@ -37,6 +37,31 @@ class DesktopBackendTests(unittest.TestCase):
         self.backend.call("connect_fluidics")
         self.backend.call("apply_corrections")
 
+    def test_corrected_range_is_refreshed_before_planning_scout_base_15(self):
+        from admet.workflows.json_protocol import template_documents
+
+        self.backend.call("connect_fluidics")
+        self.backend.call("apply_corrections", {"cells_m_calibration": "IPA", "cells_m_scale": 2.25})
+        reported = self.backend.engine.sdk.get_sensor_channels_info()[1].smax
+        cached = self.backend.engine.hardware.state.sensor_channels[1].smax
+        self.assertEqual(cached, reported)
+        self.assertGreaterEqual(cached, 135)
+        doc = template_documents()["flow_stability_scout"]
+        doc["parameter_values"]["oil_base_flow"] = 15
+        with patch.object(self.backend.engine.sdk, "get_sensor_channels_info", side_effect=AssertionError("planning read SDK")):
+            plan = self.backend.preview("scout", doc)
+        self.assertEqual(max(s["flow_setpoints_ul_min"].get("1", 0) for s in plan["steps"]), 135)
+        doc["parameter_values"]["oil_base_flow"] = reported
+        with self.assertRaisesRegex(ValueError, "Step .*target .*exceeds detected range maximum"):
+            self.backend.preview("scout", doc)
+
+    def test_failed_range_refresh_does_not_leave_old_range_available(self):
+        self.connect()
+        with patch.object(self.backend.engine.sdk, "get_sensor_channels_info", side_effect=RuntimeError("SDK unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "SDK unavailable"):
+                self.backend.call("apply_corrections")
+        self.assertTrue(all(s.smax is None for s in self.backend.engine.hardware.state.sensor_channels))
+
     def plan(self, document=None):
         return self.backend.call("plan_protocol", {
             "operation_id": "run_json_protocol", "settings": {"protocol": document or definition()},

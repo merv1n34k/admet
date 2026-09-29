@@ -259,7 +259,7 @@ def validate_channels(document, channels):
         maximum = detected.get("pressure_max_mbar")
         if maximum is None or not math.isfinite(maximum) or limit > maximum:
             raise ValueError(f"channel {key}: pressure limit exceeds or lacks detected maximum")
-    for step in document["steps"]:
+    for step_number, step in enumerate(document["steps"], 1):
         for targets, range_key, label in (
             ("sensor_setpoints", "sensor_max_ul_min", "flow"),
             ("pressure_setpoints", "pressure_max_mbar", "pressure"),
@@ -268,8 +268,13 @@ def validate_channels(document, channels):
                 if key not in by_index:
                     raise ValueError(f"channel {key} is not connected")
                 maximum = by_index[key].get(range_key)
-                if maximum is None or not math.isfinite(maximum) or target > maximum:
-                    raise ValueError(f"channel {key}: {label} target exceeds or lacks detected range")
+                unit = "µL/min" if label == "flow" else "mbar"
+                context = f"Step {step_number} ({step.get('name', '')}), channel {key}: {label} target {target:g} {unit}"
+                if maximum is None or not math.isfinite(maximum):
+                    raise ValueError(f"{context}; detected range unavailable. Reconnect/apply corrections to refresh it.")
+                if target > maximum:
+                    raise ValueError(f"{context} exceeds detected range maximum {maximum:g} {unit}. "
+                                     "Check all parameter multipliers, not only the base value.")
         sensor = step.get("trigger_params", {}).get("sensor_index")
         if sensor is not None and str(sensor) not in by_index:
             raise ValueError(f"trigger sensor {sensor} is not connected")

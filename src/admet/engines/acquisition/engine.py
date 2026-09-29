@@ -393,6 +393,16 @@ class AcquisitionEngine:
                 settings[f"{prefix}_offset"],
                 settings[f"{prefix}_quadratic"],
             )
+        try:
+            updated = {sensor.index: sensor for sensor in self.sdk.get_sensor_channels_info()}
+        except Exception:
+            for sensor in self.hardware.state.sensor_channels:
+                sensor.smin = sensor.smax = None
+            raise
+        for sensor in self.hardware.state.sensor_channels:
+            detected = updated.get(sensor.index)
+            sensor.smin = getattr(detected, "smin", None)
+            sensor.smax = getattr(detected, "smax", None)
 
     def set_channel_flow(self, channel_index: int, flow_ul_min: float) -> None:
         self._require_fluidics_connected()
