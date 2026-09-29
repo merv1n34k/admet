@@ -181,7 +181,14 @@ class ChannelManagerTests(unittest.TestCase):
         self.assertEqual(manager.channels[0].owner, "user")
 
         manager.pipeline_set_setpoint(0, 50.0)
-        manager.user_set_pressure(0, 100.0)
+        with self.assertRaisesRegex(RuntimeError, "controlled by the protocol"):
+            manager.user_set_pressure(0, 100.0)
+        with self.assertRaisesRegex(RuntimeError, "controlled by the protocol"):
+            manager.user_set_flow_regulation(0, 99.0)
+        with self.assertRaisesRegex(RuntimeError, "controlled by the protocol"):
+            manager.user_stop_regulation(0)
+        self.assertEqual(manager.channels[0].base_setpoint, 25)
+        self.assertEqual(manager.channels[0].active_setpoint, 50)
         self.assertNotIn(("pressure", 0, 100.0), sdk.calls)
         self.assertEqual(manager.channels[0].owner, "pipeline")
 

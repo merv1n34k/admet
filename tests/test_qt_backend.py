@@ -400,10 +400,59 @@ class DesktopBackendTests(unittest.TestCase):
                     time.sleep(0.01)
                 self.assertNotEqual(state, "executing")
 
-    def test_unbounded_manual_setters_are_not_desktop_controls(self):
+    def test_manual_user_channel_controls_work_idle_and_during_protocol(self):
         self.connect()
-        with self.assertRaisesRegex(RuntimeError, "bounded JSON"):
+        self.backend.call("set_channel_flow", {"channel_index": 0, "channel_flow_ul_min": 5})
+        self.assertEqual(self.backend.engine.channel_manager.channels[0].active_setpoint, 5)
+        document = {"name": "one_channel", "steps": [{
+            "sensor_setpoints": {"1": 15}, "trigger_type": "time",
+            "trigger_params": {"duration_s": 1}, "on_complete": "zero",
+        }]}
+        plan = self.plan(document)
+        self.backend.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"], "timeout_s": 0.1})
+        self.assertEqual(self.backend.engine.channel_manager.channels[1].owner, "pipeline")
+        self.backend.call("set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 17})
+        self.assertEqual(self.backend.engine.channel_manager.channels[0].pressure_setpoint, 17)
+        self.backend.run(RunJob("stop", "acquisition", "stop_channel", {"channel_index": 0}))
+        self.assertEqual(self.backend.engine.channel_manager.channels[0].mode, "off")
+        for action, payload in (
+            ("set_channel_flow", {"channel_flow_ul_min": 4}),
+            ("set_channel_pressure", {"channel_pressure_mbar": 12}), ("stop_channel", {}),
+        ):
+            with self.subTest(action=action), self.assertRaisesRegex(RuntimeError, "controlled by the protocol"):
+                self.backend.run(RunJob("manual", "acquisition", action, {"channel_index": 1, **payload}))
+        self.assertEqual(self.backend.engine.channel_manager.channels[1].active_setpoint, 15)
+        self.wait_completed(plan["plan_id"])
+        self.backend.call("set_channel_flow", {"channel_index": 1, "channel_flow_ul_min": 7})
+        self.assertEqual(self.backend.engine.channel_manager.channels[1].active_setpoint, 7)
+        self.backend.emergency_stop()
+        self.assertTrue(all(c.mode == "off" and c.active_setpoint == 0
+                            for c in self.backend.engine.channel_manager.channels))
+
+    def test_manual_controls_reject_invalid_targets_and_latched_safety(self):
+        with self.assertRaisesRegex(RuntimeError, "not connected"):
             self.backend.call("set_channel_flow", {"channel_index": 0, "channel_flow_ul_min": 5})
+        self.backend.call("connect_fluidics")
+        with self.assertRaisesRegex(RuntimeError, "corrections"):
+            self.backend.call("set_channel_flow", {"channel_index": 0, "channel_flow_ul_min": 5})
+        self.backend.call("apply_corrections")
+        with patch.object(self.backend.engine.sdk, "set_sensor_regulation", side_effect=AssertionError("invalid write")), \
+                patch.object(self.backend.engine.sdk, "set_pressure", side_effect=AssertionError("invalid write")):
+            for index, target in ((-1, 1), (True, 1), (100, 1), (0, -1), (0, float("nan")), (0, 1e9)):
+                with self.subTest(index=index, target=target), self.assertRaises(ValueError):
+                    self.backend.call("set_channel_flow", {"channel_index": index, "channel_flow_ul_min": target})
+            self.backend.engine.watchdog.arm({0: 100})
+            with self.assertRaisesRegex(ValueError, "armed limit"):
+                self.backend.call("set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 101})
+            with self.assertRaisesRegex(ValueError, "armed limit"):
+                self.backend.call("set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 100})
+            self.backend.engine.hardware.state.sensor_channels[0].smax = None
+            with self.assertRaisesRegex(ValueError, "range unavailable"):
+                self.backend.call("set_channel_flow", {"channel_index": 0, "channel_flow_ul_min": 5})
+        self.backend.emergency_stop()
+        with self.assertRaisesRegex(RuntimeError, "Safety latch"):
+            self.backend.call("set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 10})
+        self.backend.run(RunJob("stop", "acquisition", "stop_channel", {"channel_index": 0}))
 
     def test_desktop_imports_no_transport_or_terminal(self):
         result = subprocess.run([

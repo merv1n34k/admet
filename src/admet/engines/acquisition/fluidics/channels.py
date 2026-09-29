@@ -49,11 +49,9 @@ class ChannelManager:
     ) -> None:
         with self._lock:
             channel = self._channels[channel_idx]
+            self._require_user_control(channel)
             channel.base_setpoint = setpoint
             channel.pressure_setpoint = 0.0
-            can_apply = channel.owner == "user" or self._pipeline_paused
-            if not can_apply:
-                return
 
             channel.active_setpoint = setpoint
             channel.mode = "flow"
@@ -68,8 +66,7 @@ class ChannelManager:
     def user_set_pressure(self, channel_idx: int, pressure_mbar: float) -> None:
         with self._lock:
             channel = self._channels[channel_idx]
-            if channel.owner != "user" and not self._pipeline_paused:
-                return
+            self._require_user_control(channel)
 
             channel.mode = "pressure"
             channel.pressure_setpoint = pressure_mbar
@@ -81,8 +78,7 @@ class ChannelManager:
     def user_stop_regulation(self, channel_idx: int) -> None:
         with self._lock:
             channel = self._channels[channel_idx]
-            if channel.owner != "user" and not self._pipeline_paused:
-                return
+            self._require_user_control(channel)
 
             channel.regulation_active = False
             channel.base_setpoint = 0.0
@@ -90,6 +86,10 @@ class ChannelManager:
             channel.mode = "off"
             channel.pressure_setpoint = 0.0
             self._sdk.set_pressure(channel.pressure_index, 0.0)
+
+    def _require_user_control(self, channel):
+        if channel.owner != "user" and not self._pipeline_paused:
+            raise RuntimeError("Channel is controlled by the protocol; pause or finish it first")
 
     def pipeline_set_setpoint(self, channel_idx: int, setpoint: float) -> None:
         with self._lock:

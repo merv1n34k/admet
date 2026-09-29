@@ -656,6 +656,42 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertEqual(table.table.item(0, 8).text(), "—")
         self.assertIn("—", table.table.item(0, 1).text())
 
+    def test_manual_channel_fields_apply_on_enter_and_unlock_on_release(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        from admet.ui.control import ChannelControlPanel
+
+        self.backend.call("connect_fluidics")
+        self.backend.call("apply_corrections")
+        channels = self.backend.engine.channel_manager
+        panel = ChannelControlPanel(channels.channels, on_flow=self.window._set_channel_flow,
+                                    on_pressure=self.window._set_channel_pressure, on_stop=self.window._stop_channel)
+        self.addCleanup(panel.close)
+        panel.show()
+        row = panel._rows[0]
+        channels.pipeline_set_setpoint(0, 20)
+        panel.update_modes(channels.channels)
+        self.assertFalse(row.flow.isEnabled())
+        self.assertFalse(row.pressure.isEnabled())
+        channels.pipeline_release_all()
+        panel.update_modes(channels.channels)
+        self.assertTrue(row.flow.isEnabled())
+        self.assertTrue(row.pressure.isEnabled())
+        for editor, text, field, expected in ((row.flow, "12.5", "active_setpoint", 12.5),
+                                              (row.pressure, "27", "pressure_setpoint", 27)):
+            editor.setFocus()
+            editor.selectAll()
+            QTest.keyClicks(editor, text)
+            self.assertEqual(getattr(channels.channels[0], field), 0)
+            QTest.keyClick(editor, Qt.Key.Key_Return)
+            self.drain()
+            self.assertEqual(getattr(channels.channels[0], field), expected)
+        row.stop_button.click()
+        self.drain()
+        self.assertEqual(channels.channels[0].mode, "off")
+        self.assertEqual(channels.channels[0].pressure_setpoint, 0)
+        self.assertTrue(all(c.mode == "off" for c in channels.channels[1:]))
+
     def test_window_close_waits_for_zero_and_disconnect(self):
         from PySide6.QtWidgets import QMessageBox
 

@@ -98,8 +98,15 @@ devices use a focused popup with **Confirm** and **Cancel**. Cancel is the defau
 Escape or closing the popup cancels without performing the action. Protocol gates
 remain inline and never open a confirmation popup.
 
-The old unbounded manual flow/pressure inputs are disabled. Put dispensing
-targets in bounded JSON steps with time/volume conditions and optional pressure trips.
+Manual flow/pressure inputs apply a typed target only on **Enter**; decimal values
+use a dot. **Stop** zeros that channel. User-owned channels remain controllable
+while a protocol runs on other channels. Protocol-owned channels are locked while
+running; pause the protocol or wait for release before editing them. On resume,
+protocol targets take over again. Flow requires applied corrections; detected
+ranges, a tripped safety latch and any armed pressure limit remain enforced.
+Manual targets have no duration/volume endpoint: supervise them and stop explicitly.
+Use bounded JSON steps for reproducible dispensing. Emergency stop and desktop
+shutdown zero all channels, including manually controlled ones.
 Priming and Wash keep their original step sequences and familiar parameter
 forms, using the same guarded JSON plan/recording backend. They have explicit
 timeouts. Software pressure trips default to **Off**: leave the optional pressure

@@ -126,6 +126,9 @@ class DesktopBackend:
                     settings["simulated"] = True
             if action == "run_protocol":
                 raise RuntimeError("Open a JSON protocol, review its plan, then Execute")
+            if action in {"set_channel_flow", "set_channel_pressure", "stop_channel"}:
+                self._validate_manual_channel(action, settings)
+                return self.service.run("acquisition", action, settings, job_id=job.id)
             if self.service.state()["running"] and action not in {
                 "stop_protocol", "pause_protocol", "resume_protocol", "confirm_protocol",
                 "skip_protocol", "shutdown_instrument", "stop_camera_live",
@@ -137,9 +140,36 @@ class DesktopBackend:
                     allowed = set(CORRECTION_PARAM_NAMES)
                 result = self.service.do(action, {k: v for k, v in settings.items() if k in allowed})
                 return RunResult(job.id, "acquisition", action, metadata=result)
-            if action in {"set_channel_flow", "set_channel_pressure"}:
-                raise RuntimeError("Use a bounded JSON protocol for dispensing")
             return self.service.run("acquisition", action, settings, job_id=job.id)
+
+    def _validate_manual_channel(self, action, settings):
+        from admet.workflows.json_protocol import normalize, validate_channels
+
+        if not self.engine.hardware.connected:
+            raise RuntimeError("Fluidics hardware is not connected")
+        index = settings.get("channel_index")
+        channels = self.engine.channel_manager.channels
+        if type(index) is not int or not 0 <= index < len(channels):
+            raise ValueError("Select a connected channel index")
+        if channels[index].owner != "user" and self.engine.pipeline_state != "paused":
+            raise RuntimeError(f"Channel {index} is controlled by the protocol; pause or finish it first")
+        if action == "stop_channel":
+            return
+        safety = self.engine.safety_state()
+        if safety["tripped"]:
+            raise RuntimeError(f"Safety latch is set: {safety['reason']}")
+        flow = action == "set_channel_flow"
+        if flow and not self.service.state()["corrections"]:
+            raise RuntimeError("Apply fluidics corrections before setting flow")
+        value = settings.get("channel_flow_ul_min" if flow else "channel_pressure_mbar")
+        document = normalize({"name": "manual", "steps": [{
+            "name": "Manual control", "sensor_setpoints" if flow else "pressure_setpoints": {str(index): value},
+            "trigger_type": "time", "trigger_params": {"duration_s": 0},
+        }]})
+        validate_channels(document, self.service._cached_channel_mapping())
+        limit = safety["limits"].get(str(channels[index].pressure_index)) if safety["armed"] else None
+        if not flow and limit is not None and value >= limit:
+            raise ValueError(f"Channel {index}: pressure must stay below armed limit {limit:g} mbar")
 
     def emergency_stop(self):
         # Deliberately independent of the normal command lock.

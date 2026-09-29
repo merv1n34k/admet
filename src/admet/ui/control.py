@@ -14,7 +14,7 @@ from queue import Empty
 from typing import Any, Callable
 
 import numpy as np
-from PySide6.QtCore import QEvent, QObject, QRect, QSize, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QLocale, QObject, QRect, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -3239,7 +3239,8 @@ class ChannelControlRow(QWidget):
         flow_label.setObjectName("FieldLabel")
         flow_row.addWidget(flow_label)
         self.flow = _small_double_box(0.0, 5000.0, " uL/min")
-        self.flow.setToolTip("Set targets in a bounded JSON protocol")
+        self.flow.setLocale(QLocale.c())
+        self.flow.setToolTip("Type a flow target and press Enter to apply. Stop zeros this channel.")
         self.flow.lineEdit().returnPressed.connect(lambda: on_flow(self._index, self.flow.value()))
         flow_row.addWidget(self.flow, 1)
         layout.addLayout(flow_row)
@@ -3251,7 +3252,8 @@ class ChannelControlRow(QWidget):
         pressure_label.setObjectName("FieldLabel")
         pressure_row.addWidget(pressure_label)
         self.pressure = _small_double_box(0.0, 2000.0, " mbar")
-        self.pressure.setToolTip("Set targets in a bounded JSON protocol")
+        self.pressure.setLocale(QLocale.c())
+        self.pressure.setToolTip("Type a pressure target and press Enter to apply. Stop zeros this channel.")
         self.pressure.lineEdit().returnPressed.connect(lambda: on_pressure(self._index, self.pressure.value()))
         pressure_row.addWidget(self.pressure, 1)
         layout.addLayout(pressure_row)
@@ -3269,8 +3271,8 @@ class ChannelControlRow(QWidget):
         if editable == self._editable:
             return
         self._editable = editable
-        self.flow.setEnabled(False)
-        self.pressure.setEnabled(False)
+        self.flow.setEnabled(editable)
+        self.pressure.setEnabled(editable)
         self.stop_button.setEnabled(editable)
         self.setProperty("locked", not editable)
         self.style().unpolish(self)
