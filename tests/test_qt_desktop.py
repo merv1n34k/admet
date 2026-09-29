@@ -668,6 +668,26 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertFalse(self.backend.service.state()["fluidics"])
         self.assertTrue(self.backend.engine.safety_state()["tripped"])
 
+    def test_escape_clears_plan_selection_and_details_without_changing_plan(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        self.window._select_stage(self.experiment_index)
+        self.panel.set_document(definition())
+        self.panel.build_plan()
+        self.drain()
+        digest = self.panel.plan["digest"]
+        self.panel.table.setCurrentCell(0, 0)
+        self.panel.table.setFocus()
+        self.assertTrue(self.panel.table.selectedItems())
+        self.assertTrue(self.panel.details_box.isVisible())
+        QTest.keyClick(self.panel.table, Qt.Key.Key_Escape)
+        self.assertEqual(self.panel.table.selectedItems(), [])
+        self.assertEqual(self.panel.table.currentRow(), -1)
+        self.assertFalse(self.panel.table.hasFocus())
+        self.assertFalse(self.panel.details_box.isVisible())
+        self.assertEqual(self.panel.plan["digest"], digest)
+
     def test_execute_uses_only_the_native_protocol_confirmation(self):
         self.backend.call("connect_fluidics")
         self.backend.call("apply_corrections")

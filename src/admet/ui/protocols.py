@@ -90,6 +90,15 @@ class PlanTable(GridTable):
         self.setTextElideMode(Qt.TextElideMode.ElideNone)
         self._fitting = False
 
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape:
+            self.clearSelection()
+            self.setCurrentCell(-1, -1)
+            self.clearFocus()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def fit_contents(self):
         if self._fitting:
             return
