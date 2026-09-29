@@ -24,6 +24,16 @@ class DesktopBackend:
         self.simulated = simulated
         self.engine = self.service.engine("acquisition")
         self.lock = threading.RLock()
+        self._previews = {}
+
+    def preview(self, scope, document):
+        with self.lock:
+            previous = self._previews.pop(scope, None)
+            if previous:
+                self.service.discard_protocol_preview(previous)
+            plan = self.service.plan_protocol("run_json_protocol", {"protocol": document})
+            self._previews[scope] = plan["plan_id"]
+            return plan
 
     @property
     def settings(self):

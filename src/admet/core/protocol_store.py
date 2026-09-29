@@ -63,16 +63,17 @@ class ProtocolStore:
         return {"protocols": result}
 
     def plan(self, plan):
-        write_json(self.root / "plans" / f"{plan['plan_id']}.json", plan)
+        if plan.get("run_id"):
+            write_json(self.root / "records" / "protocols" / plan["run_id"] / "plan.json", plan)
 
     def begin(self, plan):
-        directory = self.root / "records" / "protocols" / plan["plan_id"]
+        directory = self.root / "records" / "protocols" / plan.get("run_id", plan["plan_id"])
         write_json(directory / "plan.json", plan)
         definition = plan["normalized_settings"].get("protocol")
         if definition is not None:
             write_json(directory / "protocol.json", definition)
         path = directory / "summary.json"
-        write_json(path, {"plan_id": plan["plan_id"], "state": "executing"})
+        write_json(path, {"plan_id": plan["plan_id"], "run_id": plan.get("run_id"), "state": "executing"})
         self.project.upsert_file_path(path, role="protocol_run", media_type="application/json")
         self.project.save()
         return directory

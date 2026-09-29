@@ -128,6 +128,7 @@ class ProtocolEditor(QWidget):
         self.parameter_editors = {}
         self.parameter_table = None
         self._table_digest = None
+        self._edit_generation = 0
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         self.editor = QPlainTextEdit()
@@ -184,7 +185,11 @@ class ProtocolEditor(QWidget):
         return bool(self.plan and not self.dirty and self.plan["state"] == "planned")
 
     def edited(self):
+        self._edit_generation += 1
+        self._table_digest = None
         self.dirty = True
+        self.table.hide()
+        self.details_box.hide()
         if self.plan:
             self.summary.setText("Definition changed. Build a new plan before execution.")
         self.window._protocol_changed()
@@ -344,19 +349,20 @@ class ProtocolEditor(QWidget):
         except Exception as exc:
             self.error(exc)
             return
-        self.submit(
-            lambda: self.backend.call("plan_protocol", {
-                "operation_id": "run_json_protocol", "settings": {"protocol": document},
-            }),
-            self.add_plan,
-        )
+        generation = self._edit_generation
+
+        def received(plan):
+            if generation == self._edit_generation:
+                self.add_plan(plan)
+
+        self.submit(lambda: self.backend.preview(self.stage.id, document), received)
 
     def add_plan(self, plan):
         self.plan = plan
         self.dirty = False
         self.show_plan()
         self.editor.hide()
-        self.window._append_log("Planned " + plan["plan_id"] + " — no actuation")
+        self.window._append_log("Preview ready — nothing recorded or actuated")
         self.window._protocol_changed()
 
     def show_plan(self):
@@ -371,7 +377,7 @@ class ProtocolEditor(QWidget):
             )
         self.summary.setToolTip(
             "Abort: " + "; ".join(plan["abort_conditions"]) + "\n"
-            + "; ".join(plan["warnings"]) + "\n" + plan["digest"]
+            + "; ".join(plan["warnings"])
         )
         if self._table_digest != plan["digest"]:
             self._table_digest = plan["digest"]
@@ -403,6 +409,8 @@ class ProtocolEditor(QWidget):
         plan_id = self.plan["plan_id"]
 
         def started(result):
+            if result.get("run_id"):
+                self.plan["run_id"] = result["run_id"]
             self.window._pipeline_stage_id = self.stage.id
             self.window._clear_pipeline_confirmation()
             self.result(result)

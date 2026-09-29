@@ -494,9 +494,15 @@ class Admet:
         self._protocol_plans[plan_id] = deepcopy(plan)
         if self.project is not None:
             store = self.protocol_store()
-            store.plan(plan)
             self._plan_stores[plan_id] = store
         return deepcopy(plan)
+
+    def discard_protocol_preview(self, plan_id):
+        with self._execution_lock:
+            plan = self._protocol_plans.get(plan_id)
+            if plan is not None and not plan.get("run_id"):
+                self._protocol_plans.pop(plan_id, None)
+                self._plan_stores.pop(plan_id, None)
 
     def planned_protocols(self, plan_id: str = "") -> dict[str, Any]:
         self._refresh_plan_lifecycle()
@@ -529,6 +535,7 @@ class Admet:
         if self._executing_plan_id:
             raise RuntimeError("another plan is still executing")
         plan["state"] = "executing"
+        plan["run_id"] = f"run_{uuid.uuid4().hex}"
         plan["executed_at"] = _now_iso()
         self._executing_plan_id = plan_id
         try:
@@ -544,7 +551,7 @@ class Admet:
                 if engine is not None and engine.recording_active:
                     raise RuntimeError("stop the existing recording before executing a JSON protocol")
                 recording = self.do("start_recording", {
-                    "recording_label": plan_id, "include_video": False,
+                    "recording_label": plan["run_id"], "include_video": False,
                 })
                 artifact = self._run_artifacts[plan_id]
                 artifact["recording"] = True
@@ -562,6 +569,7 @@ class Admet:
         return {
             **result,
             "plan_id": plan_id,
+            "run_id": plan["run_id"],
             "plan_state": plan["state"],
             "yield": started,
         }
@@ -579,7 +587,7 @@ class Admet:
 
     def _save_plan(self, plan):
         store = self._plan_stores.get(plan["plan_id"])
-        if store is not None:
+        if store is not None and plan.get("run_id"):
             store.plan(plan)
 
     def _finish_plan(self, plan):

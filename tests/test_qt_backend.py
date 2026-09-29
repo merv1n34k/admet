@@ -73,7 +73,7 @@ class DesktopBackendTests(unittest.TestCase):
         self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0) for c in observed["channels"]))
         events = self.backend.call("protocol_events")["events"]
         self.assertEqual([e["sequence"] for e in events], sorted({e["sequence"] for e in events}))
-        path = Path(self.backend.workdir) / "records" / "protocols" / plan["plan_id"]
+        path = Path(self.backend.workdir) / "records" / "protocols" / completed["run_id"]
         summary = json.loads((path / "summary.json").read_text())
         self.assertEqual(summary["state"], "completed")
         self.assertTrue(Path(summary["artifacts"]["fluidics_csv"]).is_file())
@@ -115,9 +115,9 @@ class DesktopBackendTests(unittest.TestCase):
         self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0) for c in observed["channels"]))
         self.assertTrue(observed["recording"]["active"])
         self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 1})
-        self.wait_completed(plan["plan_id"])
+        completed = self.wait_completed(plan["plan_id"])
         self.assertFalse(self.backend.call("observe")["recording"]["active"])
-        directory = Path(self.backend.workdir) / "records" / "protocols" / plan["plan_id"]
+        directory = Path(self.backend.workdir) / "records" / "protocols" / completed["run_id"]
         summary = json.loads((directory / "summary.json").read_text())
         self.assertEqual(json.loads((directory / "protocol.json").read_text()), document)
         self.assertTrue(Path(summary["artifacts"]["fluidics_csv"]).is_file())
@@ -130,6 +130,26 @@ class DesktopBackendTests(unittest.TestCase):
         with patch.object(self.backend.engine, "run", side_effect=AssertionError("hardware call")):
             plan = self.plan()
         self.assertEqual(plan["state"], "planned")
+
+    def test_one_transient_preview_per_scope_and_run_id_only_on_execution(self):
+        self.connect()
+        first = self.backend.preview("experiment_1", definition())
+        for _ in range(5):
+            current = self.backend.preview("experiment_1", definition())
+        self.assertEqual(len(self.backend.call("planned_protocols")["plans"]), 1)
+        self.assertNotIn("run_id", current)
+        self.assertFalse((Path(self.backend.workdir) / "plans").exists())
+        self.assertFalse((Path(self.backend.workdir) / "records" / "protocols").exists())
+        with self.assertRaises(LookupError):
+            self.backend.call("control_protocol", {"action": "execute", "plan_id": first["plan_id"]})
+        result = self.backend.call("control_protocol", {
+            "action": "execute", "plan_id": current["plan_id"], "timeout_s": 1})
+        self.assertTrue(result["run_id"].startswith("run_"))
+        self.assertNotEqual(result["run_id"], current["plan_id"])
+        self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 1})
+        completed = self.wait_completed(current["plan_id"])
+        self.assertEqual(completed["run_id"], result["run_id"])
+        self.assertTrue((Path(self.backend.workdir) / "records" / "protocols" / result["run_id"] / "summary.json").exists())
 
     def test_density_completion_closes_recording_without_running_calculations(self):
         from tests.test_oil_density import recorded_density
@@ -196,7 +216,7 @@ class DesktopBackendTests(unittest.TestCase):
         self.assertNotIn("analysis_result", completed)
         from admet.workflows.calculations import calculate_run
 
-        directory = Path(self.backend.workdir) / "records" / "protocols" / plan["plan_id"]
+        directory = Path(self.backend.workdir) / "records" / "protocols" / completed["run_id"]
         calculation = calculate_run(directory, "oil_density")
         self.assertEqual(calculation["result"]["status"], "inconclusive")
         self.assertIsNone(calculation["result"]["density_g_ml"])

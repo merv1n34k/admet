@@ -85,7 +85,8 @@ class AcceptanceRun(unittest.TestCase):
             events = client.call("protocol_events", {"after_sequence": 0})["events"]
             sequences = [event["sequence"] for event in events]
             self.assertEqual(sequences, sorted(set(sequences)))
-            directory = self.project / "records" / "protocols" / plan["plan_id"]
+            completed = self.call("planned_protocols", plan_id=plan["plan_id"])["plans"][0]
+            directory = self.project / "records" / "protocols" / completed["run_id"]
             summary = json.loads((directory / "summary.json").read_text())
             self.assertEqual(summary["state"], "completed")
             self.assertEqual(summary["digest"], plan["digest"])

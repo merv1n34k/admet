@@ -4,6 +4,13 @@ The Qt desktop or agent saves JSON protocols in the project. A definition
 contains a name, optional parameters/pressure trips, and ordered steps. Saving and planning do
 not actuate hardware. Execution always takes the reviewed plan ID.
 
+The Qt Plan button creates one replaceable in-memory preview per experiment tab.
+No preview file is written. Editing invalidates the preview; Execute rechecks the
+rig and guards, assigns a fresh `run_id`, and only then archives the execution
+snapshot and starts recording. New recordings live under
+`records/protocols/<run_id>/`; old plan-ID-based archives remain readable.
+Internal preview IDs/digests are not experiment history or reusable execution permission.
+
 ## Editable parameters in Qt
 
 Declare only the values the operator should edit. Qt renders them in the same
@@ -114,8 +121,7 @@ changing an already-created plan. Reload it to create a new plan.
 ```text
 experiment.admetp/
   protocols/short_run.json
-  plans/plan_….json
-  records/protocols/plan_…/
+  records/protocols/run_…/
     protocol.json
     plan.json
     events.jsonl

@@ -195,7 +195,8 @@ class JsonProtocolTests(unittest.TestCase):
                 observation = server.call("observe", {})
                 self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0)
                                     for c in observation["channels"]))
-                run_dir = Path(tmp) / "test.admetp" / "records" / "protocols" / plan["plan_id"]
+                completed = server.call("planned_protocols", {})["plans"][0]
+                run_dir = Path(tmp) / "test.admetp" / "records" / "protocols" / completed["run_id"]
                 summary = json.loads((run_dir / "summary.json").read_text())
                 self.assertEqual(summary["state"], "completed")
                 self.assertTrue(Path(summary["artifacts"]["fluidics_csv"]).is_file())
@@ -220,8 +221,8 @@ class JsonProtocolTests(unittest.TestCase):
             with patch.object(second.admet, "engine_action", side_effect=AssertionError("setter")):
                 plan = second.call("plan_protocol_file", {"path": saved["path"]})
             path = Path(project) / "plans" / f"{plan['plan_id']}.json"
-            self.assertEqual(json.loads(path.read_text())["digest"], plan["digest"])
+            self.assertFalse(path.exists())
             second.call("cancel_protocol_plan", {"plan_id": plan["plan_id"]})
-            self.assertEqual(json.loads(path.read_text())["state"], "cancelled")
+            self.assertFalse(path.exists())
             with self.assertRaises(ValueError):
                 second.call("list_protocols", {"name": "../escape"})

@@ -157,9 +157,9 @@ def run_simulated_scout(project_path=None, *, speed=20):
                 raise AssertionError("scout commanded a different channel")
             if plant.target != 0:
                 raise AssertionError("M1 was not zeroed")
-            directory = project_path / "records" / "protocols" / plan["plan_id"]
+            directory = project_path / "records" / "protocols" / current["run_id"]
             calculation = calculate_run(directory, "flow_scout")
-            return {"project": str(project_path), "plan_id": plan["plan_id"], "confirmed": confirmed,
+            return {"project": str(project_path), "plan_id": plan["plan_id"], "run_id": current["run_id"], "confirmed": confirmed,
                     "state": current["state"], "final_target_ul_min": plant.target,
                     "simulation": {"density_g_ml": 1.6, "scale": 2.25, "seed": 16000,
                                    "speed": speed, "height_cm": 5, "sensor_readings": "test-only imperfect plant"},
@@ -213,7 +213,7 @@ class ScoutTests(unittest.TestCase):
             self.assertEqual(report["calculation"]["result"]["status"], "usable")
             self.assertEqual(report["calculation"]["result"]["calibration"]["scale"], 2.25)
             self.assertIsNone(report["calculation"]["result"]["density_g_ml"])
-            directory = Path(report["project"]) / "records" / "protocols" / report["plan_id"]
+            directory = Path(report["project"]) / "records" / "protocols" / report["run_id"]
             source = json.loads((directory / "protocol.json").read_text())
             self.assertEqual(source["parameters"]["oil_base_flow"][1], 5)
             self.assertEqual(source["parameter_values"]["point_duration_s"], 60)

@@ -398,7 +398,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertEqual(self.panel.plan["state"], "completed")
         self.assertFalse(self.panel.executable)
         self.assertIn("completed", "\n".join(self.window.log_entries))
-        self.assertTrue((Path(self.backend.workdir) / "records" / "protocols" / plan_id / "summary.json").exists())
+        self.assertTrue((Path(self.backend.workdir) / "records" / "protocols" / self.panel.plan["run_id"] / "summary.json").exists())
 
     def test_editor_changes_disable_execution_of_old_preview(self):
         self.panel.set_document(definition())

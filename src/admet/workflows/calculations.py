@@ -160,6 +160,7 @@ def calculate_run(directory, calculation_id):
         raise ValueError("Recording changed during calculation; refresh and try again")
     payload = {"calculation_id": calculation_id, "calculation_version": calculation["version"],
                "created_at": datetime.now(timezone.utc).isoformat(), "plan_id": summary.get("plan_id"),
+               "run_id": summary.get("run_id", summary.get("plan_id")),
                "inputs": inputs, "result": result}
     path = directory / "calculations" / f"{calculation_id}_{uuid.uuid4().hex}.json"
     write_json(path, payload)
