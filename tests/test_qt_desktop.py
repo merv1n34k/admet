@@ -481,23 +481,27 @@ class DesktopWindowTests(unittest.TestCase):
 
     def test_templates_are_editable_json_not_fixed_stages(self):
         self.window._select_stage(self.experiment_index)
-        for name in ("dropseq", "gravimetry", "pressure_flow_check"):
+        self.assertEqual(
+            [self.panel.library.itemText(i) for i in range(self.panel.library.count())],
+            ["Select protocol…", "density", "dropseq", "flow stability scout"],
+        )
+        for name in ("density", "flow_stability_scout", "dropseq"):
             self.panel.library.setCurrentIndex(self.panel.library.findData("@" + name))
             with patch.object(self.backend.engine, "run", side_effect=AssertionError("template actuated")):
                 self.panel.build_plan()
                 self.drain()
             self.assertEqual(self.panel.plan["operation_id"], "run_json_protocol")
-            self.assertEqual(self.panel.document()["name"], name)
+            self.assertEqual(self.panel.document()["name"], self.panel.templates[name]["name"])
             self.assertTrue(any(step["confirmation"] for step in self.panel.plan["steps"]))
             self.assertTrue(all(s["on_complete"] == "zero" for s in self.panel.plan["steps"]))
         document = self.panel.document()
-        document["name"] = "my_flow_check"
+        document["name"] = "my_dropseq"
         document["steps"][0]["sensor_setpoints"]["0"] = 25
         self.panel.set_document(document)
         self.assertFalse(self.panel.executable)
         stored = self.panel.document()
         self.assertEqual(stored["steps"][0]["sensor_setpoints"]["0"], 25)
-        self.assertEqual(self.panel.templates["pressure_flow_check"]["steps"][0]["sensor_setpoints"]["0"], 50)
+        self.assertEqual(self.panel.templates["dropseq"]["steps"][0]["sensor_setpoints"]["0"], 300)
 
     def test_density_template_and_persistent_calculations_section(self):
         from tests.test_calculations import archived_density

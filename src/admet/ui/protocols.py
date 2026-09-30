@@ -414,11 +414,11 @@ class ProtocolEditor(QWidget):
         if self.builtin:
             return
         items = [
-            ("@" + name, "Template · " + name.replace("_", " ")) for name in sorted(self.templates)
+            ("@" + name, name.replace("_", " ")) for name in sorted(self.templates)
         ]
         self.library.blockSignals(True)
         self.library.clear()
-        self.library.addItem("Select template…", None)
+        self.library.addItem("Select protocol…", None)
         for key, label in items:
             self.library.addItem(label, key)
         self.library.blockSignals(False)

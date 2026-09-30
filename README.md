@@ -32,15 +32,16 @@ the exact protocol, parameters and run. Run measurements/results remain persiste
 
 Preflight is a non-actuating setup page for flow/phase ratios, fluidics layout and
 consumption formulas; **Save Project** preserves the layout. Legacy check data
-remain in existing projects but are no longer shown on this page. Gravimetry and pressure/flow checks are editable
-JSON templates in the protocol selector, not fixed experiment stages.
+remain in existing projects but are no longer shown on this page. The protocol
+selector offers density, Drop-Seq and flow stability scout; gravimetry and
+dead-volume protocols will be redesigned with their run-based calculations.
 
 Custom JSON can declare editable parameters with arithmetic step expressions.
 They appear in the same settings table as Priming; change a base flow once to
 update every linked step when rebuilding the plan. See the
 [parameter syntax](docs/json_protocols.md#editable-parameters-in-qt).
 
-Start oil testing with **Template · flow stability scout**: a single-height M1
+Start oil testing with **flow stability scout**: a single-height M1
 flow sweep, with editable base flow and point duration. Review its settling/fit
 recommendations before preparing a density run. See
 the protocol's editable parameters and saved calculation report.

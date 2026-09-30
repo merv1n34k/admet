@@ -144,31 +144,23 @@ shows Off and records which channels have no trip. Step timeouts, emergency stop
 zero-on-completion and protocol confirmation gates remain active. Existing saved
 protocols retain any explicit trips; changing a default does not rewrite them.
 
-### Checkup and reusable measurement protocols
+### Preflight and reusable protocols
 
-**Checkup / chip layout** restores the original tubing map, flow split,
-resistance fit, gravimetric calculator and consumption estimates. It does not
-operate devices or change a protocol. **Save Project** preserves the map and
-entered readings, including incomplete rows. Previous check records can be loaded
-from the history table; a historical result is not a fresh validation of the setup.
-The pressure budget here is a calculation input, not an armed hardware limit.
+**Preflight** contains flow/phase ratios, the tubing map and consumption estimates.
+It does not operate devices or change a protocol. **Save Project** preserves the
+setup; recorded-experiment processing belongs in **Calculations**.
 
-The Experiment selector includes **Template · dropseq**, **Template · gravimetry** and
-**Template · pressure flow check**. These are ordinary JSON documents: open,
-edit targets/steps, save under your own name, then Plan and Execute. They add no
-fixed workflow stages and use the same recording, safety and confirmation path.
-Gravimetry starts with one 50 µL dispense per channel at 50 µL/min. The flow-check
-example increases Oil L from 50 to 250 µL/min with proportional aqueous targets;
-its stability trigger observes Oil L only, with a 30-second timeout per step.
-Both examples default to trips off and zero outputs at step completion. Add
-`pressure_limits_mbar` to the JSON to configure per-channel trips.
-They are starting examples, not approval for a physical setup.
+The Experiment selector includes **density**, **dropseq** and **flow stability scout**.
+Select a protocol, edit its parameters or JSON, then Plan and Execute. Edits stay
+in memory until execution; the run archives the exact definition and settings.
+These protocols use the same recording, safety and confirmation path. Gravimetry
+and dead-volume protocols are being redesigned alongside their calculations;
+the previous gravimetry and pressure-flow examples are no longer offered.
 
 ### Drop-Seq starting protocol
 
-In **Experiment 1**, select **Template · dropseq → Open**. Use **Save JSON** to
-keep it in the current project, then **Plan** to review it. Alternatively import
-[`dropseq.json`](../templates/dropseq.json) on the Windows PC.
+In **Experiment 1**, select **dropseq**, then **Plan** to review it. Its source is
+[`dropseq.json`](../templates/dropseq.json). Execute saves the definition with the run.
 Priming and Wash remain separate existing stages; this template does not repeat
 them or change correction factors or camera settings.
 
