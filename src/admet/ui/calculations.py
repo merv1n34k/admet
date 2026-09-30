@@ -6,6 +6,7 @@ from admet.ui import theme as ui
 from admet.ui.tasks import Tasks
 from admet.workflows.calculations import (
     CALCULATIONS, calculate_run, recorded_runs, result_text, saved_results,
+    available_calculations, calculation_readiness,
 )
 
 
@@ -40,6 +41,9 @@ class CalculationsPanel(QWidget):
         self.description = QLabel()
         self.description.setWordWrap(True)
         layout.addWidget(self.description)
+        self.references = {}
+        self.reference_layout = QVBoxLayout()
+        layout.addLayout(self.reference_layout)
         layout.addWidget(QLabel("Saved results for this run"))
         self.history = QComboBox()
         layout.addWidget(self.history)
@@ -67,8 +71,34 @@ class CalculationsPanel(QWidget):
         self.refresh()
 
     def describe(self, *_args):
+        if self.calculation.currentData() is None:
+            return
         entry = CALCULATIONS[self.calculation.currentData()]
         self.description.setText(entry["description"] + " Reads saved files only; never controls hardware.")
+        while self.reference_layout.count():
+            item = self.reference_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.references = {}
+        for role, kind in entry.get("references", {}).items():
+            box = QComboBox()
+            box.addItem(f"{role}: no reference (use recorded inputs)", None)
+            for run in recorded_runs(self.project):
+                for result in saved_results(run["directory"]):
+                    if result["calculation_id"] == kind and not result["outdated"]:
+                        box.addItem(f"{role}: {run['name']} · {result['created_at']}", result["path"])
+            box.currentIndexChanged.connect(self.ready)
+            self.reference_layout.addWidget(box)
+            self.references[role] = box
+        self.ready()
+
+    def reference_values(self):
+        return {role: box.currentData() for role, box in self.references.items() if box.currentData()}
+
+    def ready(self, *_args):
+        reason = calculation_readiness(self.runs.currentData(), self.calculation.currentData(), self.reference_values())
+        self.calculate_button.setEnabled(not self.tasks.busy and not reason)
+        self.status.setText(reason or "Inputs ready. Calculate when ready.")
 
     def _busy(self, busy):
         self.calculate_button.setEnabled(not busy and bool(self.runs.currentData()))
@@ -118,16 +148,26 @@ class CalculationsPanel(QWidget):
 
     def load_history(self, *_args):
         directory = self.runs.currentData()
+        selected = self.calculation.currentData()
+        self.calculation.blockSignals(True)
+        self.calculation.clear()
+        for key in available_calculations(directory) if directory else []:
+            self.calculation.addItem(CALCULATIONS[key]["label"], key)
+        index = self.calculation.findData(selected)
+        self.calculation.setCurrentIndex(max(index, 0))
+        self.calculation.blockSignals(False)
         self.history.blockSignals(True)
         self.history.clear()
         self.output.clear()
         for payload in saved_results(directory):
             key = payload.get("calculation_id", "unknown")
             label = CALCULATIONS.get(key, {}).get("label", key)
-            self.history.addItem(f"{payload.get('created_at', '')} · {label}", payload)
+            self.history.addItem(f"{payload.get('created_at', '')} · {label}" +
+                                 (" · outdated" if payload["outdated"] else ""), payload)
         self.history.blockSignals(False)
         self.calculate_button.setEnabled(bool(directory) and not self.tasks.busy)
         self.show_result()
+        self.describe()
 
     def show_result(self, *_args):
         payload = self.history.currentData()
@@ -148,4 +188,5 @@ class CalculationsPanel(QWidget):
             self.output.setPlainText(result_text(payload))
             self.status.setText("Result saved; the recording was not changed.")
 
-        self._submit(lambda: calculate_run(directory, key), calculated)
+        references = self.reference_values()
+        self._submit(lambda: calculate_run(directory, key, references=references), calculated)

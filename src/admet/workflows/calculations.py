@@ -3,18 +3,45 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 import csv
-import hashlib
 import json
 from pathlib import Path
 import re
 from statistics import mean, stdev
 import uuid
 
-from admet.core.compat import protocol_run_id, recording_path
+from admet.core.compat import protocol_run_id
 from admet.core.protocol_store import write_json
 from admet.workflows.compat import density_analysis
 from admet.workflows.oil_density import _finite, analyze_density_run
 from admet.workflows.flow_scout import analyze_scout
+from admet.workflows.calculation_schema import declarations
+from admet.workflows.calculation_inputs import load_context, fingerprint, result_current, read_json
+
+
+def available_calculations(directory):
+    result = ["recording_summary"]
+    try:
+        document = read_json(Path(directory) / "protocol.json")
+        result.extend(item["type"] for item in declarations(document) if item["type"] in CALCULATIONS)
+        if not declarations(document):
+            density_analysis(document)
+            result.append("oil_density")
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return list(dict.fromkeys(result))
+
+
+def calculation_readiness(directory, key, references=None):
+    if not directory or key not in available_calculations(directory):
+        return "Choose a compatible recorded run."
+    try:
+        context = load_context(directory, key, CALCULATIONS[key], references)
+        check = CALCULATIONS[key].get("check")
+        if check:
+            check(context)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return str(exc)
+    return ""
 
 
 def recorded_runs(project):
@@ -109,37 +136,25 @@ CALCULATIONS["flow_scout"] = {
 }
 
 
-def calculate_run(directory, calculation_id):
+def calculate_run(directory, calculation_id, *, references=None):
     calculation = CALCULATIONS.get(calculation_id)
     if calculation is None:
         raise ValueError("Unknown calculation")
-    directory = Path(directory).resolve()
-    summary_path = directory / "summary.json"
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    if summary.get("state") not in {"completed", "failed", "cancelled"}:
-        raise ValueError("Wait until the recording has finished before calculating")
-    if summary.get("artifacts", {}).get("recording_closed") is False:
-        raise ValueError("This recording was not successfully closed; do not analyze an active file")
-    csv_path = recording_path(directory, summary)
-    protocol_path = directory / "protocol.json"
-    sources = [summary_path, csv_path]
-    document = None
-    if "protocol.json" in calculation["files"]:
-        document = json.loads(protocol_path.read_text(encoding="utf-8"))
-    sources.extend(directory / name for name in calculation["files"])
-
-    def hashes():
-        return [{"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-                for path in sources]
-    inputs = hashes()
-    result = calculation["calculate"]({"directory": directory, "document": document,
-                                        "summary": summary, "csv": csv_path})
-    if hashes() != inputs:
+    context = load_context(directory, calculation_id, calculation, references)
+    directory = context["directory"]
+    inputs = fingerprint(context["paths"], directory)
+    context = load_context(directory, calculation_id, calculation, references)
+    if fingerprint(context["paths"], directory) != inputs:
+        raise ValueError("Recording changed during calculation; refresh and try again")
+    summary = context["summary"]
+    result = calculation["calculate"](context)
+    if fingerprint(context["paths"], directory) != inputs:
         raise ValueError("Recording changed during calculation; refresh and try again")
     payload = {"calculation_id": calculation_id, "calculation_version": calculation["version"],
                "created_at": datetime.now(timezone.utc).isoformat(), "plan_id": summary.get("plan_id"),
                "run_id": protocol_run_id(summary),
-               "inputs": inputs, "result": result}
+               "inputs": inputs, "measurement_revision": context["measurements"]["revision"],
+               "references": {key: value["path"] for key, value in context["references"].items()}, "result": result}
     path = directory / "calculations" / f"{calculation_id}_{uuid.uuid4().hex}.json"
     write_json(path, payload)
     return {"path": str(path), **payload}
@@ -156,7 +171,8 @@ def saved_results(directory):
                     or not isinstance(payload.get("calculation_id"), str)
                     or not isinstance(payload.get("created_at"), str)):
                 continue
-            entries.append({**payload, "path": str(path)})
+            payload = {**payload, "path": str(path)}
+            entries.append({**payload, "outdated": not result_current(payload)})
         except (OSError, ValueError, TypeError, AttributeError):
             continue
     return sorted(entries, key=lambda result: result.get("created_at", ""), reverse=True)
@@ -193,4 +209,4 @@ def result_text(payload):
         lines += ["\nThresholds: " + json.dumps(result["thresholds"], indent=2), *result["issues"]]
     else:
         lines = [result.get("note", ""), json.dumps(result, indent=2, ensure_ascii=False)]
-    return "\n".join(lines) + "\n\nSaved: " + payload["path"]
+    return ("OUTDATED: saved inputs have changed; calculate again.\n\n" if payload.get("outdated") else "") + "\n".join(lines) + "\n\nSaved: " + payload["path"]

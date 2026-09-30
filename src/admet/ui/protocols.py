@@ -203,7 +203,8 @@ class Measurements(QWidget):
         self.table.setRowCount(0)
         self.table.setRowCount(len(fields))
         for row, (key, field) in enumerate(fields.items()):
-            self.table.setItem(row, 0, QTableWidgetItem(field["label"]))
+            label = field["label"] + (f" ({field['unit']})" if field.get("unit") else "")
+            self.table.setItem(row, 0, QTableWidgetItem(label))
             self.table.setItem(row, 2, QTableWidgetItem(str(field.get("step", "—"))))
             for column in (0, 2):
                 self.table.item(row, column).setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)

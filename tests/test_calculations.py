@@ -146,3 +146,43 @@ class CalculationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "changed"):
                 calculate_run(self.directory, "recording_summary")
         self.assertEqual(saved_results(self.directory), [])
+
+    def test_measurements_are_hashed_and_changes_mark_results_outdated(self):
+        path = self.directory / "protocol.json"
+        document = json.loads(path.read_text())
+        fields = {"mass": {"label": "Mass", "unit": "mg", "required": True}}
+        document["measurements"] = fields
+        write_json(path, document)
+        measured = self.directory / "measurements.json"
+        write_json(measured, {"fields": fields, "values": {"mass": None}, "revision": 0})
+        with self.assertRaisesRegex(ValueError, "Missing measurement"):
+            calculate_run(self.directory, "oil_density")
+        write_json(measured, {"fields": fields, "values": {"mass": 10}, "revision": 1})
+        result = calculate_run(self.directory, "oil_density")
+        self.assertEqual(result["measurement_revision"], 1)
+        self.assertFalse(saved_results(self.directory)[0]["outdated"])
+        write_json(measured, {"fields": fields, "values": {"mass": 11}, "revision": 2})
+        self.assertTrue(saved_results(self.directory)[0]["outdated"])
+
+    def test_collection_window_integrates_transients_and_rejects_gaps_and_pause(self):
+        from admet.workflows.calculation_inputs import step_window, trace, volume_ul
+        context = {"directory": self.directory, "csv": self.directory / "fluidics.csv",
+                   "summary": {"state": "completed", "artifacts": {"polling_origin_monotonic": 100}}}
+        events = [{"step_index": 0, "step_name": "collect", "state": "running", "outcome": "running",
+                   "monotonic": 100, "confirmation_message": "wait"},
+                  {"step_index": 0, "step_name": "collect", "state": "running", "outcome": "running", "monotonic": 101},
+                  {"step_index": 0, "step_name": "collect", "state": "running", "outcome": "completed", "monotonic": 103}]
+        def save_events():
+            (self.directory / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+        save_events()
+        context["csv"].write_text("elapsed_s,flow_1_ul_min\n0,0\n1,0\n2,60\n3,60\n4,0\n")
+        window = step_window(context, 1)
+        self.assertEqual(window, (1, 3))
+        self.assertEqual(volume_ul(trace(context, 1, *window)), 1.5)
+        events.insert(2, {"step_index": 0, "step_name": "collect", "state": "paused", "monotonic": 102})
+        save_events()
+        with self.assertRaisesRegex(ValueError, "paused"):
+            step_window(context, 1)
+        context["csv"].write_text("elapsed_s,flow_1_ul_min\n0,0\n1,\n2,60\n3,60\n4,0\n")
+        with self.assertRaisesRegex(ValueError, "Missing"):
+            trace(context, 1, 1, 3)
