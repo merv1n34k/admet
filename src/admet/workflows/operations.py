@@ -628,7 +628,8 @@ OPERATIONS: tuple[Operation, ...] = (
     ),
     Operation(
         "run_json_protocol", "Run a JSON protocol", "Plan a reusable JSON protocol.",
-        kind=START, params=(TICK,), raw={"protocol": {"type": "object"}},
+        kind=START, params=(TICK, Param("include_video", "Record camera", ParamKind.BOOLEAN, default=False)),
+        raw={"protocol": {"type": "object"}},
         requires=("project", "fluidics", "corrections", "idle", "safe"),
         starts_protocol=True, run=_run_json_protocol,
     ),

@@ -31,13 +31,35 @@ class DesktopBackend:
             previous = self._previews.pop(scope, None)
             if previous:
                 self.service.discard_protocol_preview(previous)
-            plan = self.service.plan_protocol("run_json_protocol", {"protocol": document})
+            plan = self.service.plan_protocol("run_json_protocol", {
+                "protocol": document, "include_video": self.acquisition_mode == "camera_fluidics",
+            })
             self._previews[scope] = plan["plan_id"]
             return plan
 
     @property
     def settings(self):
         return self.engine.settings
+
+    @property
+    def acquisition_mode(self):
+        return self.session.metadata.get("acquisition_mode", "fluidics_only") if self.session else "fluidics_only"
+
+    def set_acquisition_mode(self, mode):
+        if mode not in {"fluidics_only", "camera_fluidics"}:
+            raise ValueError("Unknown acquisition mode")
+        with self.lock:
+            self.service._require_project_idle()
+            if not self.session:
+                raise RuntimeError("Open a project before choosing acquisition mode")
+            if self.engine.recording_active:
+                raise RuntimeError("Stop recording before changing acquisition mode")
+            if mode == self.acquisition_mode:
+                return
+            project = self.service.project
+            project.session = replace(project.session, metadata={**project.session.metadata, "acquisition_mode": mode})
+            project.save()
+            self._discard_previews()
 
     @property
     def session(self):

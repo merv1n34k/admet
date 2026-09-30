@@ -64,6 +64,15 @@ lock does not coordinate with those other programs.
 
 ## Operate without an agent
 
+In the existing **Setup parameters table**, choose **Acquisition: Fluidics only**
+(default) or **Camera + fluidics**.
+The choice is saved in the project. Fluidics-only needs no camera and records CSV;
+it hides the camera preview so only the fluidics graphs occupy the display.
+Combined acquisition requires a live camera and uses the existing paired video/CSV
+recorder. The mode is frozen into each reviewed plan and saved run. Changing it
+discards unexecuted previews; replan before execution. Switching is disabled while
+a protocol or recording is active.
+
 1. Use the existing project controls to create/open an `.admetp` project.
 2. Select and connect the camera if needed; enable Live for preview.
 3. Select Fluigent, connect, then set liquid profiles/correction factors and
@@ -222,9 +231,9 @@ switching/reopening projects discards them, without a draft-save prompt.
 Only execution creates a run archive. Manual run measurements and calculation
 results are still saved. Older draft metadata is ignored, not restored.
 
-JSON runs automatically record fluidics. Camera live preview is available;
-JSON runs currently do **not** record video. The GUI does not silently turn on
-video or change the existing JSON schema.
+JSON runs automatically record fluidics. **Camera + fluidics** also records video
+using the existing synchronized recorder. **Fluidics only** records CSV alone;
+the mode is a project setting, not a change to the JSON protocol schema.
 
 Copy the entire `.admetp` directory to preserve an experiment. Reopening loads
 definitions and past artifacts, not executable old plan IDs: build a fresh plan

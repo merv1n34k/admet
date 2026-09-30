@@ -425,6 +425,10 @@ class Admet:
             )}
             for name in op.requires
         }
+        if operation_id == "run_json_protocol" and normalized.get("include_video"):
+            engine = self._engines.get("acquisition")
+            ready = bool(engine and engine.camera_live)
+            guards["camera_live"] = {"met": ready, "why_not": "" if ready else "Connect the camera and start Live"}
         channels = self._cached_channel_mapping()
         steps = expand_protocol_steps(build_protocol_steps(op, normalized, channels=channels))
         described_steps = [_planned_step(index, step) for index, step in enumerate(steps, 1)]
@@ -534,6 +538,8 @@ class Admet:
         op.check(self.state())
         if self._executing_plan_id:
             raise RuntimeError("another plan is still executing")
+        if plan["camera_required"] and not (engine and engine.camera_live):
+            raise RuntimeError("Connect the camera and start Live before executing this plan")
         plan["state"] = "executing"
         plan["run_id"] = f"run_{uuid.uuid4().hex}"
         plan["executed_at"] = _now_iso()
@@ -551,7 +557,7 @@ class Admet:
                 if engine is not None and engine.recording_active:
                     raise RuntimeError("stop the existing recording before executing a JSON protocol")
                 recording = self.do("start_recording", {
-                    "recording_label": plan["run_id"], "include_video": False,
+                    "recording_label": plan["run_id"], "include_video": plan["recording"]["include_video"],
                 })
                 artifact = self._run_artifacts[plan_id]
                 artifact["recording"] = True
@@ -594,7 +600,10 @@ class Admet:
         artifact = self._run_artifacts.get(plan["plan_id"])
         try:
             if artifact and artifact["recording"]:
-                self.do("stop_recording")
+                recording = self.do("stop_recording")
+                if plan["recording"]["include_video"]:
+                    artifact["artifacts"]["video_path"] = recording.get("video_path")
+                    artifact["artifacts"]["recording"] = recording.get("recording")
                 artifact["artifacts"]["recording_closed"] = True
         finally:
             self._save_plan(plan)

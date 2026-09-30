@@ -1099,6 +1099,9 @@ class ControlWindow(QMainWindow):
         )
 
     def _sync_stage(self, stage: Stage) -> None:
+        preview_column = self.preview.parentWidget() if self.preview is not None else None
+        if preview_column is not None:
+            preview_column.setVisible(self.api.acquisition_mode == "camera_fluidics")
         self._sync_action_box(stage)
         self._sync_param_editors()
         self._sync_results()
@@ -1129,6 +1132,18 @@ class ControlWindow(QMainWindow):
         command_layout.addWidget(self._transport_buttons(stage, cap_top=not stage.pipeline), 1)
         action_layout.addWidget(command_row)
         self.action_box_layout.addWidget(action_box)
+
+    def _set_acquisition_mode(self, mode):
+        try:
+            self.api.set_acquisition_mode(mode)
+        except Exception as exc:
+            self._notify(str(exc), "danger")
+        else:
+            for editor in self.protocol_editors.values():
+                if editor.plan and editor.plan["state"] == "planned":
+                    editor.edited()
+        self.values["acquisition_mode"] = self.api.acquisition_mode
+        self._render_current_stage()
 
     def _action_button_specs(self, stage: Stage) -> list[tuple[str, Any, bool, bool, bool, bool]]:
         controls: list[tuple[str, Any, bool, bool, bool, bool]] = []
@@ -1270,6 +1285,13 @@ class ControlWindow(QMainWindow):
         return panel
 
     def _sync_action_box(self, stage: Stage) -> None:
+        mode = self._param_editors.get("acquisition_mode")
+        if mode is not None:
+            mode.blockSignals(True)
+            mode.setCurrentIndex(mode.findData(self.api.acquisition_mode))
+            mode.blockSignals(False)
+            mode.setEnabled(self._project_ready() and not self.tasks.busy and not self._pipeline_active()
+                            and not self.api.engine.recording_active)
         editor = self.protocol_editors.get(stage.id)
         if editor is not None and editor.builtin:
             for widget in self._param_editors.values():
@@ -2297,7 +2319,7 @@ class ControlWindow(QMainWindow):
         self._qt_frame = frame
         self._last_frame_id = id(frame)
         self._camera_ack_pending = True
-        if self.preview is None:
+        if self.preview is None or self.api.acquisition_mode == "fluidics_only":
             self._acknowledge_camera_frame()
             return
         self.preview.set_frame(frame)
@@ -2399,6 +2421,11 @@ class ControlWindow(QMainWindow):
         self._refresh_runtime_state()
         if name == "project_ready":
             return self.runtime_state["project"]
+        if name == "camera_optional":
+            return self.api.acquisition_mode == "fluidics_only"
+        if name == "acquisition_ready":
+            return self.runtime_state["project"] and (self.api.acquisition_mode == "fluidics_only"
+                                                     or self.runtime_state["camera_live"])
         if name == "camera_connected":
             return self.runtime_state["camera"]
         if name == "camera_live":
@@ -2712,6 +2739,8 @@ class ControlWindow(QMainWindow):
         raise KeyError(name)
 
     def _param_editor(self, param: Param) -> QWidget:
+        if param.name == "acquisition_mode":
+            self.values[param.name] = self.api.acquisition_mode
         value = self.values.get(param.name)
         if param.kind is ParamKind.BOOLEAN:
             editor = QComboBox()
@@ -2805,6 +2834,9 @@ class ControlWindow(QMainWindow):
         return valid
 
     def _set_value(self, name: str, value: Any) -> None:
+        if name == "acquisition_mode":
+            self._set_acquisition_mode(value)
+            return
         if name == "simulated" and (self._fluigent_ready() or self.api.simulated):
             self._notify("Disconnect Fluigent before changing simulation mode.", "warning")
             return

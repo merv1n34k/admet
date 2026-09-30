@@ -6,7 +6,7 @@ from admet.engines.acquisition.settings import (
     FLUIGENT_SETTINGS,
 )
 from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNELS
-from admet.core.engine import Param, ParamKind, ParamSchema
+from admet.core.engine import Param, ParamKind, ParamOption, ParamSchema
 
 from .model import EditorSpec, ResultsSpec, Stage, StageAction, StageInstruction, StageSurface, Workflow
 
@@ -80,6 +80,7 @@ CONTROL_RESULTS = ResultsSpec(
 )
 
 CAMERA_MAIN_SETTINGS = (
+    "acquisition_mode",
     "camera_width",
     "camera_height",
     "camera_exposure_us",
@@ -167,13 +168,14 @@ def create_control_workflow() -> Workflow:
         stages=(
             Stage(
                 "scene",
-                "1. Scene setup",
+                "1. Setup",
                 description="Camera discovery, connection, preview, and acquisition geometry.",
                 instructions=(
                     "Create or load an ADMET project before connecting the camera.",
-                    "Select a camera in the main editor, connect it, and turn live preview on.",
+                    "Choose Fluidics only, or connect a camera and start Live for Camera + fluidics.",
                 ),
                 instruction_cards=(
+                    StageInstruction("Fluidics-only acquisition: camera setup is optional.", "project_ready and camera_optional"),
                     StageInstruction(
                         "Create or select an admet project, then refresh and connect the camera.",
                         "not project_ready",
@@ -188,7 +190,11 @@ def create_control_workflow() -> Workflow:
                     ),
                     StageInstruction("Camera live preview is active. Adjust camera settings or move to Fluigent."),
                 ),
-                settings=CAMERA_SETTINGS,
+                settings=ParamSchema((Param(
+                    "acquisition_mode", "Acquisition", ParamKind.CHOICE, default="fluidics_only",
+                    options=(ParamOption("fluidics_only", "Fluidics only"),
+                             ParamOption("camera_fluidics", "Camera + fluidics")),
+                ), *CAMERA_SETTINGS.params)),
                 actions=(
                     StageAction("Refresh", "refresh_cameras", guard="project_ready", variant="secondary"),
                     StageAction(
@@ -210,7 +216,7 @@ def create_control_workflow() -> Workflow:
                         active_when="camera_live",
                         kind="toggle",
                     ),
-                    StageAction("Continue", completes=True, guard="camera_live", variant="warning"),
+                    StageAction("Continue", completes=True, guard="acquisition_ready", variant="warning"),
                 ),
                 editor=CONTROL_LIVE_EDITOR,
                 results=CONTROL_RESULTS,

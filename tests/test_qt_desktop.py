@@ -124,6 +124,52 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertTrue(self.backend.service.state()["corrections"])
         self.assertIn("TEST SIMULATION", self.window.windowTitle())
 
+    def test_setup_mode_allows_camera_free_continue_and_invalidates_preview(self):
+        from PySide6.QtWidgets import QComboBox
+        from admet.ui.workflow_view import guard_enabled
+
+        self.panel.set_document(definition())
+        self.panel.build_plan()
+        self.drain()
+        self.window._select_stage(0)
+        scene = self.window.workflow.stages[0]
+        guard = next(a.guard for a in scene.actions if a.completes)
+        self.assertTrue(guard_enabled(guard, self.window._guard_value))
+        mode = self.window._param_editors["acquisition_mode"]
+        self.assertIsInstance(mode, QComboBox)
+        self.assertIsNone(self.window.action_box_panel.findChild(QComboBox))
+        self.assertTrue(mode.isEnabled())
+        mode.setCurrentIndex(1)
+        self.assertEqual(self.backend.acquisition_mode, "camera_fluidics")
+        self.assertFalse(guard_enabled(guard, self.window._guard_value))
+        self.assertTrue(self.panel.dirty)
+        mode.setCurrentIndex(0)
+        self.assertTrue(guard_enabled(guard, self.window._guard_value))
+
+    def test_fluidics_mode_hides_preview_and_keeps_graphs_across_stages(self):
+        import numpy as np
+
+        self.window._select_stage(0)
+        mode = self.window._param_editors["acquisition_mode"]
+        self.assertFalse(self.window.preview.isVisible())
+        self.assertTrue(self.window.plot_panel.isVisible())
+        mode.setCurrentIndex(1)
+        self.assertTrue(self.window.preview.isVisible())
+        self.window._select_stage(self.experiment_index)
+        self.app.processEvents()
+        self.assertTrue(self.window.preview.isVisible())
+        self.window._select_stage(0)
+        self.window._param_editors["acquisition_mode"].setCurrentIndex(0)
+        self.assertFalse(self.window.preview.isVisible())
+        self.window._select_stage(self.experiment_index)
+        self.app.processEvents()
+        self.assertFalse(self.window.preview.isVisible())
+        self.assertTrue(self.window.plot_panel.isVisible())
+        with patch.object(self.backend.engine, "acknowledge_camera_frame") as acknowledge:
+            self.window._show_camera_frame(np.zeros((12, 16), dtype=np.uint8))
+        acknowledge.assert_called_once()
+        self.assertFalse(self.window._camera_ack_pending)
+
     def test_numeric_settings_commit_after_typing_and_invalidate_preview(self):
         from PySide6.QtCore import Qt
         from PySide6.QtTest import QTest
