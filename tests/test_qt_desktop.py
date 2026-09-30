@@ -395,6 +395,32 @@ class DesktopWindowTests(unittest.TestCase):
                 apply.assert_called_once()
             self.assertEqual(self.window._prepare_action_payload("apply_corrections")[name], 2.5)
 
+    def test_liquid_summary_refreshes_in_place_and_survives_stage_switches(self):
+        from PySide6.QtCore import Qt
+        from admet.ui.tables import SummaryLabel
+
+        index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "corrections")
+        self.window._select_stage(index)
+        page = self.window.current_stage_page
+        summary = page.liquid_summary
+        self.assertIsInstance(summary, SummaryLabel)
+        self.assertEqual(summary.textFormat(), Qt.TextFormat.PlainText)
+        self.assertTrue(summary.wordWrap())
+        self.assertIn("Cells M - Water (M): H2O table, scale 1", summary.text())
+        with patch.object(self.backend.engine, "apply_corrections", side_effect=AssertionError("actuation")):
+            selector = self.window._param_editors["cells_m_profile"]
+            selector.setCurrentIndex(selector.findData("oil_m"))
+            self.app.processEvents()
+            self.assertIs(page.liquid_summary, summary)
+            self.assertIn("Cells M - Oil (M): IPA table, scale 2.25", summary.text())
+            self.assertNotIn("Cells M - Water (M)", summary.text())
+            self.window._set_value("cells_m_scale", 3.0)
+            self.assertIn("Cells M - Oil (M): IPA table, scale 3,", summary.text())
+            self.window._select_stage(self.experiment_index)
+            self.window._select_stage(index)
+            self.assertIs(page.liquid_summary, summary)
+            self.assertIn("Cells M - Oil (M): IPA table, scale 3,", summary.text())
+
 
     def test_fluigent_simulation_selector_is_visible_and_locked_when_connected(self):
         self.backend.simulated = False
@@ -590,6 +616,8 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertFalse(self.panel.executable)
 
     def test_plan_gates_are_clear_and_instructions_are_folded(self):
+        from admet.ui.tables import SummaryLabel
+
         self.window._select_stage(self.experiment_index)
         document = definition()
         document["steps"].append({
@@ -606,10 +634,14 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertFalse(self.panel.details_box.isVisible())
         self.panel.table.setCurrentCell(1, 0)
         self.assertTrue(self.panel.details_box.isVisible())
+        self.assertIsInstance(self.panel.details, SummaryLabel)
         self.assertIn("record empty and full masses", self.panel.details.text())
         self.assertIn("Timeout:", self.panel.details.text())
         self.assertEqual(self.panel.plan["steps"][1]["trigger_type"], "time")
         self.assertEqual(self.panel.plan["steps"][1]["trigger_params"]["duration_s"], 0)
+        self.panel.table.setCurrentCell(0, 0)
+        self.assertNotIn("record empty and full masses", self.panel.details.text())
+        self.assertIn("Step 1", self.panel.details.text())
         self.panel.details_box.hide()
         self.assertFalse(self.panel.details_box.isVisible())
 

@@ -1,11 +1,22 @@
-"""Table widgets shared by the control window and its planning sections."""
+"""Tables and summaries shared by the control window and planning sections."""
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QTableWidget, QWidget
+from PySide6.QtWidgets import QLabel, QSizePolicy, QTableWidget, QWidget
 
 from admet.ui.theme import Theme
+
+
+class SummaryLabel(QLabel):
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("StageSummary")
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setWordWrap(True)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
 
 class GridTable(QTableWidget):

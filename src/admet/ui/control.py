@@ -61,7 +61,7 @@ from admet.engines.acquisition.fluidics.config import (
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES, LIQUID_PROFILE_PARAM_NAMES
 from admet.engines.acquisition.fluidics.liquids import profile_by_id
 from admet.ui.preflight import PreflightPanel
-from admet.ui.tables import GridTable, fit_table_height
+from admet.ui.tables import GridTable, SummaryLabel, fit_table_height
 from admet.workflows.check_history import (
     CHECK_INTERVAL_DAYS,
     CheckRecord,
@@ -308,6 +308,7 @@ class ControlStagePage(QWidget):
         self.protocol_progress_bar: QProgressBar | None = None
         self.protocol_confirm_label: QLabel | None = None
         self.param_editors: dict[str, QWidget] = {}
+        self.liquid_summary: SummaryLabel | None = None
         self.action_table: QTableWidget | None = None
         self.channel_panel: ChannelControlPanel | None = None
         self.video_table: QTableWidget | None = None
@@ -993,6 +994,7 @@ class ControlWindow(QMainWindow):
         self._protocol_progress_bar = None
         self._protocol_confirm_label = None
         self._param_editors = {}
+        self.current_stage_page.liquid_summary = None
         self.log_label = None
 
         self._render_action_box(stage)
@@ -1123,6 +1125,7 @@ class ControlWindow(QMainWindow):
             preview_column.setVisible(self.api.acquisition_mode == "camera_fluidics")
         self._sync_action_box(stage)
         self._sync_param_editors()
+        self._sync_liquid_profile_summary()
         self._sync_results()
         self._sync_log()
         self._sync_check_history(stage)
@@ -1695,22 +1698,33 @@ class ControlWindow(QMainWindow):
             editor.show()
 
     def _render_liquid_profile_summary(self, params: list[Param]) -> None:
-        """Spell out what the selected liquids apply, so a profile is not a black box."""
-        selected = [param for param in params if param.name in LIQUID_PROFILE_PARAM_NAMES]
-        if not selected:
+        if not any(param.name in LIQUID_PROFILE_PARAM_NAMES for param in params):
+            return
+        label = SummaryLabel()
+        self.current_stage_page.liquid_summary = label
+        self.action_layout.addWidget(label)
+        self._sync_liquid_profile_summary()
+
+    def _sync_liquid_profile_summary(self) -> None:
+        page = self.current_stage_page
+        if page is None or page.liquid_summary is None:
             return
         lines = []
-        for param in selected:
-            profile = profile_by_id(str(self.values.get(param.name, "")))
+        for name in self._param_editors:
+            if name not in LIQUID_PROFILE_PARAM_NAMES:
+                continue
+            profile = profile_by_id(str(self.values.get(name, "")))
             if profile is not None:
-                channel = param.label.removesuffix(" Liquid")
-                lines.append(f"{channel} - {profile.name}: {profile.summary()}")
-        if not lines:
-            return
-        label = QLabel("\n".join(lines))
-        label.setObjectName("StageSummary")
-        label.setWordWrap(True)
-        self.action_layout.addWidget(label)
+                prefix = name.removesuffix("_profile")
+                configured = replace(profile, **{
+                    field: self.values.get(f"{prefix}_{field}", getattr(profile, field))
+                    for field in ("calibration", "scale", "offset", "quadratic")
+                })
+                channel = self._param_by_name(name).label.removesuffix(" Liquid")
+                lines.append(f"{channel} - {profile.name}: {configured.summary()}")
+        text = "\n".join(lines)
+        if page.liquid_summary.text() != text:
+            page.liquid_summary.setText(text)
 
     def _toggle_action_params(self) -> None:
         self._action_show_all_params = not self._action_show_all_params
@@ -2688,6 +2702,7 @@ class ControlWindow(QMainWindow):
             return
         prefix = name.removesuffix("_profile")
         self.values.update(profile.corrections(prefix))
+        self._sync_liquid_profile_summary()
         self._schedule_correction_apply()
         self._append_log(f"liquid: {prefix} -> {profile.name} ({profile.summary()})")
         QTimer.singleShot(0, self._render_current_stage)
@@ -2880,6 +2895,7 @@ class ControlWindow(QMainWindow):
         if name in LIQUID_PROFILE_PARAM_NAMES:
             self._apply_liquid_profile(name, value)
         if name in CORRECTION_PARAM_NAMES:
+            self._sync_liquid_profile_summary()
             self._schedule_correction_apply()
         if name == "simulated":
             if not value:

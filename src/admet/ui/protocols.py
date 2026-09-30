@@ -7,12 +7,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QPlainTextEdit,
+    QLineEdit, QPlainTextEdit,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from admet.ui import theme as ui
-from admet.ui.tables import GridTable, fit_table_height
+from admet.ui.tables import GridTable, SummaryLabel, fit_table_height
 from admet.core.engine import Param, ParamKind
 from admet.engines.acquisition.fluidics.config import STABILITY_DURATION_S, STABILITY_TOLERANCE_UL_MIN
 from admet.workflows.control import builtin_document
@@ -284,9 +284,7 @@ class ProtocolEditor(QWidget):
         self.details_box = QWidget()
         detail_layout = QVBoxLayout(self.details_box)
         detail_layout.setContentsMargins(0, 0, 0, 0)
-        self.details = QLabel()
-        self.details.setWordWrap(True)
-        self.details.setTextFormat(Qt.TextFormat.PlainText)
+        self.details = SummaryLabel()
         detail_layout.addWidget(self.details)
         hide_details = ui.button("Hide details")
         hide_details.clicked.connect(self.details_box.hide)
