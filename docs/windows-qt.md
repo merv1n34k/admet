@@ -91,8 +91,10 @@ a protocol or recording is active.
    **Before** means confirmation is required before that step applies targets.
    Select a row for the full confirmation, exact trigger and timeout; **Hide details**
    folds the instructions again. This changes only the preview, not the executable steps.
-   Pressure limits and unmet guards appear above the table; hover over the summary
-   for abort conditions, warnings and digest. ETA excludes operator waiting.
+   The existing top action panel summarizes step count, nominal ETA and Oil/Cells/Beads
+   consumption from the expanded steps. No extra caption sits above the table.
+   ETA excludes operator waiting. Unknown duration or consumption is shown as **—**,
+   including pressure-controlled flow and flow held during an operator wait.
 7. **Execute** executes that reviewed plan ID only, without an extra approval prompt.
    A changed connection, correction set, project, or safety context requires a
    new plan. Editing JSON or built-in parameters disables execution until you re-plan.

@@ -289,7 +289,7 @@ class DesktopWindowTests(unittest.TestCase):
         panel.build_plan()
         self.drain()
         self.assertEqual(panel.plan["armed_safety_limits"]["pressure_mbar"], {})
-        self.assertIn("pressure trips Off", panel.summary.text())
+        self.assertNotIn("pressure trips", self.window._protocol_status_label.text())
 
     def test_plan_commits_valid_numeric_draft_without_actuation(self):
         from PySide6.QtTest import QTest
@@ -454,7 +454,9 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertEqual(self.panel.table.item(0, 2).text(), "0\n1\n2")
         self.assertEqual(self.panel.table.item(0, 4).text(), "10 µL/min\n5 µL/min\n5 µL/min")
         self.assertIn("time: 0.15 s", self.panel.table.item(0, 5).text())
-        self.assertIn("500", self.panel.summary.text())
+        self.assertEqual(self.window._protocol_status_label.text(),
+                         "Experiment 1: 1 step · ETA 0.15 s · Oil: 0.025 µL · Cells: 0.0125 µL · Beads: 0.0125 µL")
+        self.assertFalse(hasattr(self.panel, "summary"))
         plan_id = self.panel.plan["plan_id"]
         self.panel.execute()
         self.drain()
@@ -469,6 +471,46 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertFalse(self.panel.executable)
         self.assertIn("completed", "\n".join(self.window.log_entries))
         self.assertTrue((Path(self.backend.workdir) / "records" / "protocols" / self.panel.plan["run_id"] / "summary.json").exists())
+
+    def test_action_plan_summary_counts_expanded_parallel_steps(self):
+        self.window._select_stage(self.experiment_index)
+        document = definition(60)
+        document["steps"][0]["repeat"] = 2
+        self.panel.set_document(document)
+        self.panel.build_plan()
+        self.drain()
+        self.assertEqual(self.window._protocol_status_label.text(),
+                         "Experiment 1: 2 steps · ETA 2 min · Oil: 20 µL · Cells: 10 µL · Beads: 10 µL")
+        self.panel.edited()
+        self.assertEqual(self.window._protocol_status_label.text(), "Experiment 1: ready to plan")
+
+    def test_plan_summary_handles_held_flows_and_unknown_estimates(self):
+        from admet.ui.protocols import plan_summary
+
+        document = definition(60)
+        first = document["steps"][0]
+        first["sensor_setpoints"] = {"0": 10}
+        first["on_complete"] = "hold"
+        document["steps"].append({"sensor_setpoints": {"1": 5}, "trigger_type": "time",
+                                  "trigger_params": {"duration_s": 60}, "on_complete": "zero"})
+        plan = self.backend.preview("summary", document)
+        self.assertEqual(plan_summary(plan, "Experiment 1"),
+                         "Experiment 1: 2 steps · ETA 2 min · Oil: 20 µL · Cells: 5 µL · Beads: 0 µL")
+        plan["steps"][1]["confirmation"] = "Change collection tube"
+        self.assertIn("Oil: —", plan_summary(plan, "Experiment 1"))
+        plan["steps"][1]["confirmation"] = None
+        plan["steps"][1]["trigger_type"] = "stability"
+        self.assertIn("ETA — · Oil: — · Cells: — · Beads: 0 µL", plan_summary(plan, "Experiment 1"))
+        plan["steps"][1]["trigger_type"] = "time"
+        plan["steps"][1]["pressure_setpoints_mbar"] = {"1": 20}
+        plan["steps"][1]["flow_setpoints_ul_min"] = {}
+        self.assertIn("Oil: 20 µL · Cells: —", plan_summary(plan, "Experiment 1"))
+        document = definition()
+        document["steps"][0].update(trigger_type="volume", trigger_params={"sensor_index": 0, "target_volume_ul": 50},
+                                     timeout_s=600)
+        plan = self.backend.preview("summary", document)
+        self.assertEqual(plan_summary(plan, "Experiment 1"),
+                         "Experiment 1: 1 step · ETA 5 min · Oil: 50 µL · Cells: 25 µL · Beads: 25 µL")
 
     def test_editor_changes_disable_execution_of_old_preview(self):
         self.panel.set_document(definition())

@@ -2037,9 +2037,15 @@ class ControlWindow(QMainWindow):
         return _pipeline_start_label(stage)
 
     def _pipeline_status_text(self, stage: Stage) -> str:
-        if "json_protocol" in stage.features and stage.id != self._pipeline_stage_id:
+        if "json_protocol" in stage.features:
+            from admet.ui.protocols import plan_summary
+
             editor = self._protocol_editor(stage)
-            return f"{stage.label}: {editor.plan['state'] if editor.plan else 'ready to plan'}"
+            label = re.sub(r"^\d+\.\s*", "", stage.label)
+            if editor.executable and not editor._executing:
+                return plan_summary(editor.plan, label)
+            if stage.id != self._pipeline_stage_id:
+                return f"{label}: {'ready to plan' if editor.dirty else editor.plan['state']}"
         event = self._latest_pipeline_event
         state = self._pipeline_event_state(event)
         step = self._pipeline_step_label(stage, event)

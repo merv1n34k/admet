@@ -25,6 +25,38 @@ def value_text(value, unit=""):
     return f"{value:g}{unit}" if isinstance(value, (float, int)) else str(value)
 
 
+def plan_summary(plan, label):
+    flows = {}
+    volumes = {"0": 0.0, "1": 0.0, "2": 0.0}
+    elapsed = 0.0
+    for step in plan["steps"]:
+        if step["confirmation"]:
+            for channel, flow in flows.items():
+                if flow is None or flow != 0:
+                    volumes[channel] = None
+        flows.update(step["flow_setpoints_ul_min"])
+        flows.update({channel: None for channel in step["pressure_setpoints_mbar"]})
+        duration = step["expected_duration_s"] if step["trigger_type"] != "stability" else None
+        elapsed = elapsed + duration if elapsed is not None and duration is not None else None
+        for channel, flow in flows.items():
+            volume = volumes.setdefault(channel, 0.0)
+            if duration == 0 or flow == 0:
+                continue
+            volumes[channel] = (volume + max(0, flow) * duration / 60
+                                if volume is not None and flow is not None and duration is not None else None)
+        changed = set(step["flow_setpoints_ul_min"]) | set(step["pressure_setpoints_mbar"])
+        if step["on_complete"] == "zero":
+            flows.update({channel: 0.0 for channel in step["flow_setpoints_ul_min"]})
+        elif step["on_complete"] == "revert":
+            flows.update({channel: None for channel in changed})
+    eta = "—" if elapsed is None else (f"{elapsed / 60:.3g} min" if elapsed >= 60 else f"{elapsed:.3g} s")
+    labels = {"0": "Oil", "1": "Cells", "2": "Beads"}
+    targets = " · ".join(f"{labels.get(channel, 'Ch ' + channel)}: {value_text(value, ' µL')}"
+                         for channel, value in volumes.items())
+    count = plan["step_count"]
+    return f"{label}: {count} {'step' if count == 1 else 'steps'} · ETA {eta} · {targets}"
+
+
 def step_rows(plan):
     rows = []
     for step in plan["steps"]:
@@ -257,10 +289,6 @@ class ProtocolEditor(QWidget):
             root.addWidget(self.editor)
         else:
             self.editor.hide()
-        self.summary = QLabel("Build a plan to review the exact targets before execution.")
-        self.summary.setObjectName("StageSummary")
-        self.summary.setWordWrap(True)
-        root.addWidget(self.summary)
         self.table = PlanTable()
         self.table.setObjectName("RawConfigTable")
         self.table.setHorizontalHeaderLabels(["STEP", "STATUS", "UNIT ID", "TYPE", "TARGET", "TRIGGER / ETA", "END", "CONFIRM"])
@@ -299,8 +327,6 @@ class ProtocolEditor(QWidget):
         self.editor.setVisible(not self.builtin and not self._executing)
         self.table.hide()
         self.details_box.hide()
-        if self.plan:
-            self.summary.setText("Definition changed. Build a new plan before execution.")
         self.window._protocol_changed()
 
     def raw_edited(self):
@@ -448,18 +474,6 @@ class ProtocolEditor(QWidget):
 
     def show_plan(self):
         plan = self.plan
-        limits = plan["armed_safety_limits"]["pressure_mbar"]
-        trips = f"{json.dumps(limits)} mbar" if limits else "Off"
-        if not self.dirty:
-            self.summary.setText(
-                f"{plan['state']} · {plan['step_count']} steps · ETA {value_text(plan['expected_duration_s'], ' s')} "
-                f"+ confirmation waits · pressure trips {trips}"
-                + (f"\nUnmet guards: {', '.join(plan['unmet_guards'])}" if plan["unmet_guards"] else "")
-            )
-        self.summary.setToolTip(
-            "Abort: " + "; ".join(plan["abort_conditions"]) + "\n"
-            + "; ".join(plan["warnings"])
-        )
         if self._table_digest != plan["digest"]:
             self._table_digest = plan["digest"]
             rows = step_rows(plan)
