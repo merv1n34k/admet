@@ -16,10 +16,11 @@ from admet.workflows.oil_density import _finite, analyze_density_run
 from admet.workflows.flow_scout import analyze_scout
 from admet.workflows.calculation_schema import declarations
 from admet.workflows.calculation_inputs import load_context, fingerprint, result_current, read_json
+from admet.workflows import gravimetry
 
 
 def available_calculations(directory):
-    result = ["recording_summary"]
+    result = []
     try:
         document = read_json(Path(directory) / "protocol.json")
         result.extend(item["type"] for item in declarations(document) if item["type"] in CALCULATIONS)
@@ -28,7 +29,7 @@ def available_calculations(directory):
             result.append("oil_density")
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    return list(dict.fromkeys(result))
+    return list(dict.fromkeys([*result, "recording_summary"]))
 
 
 def calculation_readiness(directory, key, references=None):
@@ -121,6 +122,10 @@ def _recording_summary(context):
 
 
 CALCULATIONS = {
+    "gravimetry": {"label": "Gravimetry", "version": 1, "calculate": gravimetry.calculate,
+                   "check": gravimetry.check, "files": ("protocol.json", "events.jsonl"),
+                   "references": {"density": "oil_density"},
+                   "description": "Weighed collections versus integrated measured flow; proposes a multiplier only."},
     "oil_density": {"label": "Oil density", "version": 2, "calculate": _density,
                     "files": ("protocol.json", "events.jsonl"),
                     "description": "Two height passes from a density protocol; excludes scout and settling."},

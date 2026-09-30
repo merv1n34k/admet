@@ -1,0 +1,142 @@
+{
+  "name": "gravimetry",
+  "parameters": {
+    "oil_name": {
+      "type": "text",
+      "label": "Oil name",
+      "default": "oil"
+    },
+    "collection_flow": [
+      "M1 flow, µL/min",
+      30
+    ],
+    "collection_s": [
+      "Collection time, s",
+      20
+    ]
+  },
+  "steps": [
+    {
+      "name": "Collect 1",
+      "sensor_setpoints": {
+        "1": "collection_flow"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "collection_s"
+      },
+      "timeout_s": "collection_s + 10",
+      "on_complete": "zero",
+      "confirm_message": "M1 only: record empty vessel mass for collection 1; position vessel before confirming. Capture the complete dispense including residual drops, then weigh. Keep the filled path unchanged."
+    },
+    {
+      "name": "Collect 2",
+      "sensor_setpoints": {
+        "1": "collection_flow"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "collection_s"
+      },
+      "timeout_s": "collection_s + 10",
+      "on_complete": "zero",
+      "confirm_message": "Weigh and enter the previous collection first. M1 only: record empty vessel mass for collection 2; position vessel before confirming. Capture the complete dispense including residual drops, then weigh. Keep the filled path unchanged."
+    },
+    {
+      "name": "Collect 3",
+      "sensor_setpoints": {
+        "1": "collection_flow"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "collection_s"
+      },
+      "timeout_s": "collection_s + 10",
+      "on_complete": "zero",
+      "confirm_message": "Weigh and enter the previous collection first. M1 only: record empty vessel mass for collection 3; position vessel before confirming. Capture the complete dispense including residual drops, then weigh. Keep the filled path unchanged."
+    },
+    {
+      "name": "Record final mass",
+      "sensor_setpoints": {
+        "1": 0
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": 0
+      },
+      "on_complete": "zero",
+      "confirm_message": "Record the final collected mass, then confirm completion. Calculate gravimetry afterwards."
+    }
+  ],
+  "measurements": {
+    "density_g_ml": {
+      "label": "Oil density",
+      "unit": "g/mL",
+      "min": 0
+    },
+    "mass_before_1": {
+      "label": "Collection 1: mass before",
+      "unit": "mg",
+      "step": 1,
+      "required": true
+    },
+    "mass_after_1": {
+      "label": "Collection 1: mass after",
+      "unit": "mg",
+      "step": 1,
+      "required": true
+    },
+    "mass_before_2": {
+      "label": "Collection 2: mass before",
+      "unit": "mg",
+      "step": 2,
+      "required": true
+    },
+    "mass_after_2": {
+      "label": "Collection 2: mass after",
+      "unit": "mg",
+      "step": 2,
+      "required": true
+    },
+    "mass_before_3": {
+      "label": "Collection 3: mass before",
+      "unit": "mg",
+      "step": 3,
+      "required": true
+    },
+    "mass_after_3": {
+      "label": "Collection 3: mass after",
+      "unit": "mg",
+      "step": 3,
+      "required": true
+    }
+  },
+  "calculations": [
+    {
+      "type": "gravimetry",
+      "liquid": "{oil_name}",
+      "channel": 1,
+      "density": "density_g_ml",
+      "samples": [
+        {
+          "step": 1,
+          "before": "mass_before_1",
+          "after": "mass_after_1"
+        },
+        {
+          "step": 2,
+          "before": "mass_before_2",
+          "after": "mass_after_2"
+        },
+        {
+          "step": 3,
+          "before": "mass_before_3",
+          "after": "mass_after_3"
+        }
+      ]
+    },
+    {
+      "type": "recording_summary"
+    }
+  ]
+}
