@@ -889,12 +889,21 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertFalse((Path(self.backend.workdir) / "plans").exists())
 
     def test_measurements_enable_only_for_run_and_survive_reopen(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QComboBox, QLabel
         from tests.test_run_measurements import measured_protocol
 
         self.backend.call("connect_fluidics")
         self.backend.call("apply_corrections")
         self.panel.set_document(measured_protocol())
         measurements = self.panel.measurements
+        self.assertFalse(measurements.findChildren(QComboBox))
+        self.assertFalse(measurements.findChildren(QLabel))
+        self.assertTrue(measurements.table.verticalHeader().isHidden())
+        self.assertEqual(measurements.table.horizontalHeader().defaultAlignment(),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.assertEqual(measurements.table.item(0, 0).textAlignment(),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.assertFalse(measurements.cells["before_mg"].isEnabled())
         self.panel.build_plan()
         self.drain()
@@ -912,9 +921,46 @@ class DesktopWindowTests(unittest.TestCase):
         self.window._load_project_path(Path(self.backend.workdir))
         stage = next(s for s in self.window.workflow.stages if s.id == "experiment_1")
         restored = self.window._protocol_editor(stage).measurements
-        restored.runs.setCurrentIndex(restored.runs.findData(run_id))
-        self.assertEqual(restored.cells["before_mg"].text(), "12.5")
-        self.assertEqual(restored.cells["after_mg"].text(), "")
+        self.assertIsNone(restored.run_id)
+        self.assertTrue(restored.isHidden())
+        saved = self.backend.measurements(run_id)
+        self.assertEqual(saved["values"]["before_mg"], 12.5)
+        self.assertIsNone(saved["values"]["after_mg"])
+        calculation_index = next(i for i, s in enumerate(self.window.workflow.stages) if "calculations" in s.features)
+        self.window._select_stage(calculation_index)
+        calculations = self.window._calculations
+        self.drain(lambda: not calculations.tasks.busy)
+        self.assertIn(run_id, [Path(calculations.runs.itemData(i)).name for i in range(calculations.runs.count())])
+
+    def test_measurements_reset_for_new_plan_and_stay_bound_to_each_run(self):
+        from tests.test_run_measurements import measured_protocol
+
+        self.backend.call("connect_fluidics")
+        self.backend.call("apply_corrections")
+        self.panel.set_document(measured_protocol())
+        measurements = self.panel.measurements
+        ids = []
+        for value in (12.5, 25.0):
+            self.panel.build_plan()
+            self.drain()
+            self.assertIsNone(measurements.run_id)
+            self.assertFalse(measurements.cells["before_mg"].isEnabled())
+            self.assertEqual(measurements.cells["before_mg"].text(), "")
+            self.panel.execute()
+            self.drain()
+            ids.append(measurements.run_id)
+            self.assertEqual(measurements.cells["before_mg"].text(), "")
+            self.panel.control("abort")
+            self.drain()
+            cell = measurements.cells["before_mg"]
+            self.assertTrue(cell.isEnabled())
+            cell.setText(str(value))
+            cell.editingFinished.emit()
+            self.window._autosave_measurements()
+        self.assertNotEqual(*ids)
+        self.assertEqual(self.backend.measurements(ids[0])["values"]["before_mg"], 12.5)
+        self.assertEqual(self.backend.measurements(ids[1])["values"]["before_mg"], 25.0)
+        self.assertIsNone(self.backend.measurements(ids[1])["values"]["after_mg"])
 
     def test_run_rows_show_gates_outcomes_and_respect_manual_browsing(self):
         from admet.engines.acquisition.pipeline import PipelineEvent, PipelineState, StepOutcome

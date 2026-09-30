@@ -233,6 +233,13 @@ switching/reopening projects discards them, without a draft-save prompt.
 Only execution creates a run archive. Manual run measurements and calculation
 results are still saved. Older draft metadata is ignored, not restored.
 
+When a protocol declares measurements, its table sits directly below the steps,
+without a separate caption or run selector. Cells are enabled once that run starts
+and remain editable after it finishes. Planning another run clears and disables
+the table until Execute; it never carries values forward. Previously entered values
+remain stored with their run, including empty values as null. Historical runs are
+selected in **Calculations**, not in the experiment's measurement table.
+
 JSON runs automatically record fluidics. **Camera + fluidics** also records video
 using the existing synchronized recorder. **Fluidics only** records CSV alone;
 the mode is a project setting, not a change to the JSON protocol schema.

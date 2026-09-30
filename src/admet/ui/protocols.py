@@ -166,37 +166,25 @@ class Measurements(QWidget):
         self.cells = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.addWidget(QLabel("Measurements — recorded only; Calculate processes them later"))
-        self.runs = QComboBox()
-        self.runs.currentIndexChanged.connect(self.select_run)
-        root.addWidget(self.runs)
         self.table = GridTable(0, 3)
         self.table.setHorizontalHeaderLabels(["Measurement", "Value", "Step / repeat"])
+        self.table.verticalHeader().hide()
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setWordWrap(True)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.horizontalHeader().sectionResized.connect(self.fit)
         root.addWidget(self.table)
-        self.fields = {}
         self.hide()
 
     def preview(self, fields):
-        self.fields = fields
         self.run_id = None
-        self.runs.blockSignals(True)
-        self.runs.clear()
-        self.runs.addItem("Next run — enabled on Execute", None)
-        for run in self.editor.backend.measurement_runs():
-            self.runs.addItem(f"{run['name']} · {run['at']} · {run['run_id'][-8:]}", run["run_id"])
-        self.runs.blockSignals(False)
         self.render(fields, {})
-        self.setVisible(bool(fields) or self.runs.count() > 1)
-
-    def select_run(self):
-        run_id = self.runs.currentData()
-        if run_id:
-            self.attach(run_id)
-        else:
-            self.run_id = None
-            self.render(self.fields, {})
+        self.setVisible(bool(fields))
 
     def attach(self, run_id):
         try:
@@ -207,13 +195,6 @@ class Measurements(QWidget):
             self.editor.error(exc)
             return
         self.run_id = run_id
-        self.runs.blockSignals(True)
-        index = self.runs.findData(run_id)
-        if index < 0:
-            self.runs.addItem("Run " + run_id[-8:], run_id)
-            index = self.runs.count() - 1
-        self.runs.setCurrentIndex(index)
-        self.runs.blockSignals(False)
         self.render(data["fields"], {**data["values"], **self.pending.get(run_id, {})})
         self.show()
 
@@ -224,17 +205,22 @@ class Measurements(QWidget):
         for row, (key, field) in enumerate(fields.items()):
             self.table.setItem(row, 0, QTableWidgetItem(field["label"]))
             self.table.setItem(row, 2, QTableWidgetItem(str(field.get("step", "—"))))
+            for column in (0, 2):
+                self.table.item(row, column).setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             cell = QLineEdit("" if values.get(key) is None else str(values[key]))
             cell.setPlaceholderText("Not measured")
             cell.setEnabled(self.run_id is not None)
-            cell.editingFinished.connect(lambda k=key, c=cell: self.changed(k, c))
+            cell.editingFinished.connect(lambda k=key, c=cell, r=self.run_id: self.changed(k, c, r))
             self.table.setCellWidget(row, 1, cell)
             self.cells[key] = cell
+        self.fit()
+
+    def fit(self, *_args):
         self.table.resizeRowsToContents()
         fit_table_height(self.table)
 
-    def changed(self, key, cell):
-        if not self.run_id:
+    def changed(self, key, cell, run_id):
+        if not run_id:
             return
         try:
             value = float(cell.text()) if cell.text().strip() else None
@@ -245,7 +231,7 @@ class Measurements(QWidget):
             self.editor.error(ValueError("Measurement must be a finite number or empty (not measured)"))
             return
         cell.setStyleSheet("")
-        self.pending.setdefault(self.run_id, {})[key] = value
+        self.pending.setdefault(run_id, {})[key] = value
         self.editor.window._measurement_save_timer.start(200)
 
     def flush(self):
@@ -467,6 +453,7 @@ class ProtocolEditor(QWidget):
         self.plan = plan
         self.dirty = False
         self._table_digest = None
+        self.measurements.preview(plan["normalized_settings"]["protocol"].get("measurements", {}))
         self.show_plan()
         self.editor.setVisible(not bool(self.builtin))
         self.window._append_log("Preview ready — nothing recorded or actuated")
