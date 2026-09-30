@@ -791,6 +791,7 @@ QHeaderView::section {{
     background-color: {Theme.BG_RAISED};
     color: {Theme.TEXT_MUTED};
     border: 0;
+    border-right: 1px solid {Theme.BORDER_COOL};
     border-bottom: 1px solid {Theme.BORDER_COOL};
     padding: 0;
 }}
@@ -798,9 +799,11 @@ QHeaderView::section:first {{
     border-top-left-radius: {Theme.RADIUS}px;
 }}
 QHeaderView::section:last {{
+    border-right: 0;
     border-top-right-radius: {Theme.RADIUS}px;
 }}
 QHeaderView::section:only-one {{
+    border-right: 0;
     border-top-left-radius: {Theme.RADIUS}px;
     border-top-right-radius: {Theme.RADIUS}px;
 }}
