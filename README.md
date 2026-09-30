@@ -8,7 +8,7 @@ interface, or server setup is needed.
 
 ```powershell
 uv sync --locked --extra control
-.\start-admet.cmd
+uv run --locked --extra control admet qt
 ```
 
 With the project environment activated, open the app with `admet qt`
@@ -44,7 +44,7 @@ update every linked step when rebuilding the plan. See the
 Start oil testing with **Template · flow stability scout**: a single-height M1
 flow sweep, with editable base flow and point duration. Review its settling/fit
 recommendations before preparing a density run. See
-[scout protocol and thresholds](docs/oil_density_experiment.md#first-separate-single-height-scout).
+[scout protocol and thresholds](junk/oil_density_experiment.md#first-separate-single-height-scout).
 
 **Calculations** is a separate TOC section: select **Flow stability scout**, **Oil density** or **Recording
 summary**, select a finished recorded run, then **Calculate**. It reads archived

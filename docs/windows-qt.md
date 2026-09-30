@@ -20,7 +20,7 @@ git clone --branch feat/windows-qt-protocols https://github.com/merv1n34k/admet.
 cd admet2
 uv python install 3.12
 uv sync --locked --extra control
-.\start-admet.cmd
+uv run --locked --extra control admet qt
 ```
 
 For an existing clone, finish any run and close ADMET before updating. Preserve
@@ -31,7 +31,7 @@ git fetch origin
 git switch feat/windows-qt-protocols
 git pull --ff-only origin feat/windows-qt-protocols
 uv sync --locked --extra control
-.\start-admet.cmd
+uv run --locked --extra control admet qt
 ```
 
 The project uses Python 3.12 and the normal `.venv`. The control extra includes
@@ -39,7 +39,7 @@ PySide6, pyqtgraph, OpenCV, and pypylon; analysis/ML extras are not needed.
 The first sync needs network access. Once installed, running the desktop needs
 no chat session or agent.
 
-Double-click `start-admet.cmd`, or run:
+Launch from PowerShell:
 
 ```powershell
 uv run --locked --extra control admet qt
@@ -209,7 +209,7 @@ previous calculations after reopening the project; recalculation adds a new resu
 
 Density templates are **density dsurf**, **density evagreen** and **density custom
 mix**. All use channel 1 only: 5/15/20 µL/min for 20 seconds per point, one scout
-and two opposite height passes. See [density method](oil_density_experiment.md).
+and two opposite height passes. See [density method](../junk/oil_density_experiment.md).
 The files contain ordinary protocol steps, not mandatory analysis metadata.
 Density analysis recognizes their explicit height/pass labels and validates them
 against the confirmation text; keep these labels intact. Unknown geometry is
