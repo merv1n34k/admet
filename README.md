@@ -106,6 +106,8 @@ The Qt desktop handles shutdown and prevents a second desktop instance.
 ## Development
 
 Use `make setup`, `make dev`, `make test`, `make test-all`, `make lint`
-and `make build`. Focused acquisition, analysis and desktop targets are
-available in the Makefile. Simulation does not validate physical wiring,
+and `make build`. `make test` runs core and mocked acquisition tests;
+`make test-all` adds simulated integration, analysis and offscreen desktop
+tests without repeating groups. Use `make test-integration`, `make test-analyze`
+or `make test-desktop` to run those groups separately. Simulation does not validate physical wiring,
 fluid calibration or Windows device drivers.

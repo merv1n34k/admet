@@ -23,7 +23,7 @@ from admet.engines.acquisition.pipeline import (
 )
 from admet.engines.acquisition.triggers import StabilityTrigger, TimeTrigger
 
-from test_control_pipeline_engine import FakeAcquisition, FakeChannelManager
+from tests.test_control_pipeline_engine import FakeAcquisition, FakeChannelManager
 
 
 class FakeSDK:

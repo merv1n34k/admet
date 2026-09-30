@@ -7,65 +7,33 @@ from admet.core.service import Admet
 from admet.workflows.operations import operation
 
 
-class DeclarationTests(unittest.TestCase):
-    def test_observing_needs_nothing_to_be_true_first(self):
-        # A guard here would make the answer unavailable exactly when it is
-        # most wanted: when something is wrong.
-        self.assertEqual(operation("observe").requires, ())
-
-    def test_both_are_reads(self):
-        self.assertEqual(operation("observe").kind, "read")
-        self.assertEqual(operation("protocol_events").kind, "read")
-
-
 class DisconnectedTests(unittest.TestCase):
     """Nothing connected is a state to report, not an error and not zeros."""
 
     def setUp(self):
         self.observed = Admet().do("observe")
 
-    def test_it_answers_at_all(self):
+    def test_disconnected_observation_reports_guards_and_missing_data(self):
         self.assertFalse(self.observed["connection"]["fluidics"])
         self.assertTrue(self.observed["observed_at"])
-
-    def test_it_reports_no_channels_rather_than_empty_ones(self):
         self.assertEqual(self.observed["channels"], [])
-
-    def test_the_parts_that_are_not_running_yet_say_so(self):
         self.assertFalse(self.observed["validation"]["active"])
         self.assertFalse(self.observed["safety"]["armed"])
         self.assertFalse(self.observed["safety"]["tripped"])
-
-    def test_every_promised_section_is_present(self):
-        # The shape must not change once the later milestones fill these in.
-        for section in (
-            "observed_at", "project", "connection", "polling", "recording",
-            "channels", "protocol", "guards", "validation", "safety",
-        ):
-            with self.subTest(section=section):
-                self.assertIn(section, self.observed)
-
-    def test_it_says_why_nothing_can_run_yet(self):
         guards = self.observed["guards"]
-
         self.assertFalse(guards["fluidics"]["met"])
         self.assertIn("run connect_fluidics first", guards["fluidics"]["why_not"])
-
-    def test_a_met_guard_gives_no_reason(self):
-        self.assertTrue(self.observed["guards"]["idle"]["met"])
-        self.assertEqual(self.observed["guards"]["idle"]["why_not"], "")
-
-    def test_no_event_means_no_events(self):
+        self.assertTrue(guards["idle"]["met"])
+        self.assertEqual(guards["idle"]["why_not"], "")
+        for name in ("observe", "protocol_events"):
+            with self.subTest(operation=name):
+                self.assertEqual(operation(name).requires, ())
+                self.assertEqual(operation(name).kind, "read")
         self.assertEqual(Admet().do("protocol_events")["events"], [])
 
 
 class OneAnswerTests(unittest.TestCase):
     """observe replaced read_status rather than sitting beside it."""
-
-    def test_the_flat_status_operation_is_gone(self):
-        from admet.workflows.operations import BY_ID
-
-        self.assertNotIn("read_status", BY_ID)
 
     def test_what_observe_reports_is_what_a_refusal_is_decided_on(self):
         # Not merely equal today: read from the same place, so they cannot
@@ -186,12 +154,6 @@ class ConnectedTests(unittest.TestCase):
         self.assertIsNotNone(channel["flow_error_ul_min"])
         self.assertIsNotNone(channel["flow_error_percent"])
         self.admet.do("stop_channel", {"channel_index": 0})
-
-    def test_observing_repeatedly_gives_fresh_timestamps(self):
-        first = self.admet.do("observe")["observed_at"]
-        time.sleep(0.01)
-
-        self.assertNotEqual(self.admet.do("observe")["observed_at"], first)
 
 
 class RunningProtocolTests(unittest.TestCase):

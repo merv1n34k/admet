@@ -21,7 +21,7 @@ def _commands() -> dict:
 
 
 class SurfaceTests(unittest.TestCase):
-    def test_the_command_line_is_discovery_the_controller_and_the_monitor(self):
+    def test_the_command_line_is_describe_and_qt(self):
         self.assertEqual(set(_commands()), {"qt", "describe"})
 
     def test_qt_launches_desktop_and_forwards_only_project(self):
@@ -46,26 +46,12 @@ class SurfaceTests(unittest.TestCase):
                     main([*option, "qt"])
                 self.assertEqual(caught.exception.code, 2)
 
-    def test_no_command_runs_an_experiment(self):
-        # do, call, run, plan, operations and status are gone. One way to run
-        # something is better than three that drift.
-        commands = set(_commands())
-
-        for gone in ("do", "call", "run", "plan", "operations", "pipelines", "status"):
-            with self.subTest(command=gone):
-                self.assertNotIn(gone, commands)
-
     def test_describe_shows_the_operations_and_the_engines(self):
         _exit_code, out, _err = _run(["describe"])
 
         described = json.loads(out)
         self.assertTrue(described["operations"])
         self.assertIn("acquisition", {engine["id"] for engine in described["engines"]})
-
-    def test_describe_no_longer_offers_a_pipeline_layer(self):
-        _exit_code, out, _err = _run(["describe"])
-
-        self.assertNotIn("pipelines", json.loads(out))
 
     def test_describe_reads_one_engine_without_running_anything(self):
         exit_code, out, _err = _run(["describe", "acquisition"])

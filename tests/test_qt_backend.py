@@ -135,6 +135,8 @@ class DesktopBackendTests(unittest.TestCase):
     def test_dropseq_template_simulated_collection_gates_and_artifacts(self):
         self.connect()
         document = template_documents()["dropseq"]
+        document["steps"][0]["trigger_params"]["target_volume_ul"] = 5
+        document["steps"][0]["confirm_message"] = "Collect a 5 uL test aliquot?"
         saved = self.backend.call("save_protocol", {"protocol": document})
         plan = self.backend.plan_file(saved["path"])
         observed = self.backend.call("observe")
@@ -146,7 +148,7 @@ class DesktopBackendTests(unittest.TestCase):
         self.assertEqual(started["yield"]["reason"], "confirmation_required")
         self.assertFalse(self.backend.call("observe")["safety"]["armed"])
         self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 0.1})
-        deadline = time.monotonic() + 45
+        deadline = time.monotonic() + 10
         running_targets_seen = False
         while time.monotonic() < deadline:
             observed = self.backend.call("observe")
@@ -168,7 +170,7 @@ class DesktopBackendTests(unittest.TestCase):
         self.assertTrue(Path(summary["artifacts"]["fluidics_csv"]).is_file())
         events = self.backend.call("protocol_events", {"limit": 1000})["events"]
         completed = next(e for e in events if e["step_name"] == "Run set01_rep01" and e["outcome"] == "completed")
-        self.assertGreaterEqual(float(completed["step_volumes"][0]), 150)
+        self.assertGreaterEqual(float(completed["step_volumes"][0]), 5)
 
     def test_planning_never_invokes_engine_run(self):
         self.connect()
