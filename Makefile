@@ -1,18 +1,10 @@
-.PHONY: setup dev serve serve-live describe build test test-all test-core test-analyze test-control test-desktop lint fmt clean
+.PHONY: setup dev describe build test test-all test-core test-analyze test-control test-desktop lint fmt clean
 
 setup:
 	uv sync --all-extras
 
 dev:
 	uv run --extra control admet qt
-
-# MCP on stdio. Simulated by default: connecting is forced simulated and a
-# request for real hardware is refused.
-serve: setup
-	PYLON_CAMEMU=2 uv run admet serve --simulated
-
-serve-live: setup
-	uv run admet serve
 
 describe: setup
 	uv run admet describe acquisition

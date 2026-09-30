@@ -1,10 +1,4 @@
-"""observe and protocol_events: the MCP client's eyes on the rig.
-
-The point of these two is that a model driving the instrument over a wire has
-no plot to look at. observe is the whole picture in one call; protocol_events
-is what it has not seen yet. Neither may take data from anyone else, and
-neither may invent a measurement.
-"""
+"""Read-only observations preserve unavailable measurements and event cursors."""
 
 import time
 import unittest
@@ -23,14 +17,6 @@ class DeclarationTests(unittest.TestCase):
         self.assertEqual(operation("observe").kind, "read")
         self.assertEqual(operation("protocol_events").kind, "read")
 
-    def test_they_are_offered_over_mcp(self):
-        from admet.mcp.server import AdmetServer
-
-        names = {tool["name"] for tool in AdmetServer(simulated=True).tools()}
-
-        self.assertIn("observe", names)
-        self.assertIn("protocol_events", names)
-
 
 class DisconnectedTests(unittest.TestCase):
     """Nothing connected is a state to report, not an error and not zeros."""
@@ -46,7 +32,6 @@ class DisconnectedTests(unittest.TestCase):
         self.assertEqual(self.observed["channels"], [])
 
     def test_the_parts_that_are_not_running_yet_say_so(self):
-        self.assertFalse(self.observed["runtime"]["publishing"])
         self.assertFalse(self.observed["validation"]["active"])
         self.assertFalse(self.observed["safety"]["armed"])
         self.assertFalse(self.observed["safety"]["tripped"])
@@ -55,7 +40,7 @@ class DisconnectedTests(unittest.TestCase):
         # The shape must not change once the later milestones fill these in.
         for section in (
             "observed_at", "project", "connection", "polling", "recording",
-            "channels", "protocol", "guards", "runtime", "validation", "safety",
+            "channels", "protocol", "guards", "validation", "safety",
         ):
             with self.subTest(section=section):
                 self.assertIn(section, self.observed)

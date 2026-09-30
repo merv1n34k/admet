@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from admet.mcp.server import AdmetServer
+from admet.core.service import Admet
 from admet.workflows.json_protocol import normalize, template_documents, validate_channels
 
 
@@ -52,11 +52,9 @@ class JsonProtocolTests(unittest.TestCase):
             self.assertEqual(step["on_complete"], "zero")
             self.assertTrue(step["confirm_message"])
         self.assertEqual(document["steps"][0]["timeout_s"], 120)
-        server = AdmetServer(simulated=True)
-        with patch.object(server.admet, "engine_action", side_effect=AssertionError("planning actuated")):
-            plan = server.call("plan_protocol", {
-                "operation_id": "run_json_protocol", "settings": {"protocol": document},
-            })
+        admet = Admet()
+        with patch.object(admet, "engine_action", side_effect=AssertionError("planning actuated")):
+            plan = admet.plan_protocol(operation_id="run_json_protocol", settings={"protocol": document})
         self.assertEqual(plan["expected_duration_s"], 30)
         self.assertEqual(plan["steps"][0]["flow_setpoints_ul_min"], {"0": 300, "1": 40, "2": 40})
         self.assertEqual(plan["armed_safety_limits"]["pressure_mbar"], {})
@@ -135,81 +133,74 @@ class JsonProtocolTests(unittest.TestCase):
 
     def test_invalid_saved_file_does_not_hide_other_protocols(self):
         with tempfile.TemporaryDirectory() as tmp:
-            server = AdmetServer(simulated=True, project=f"{tmp}/p.admetp", create=True)
-            saved = server.call("save_protocol", {"protocol": DOCUMENT})
+            admet = Admet()
+            admet.create_project(f"{tmp}/p.admetp")
+            saved = admet.do("save_protocol", {"protocol": DOCUMENT})
             bad = deepcopy(DOCUMENT)
             bad["steps"][0]["trigger_type"] = "typo"
             Path(saved["path"]).with_name("bad.json").write_text(json.dumps(bad))
-            entries = server.call("list_protocols", {})["protocols"]
+            entries = admet.do("list_protocols", {})["protocols"]
             self.assertEqual(len(entries), 2)
             self.assertTrue(next(entry for entry in entries if entry["name"] == "bad")["error"])
 
     def test_timeout_fails_run_and_finalizes_recording(self):
         with tempfile.TemporaryDirectory() as tmp:
-            server = AdmetServer(simulated=True, project=f"{tmp}/p.admetp", create=True)
+            admet = Admet()
+            admet.create_project(f"{tmp}/p.admetp")
             try:
-                server.call("connect_fluidics", {})
-                server.call("apply_corrections", {})
+                admet.do("connect_fluidics", {"simulated": True})
+                admet.do("apply_corrections", {})
                 document = deepcopy(DOCUMENT)
                 document["steps"][0].update(
                     sensor_setpoints={"0": 0}, trigger_type="volume",
                     trigger_params={"sensor_index": 0, "target_volume_ul": 100}, timeout_s=0.05,
                 )
-                plan = server.call("plan_protocol", {
-                    "operation_id": "run_json_protocol", "settings": {"protocol": document},
-                })
-                server.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"]})
-                server.call("control_protocol", {"action": "confirm", "timeout_s": 1})
+                plan = admet.plan_protocol(operation_id="run_json_protocol", settings={"protocol": document})
+                admet.control_protocol(action="execute", plan_id=plan["plan_id"])
+                admet.control_protocol(action="confirm", timeout_s=1)
                 deadline = time.monotonic() + 3
-                while server.admet._executing_plan_id and time.monotonic() < deadline:
+                while admet._executing_plan_id and time.monotonic() < deadline:
                     time.sleep(0.01)
-                finished = server.call("planned_protocols", {})["plans"][0]
+                finished = admet.planned_protocols()["plans"][0]
                 self.assertEqual(finished["state"], "failed")
                 self.assertIn("timed out", finished["error"])
-                observed = server.call("observe", {})
+                observed = admet.do("observe", {})
                 self.assertFalse(observed["recording"]["active"])
                 self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0)
                                     for c in observed["channels"]))
             finally:
-                server.call("disconnect_fluidics", {})
+                admet.do("disconnect_fluidics", {})
 
-    def test_plan_is_non_actuating_and_direct_mcp_start_is_refused(self):
-        server = AdmetServer(simulated=True)
-        with patch.object(server.admet, "engine_action", side_effect=AssertionError("hardware")):
-            plan = server.call("plan_protocol", {
-                "operation_id": "run_json_protocol", "settings": {"protocol": DOCUMENT},
-            })
+    def test_plan_is_non_actuating(self):
+        admet = Admet()
+        with patch.object(admet, "engine_action", side_effect=AssertionError("hardware")):
+            plan = admet.plan_protocol(operation_id="run_json_protocol", settings={"protocol": DOCUMENT})
         self.assertEqual(plan["steps"][0]["flow_setpoints_ul_min"], {"0": 10})
         self.assertEqual(plan["armed_safety_limits"]["pressure_mbar"], {"0": 1000})
-        with self.assertRaisesRegex(RuntimeError, "plan_protocol"):
-            server.call("run_json_protocol", {"protocol": DOCUMENT})
 
     def test_simulated_plan_executes_and_zeros(self):
         with tempfile.TemporaryDirectory() as tmp:
-            server = AdmetServer(simulated=True, project=f"{tmp}/test.admetp", create=True)
+            admet = Admet()
+            admet.create_project(f"{tmp}/test.admetp")
             try:
-                server.call("connect_fluidics", {})
-                server.call("apply_corrections", {})
-                plan = server.call("plan_protocol", {
-                    "operation_id": "run_json_protocol", "settings": {"protocol": DOCUMENT},
-                })
-                server.call("control_protocol", {
-                    "action": "execute", "plan_id": plan["plan_id"], "timeout_s": 1,
-                })
-                server.call("control_protocol", {"action": "confirm", "timeout_s": 1})
-                server.admet.wait_for_protocol(timeout_s=2)
+                admet.do("connect_fluidics", {"simulated": True})
+                admet.do("apply_corrections", {})
+                plan = admet.plan_protocol(operation_id="run_json_protocol", settings={"protocol": DOCUMENT})
+                admet.control_protocol(action="execute", plan_id=plan["plan_id"], timeout_s=1)
+                admet.control_protocol(action="confirm", timeout_s=1)
+                admet.wait_for_protocol(timeout_s=2)
                 deadline = time.monotonic() + 3
-                while server.call("planned_protocols", {})["plans"][0]["state"] == "executing":
+                while admet.planned_protocols()["plans"][0]["state"] == "executing":
                     if time.monotonic() >= deadline:
                         self.fail("plan did not complete")
                     time.sleep(0.01)
                 self.assertEqual(
-                    server.call("planned_protocols", {})["plans"][0]["state"], "completed",
+                    admet.planned_protocols()["plans"][0]["state"], "completed",
                 )
-                observation = server.call("observe", {})
+                observation = admet.do("observe", {})
                 self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0)
                                     for c in observation["channels"]))
-                completed = server.call("planned_protocols", {})["plans"][0]
+                completed = admet.planned_protocols()["plans"][0]
                 run_dir = Path(tmp) / "test.admetp" / "records" / "protocols" / completed["run_id"]
                 summary = json.loads((run_dir / "summary.json").read_text())
                 self.assertEqual(summary["state"], "completed")
@@ -218,25 +209,26 @@ class JsonProtocolTests(unittest.TestCase):
                 self.assertEqual(json.loads((run_dir / "protocol.json").read_text()),
                                  normalize(DOCUMENT))
             finally:
-                server.call("disconnect_fluidics", {})
+                admet.do("disconnect_fluidics", {})
 
     def test_save_open_plan_file_survives_new_session(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = f"{tmp}/test.admetp"
-            first = AdmetServer(simulated=True, project=project, create=True)
-            saved = first.call("save_protocol", {"protocol": DOCUMENT})
+            first = Admet()
+            first.create_project(project)
+            saved = first.do("save_protocol", {"protocol": DOCUMENT})
             with self.assertRaises(FileExistsError):
-                first.call("save_protocol", {"protocol": DOCUMENT})
-            second = AdmetServer(simulated=True, project=project)
-            self.assertEqual(second.call("list_protocols", {})["protocols"][0]["name"],
+                first.do("save_protocol", {"protocol": DOCUMENT})
+            second = Admet(project=project)
+            self.assertEqual(second.do("list_protocols", {})["protocols"][0]["name"],
                              DOCUMENT["name"])
-            reopened = second.call("list_protocols", {"name": DOCUMENT["name"]})
+            reopened = second.do("list_protocols", {"name": DOCUMENT["name"]})
             self.assertEqual(reopened, saved)
-            with patch.object(second.admet, "engine_action", side_effect=AssertionError("setter")):
-                plan = second.call("plan_protocol_file", {"path": saved["path"]})
+            with patch.object(second, "engine_action", side_effect=AssertionError("setter")):
+                plan = second.plan_protocol_file(path=saved["path"])
             path = Path(project) / "plans" / f"{plan['plan_id']}.json"
             self.assertFalse(path.exists())
-            second.call("cancel_protocol_plan", {"plan_id": plan["plan_id"]})
+            second.cancel_protocol_plan(plan_id=plan["plan_id"])
             self.assertFalse(path.exists())
             with self.assertRaises(ValueError):
-                second.call("list_protocols", {"name": "../escape"})
+                second.do("list_protocols", {"name": "../escape"})

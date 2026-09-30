@@ -1,9 +1,8 @@
 """The way in.
 
 Everything that drives this system talks to core, and core talks to the engines.
-A terminal, an MCP client and any future interface all arrive here, so what one
-of them can do they can all do, and none of them has to know that a recording
-means two files in particular places.
+The desktop and Python callers share this service; neither needs to know
+which files a recording creates or where those files belong.
 
 Core owns the session. An engine is handed the paths it writes to and never
 chooses them: only core knows which project is open, and an engine picking its
@@ -165,17 +164,13 @@ class Admet:
         self._engines: dict[str, Any] = {}
         self._marks: dict[str, Any] = {}
         self.project: ProjectStore | None = None
-        # Attached by whoever provides them. Absent, observe reports honestly
-        # that nothing is publishing and nothing is running.
-        self._runtime: Any | None = None
         self._validation: Any | None = None
         self._protocol_plans: dict[str, dict[str, Any]] = {}
         self._executing_plan_id: str | None = None
         self._plan_stores: dict[str, Any] = {}
         self._run_artifacts: dict[str, Any] = {}
         self._execution_lock = threading.Lock()
-        # The publisher observes from its own thread, so creating an engine
-        # must not be a race between it and whoever is driving.
+        # Observation and commands may arrive from different desktop threads.
         self._engine_lock = threading.Lock()
 
         if project is not None:
@@ -254,10 +249,6 @@ class Admet:
     def engine_ids(self) -> list[str]:
         """Every engine this build has, whether or not it has been created yet."""
         return list(ENGINE_GROUPS)
-
-    def attach_runtime(self, publisher: Any) -> None:
-        """Let observe report the telemetry the serving process is publishing."""
-        self._runtime = publisher
 
     def engine(self, engine_id: str) -> Any:
         """The engine, created on first use. Analysis stacks are slow to import."""
@@ -815,12 +806,6 @@ class Admet:
             "sources": len(self.analysis_sources()),
         }
 
-    def runtime_state(self) -> dict[str, Any]:
-        """What the serving process is publishing, if it is publishing."""
-        if self._runtime is None:
-            return {"publishing": False, "path": None, "heartbeat": None, "pid": None}
-        return self._runtime.describe()
-
     def validation_state(self) -> dict[str, Any]:
         """The validation run in progress, if there is one."""
         if self._validation is None:
@@ -939,7 +924,7 @@ class Admet:
         after_sequence: int | None = None,
         timeout_s: float = 10.0,
     ) -> dict[str, Any]:
-        """Apply one MCP protocol action and return at its next bounded yield."""
+        """Apply one protocol action and return at its next bounded yield."""
         actions = {
             "confirm": "confirm_protocol",
             "skip": "skip_protocol",

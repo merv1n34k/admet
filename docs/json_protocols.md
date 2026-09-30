@@ -146,15 +146,13 @@ zeros the channels. Optional `name`, `repeat`, and `group` retain their existing
 step meanings. Completion defaults to `zero`; `hold` and `revert` are explicit
 choices. Use `confirm_message` to gate a step before its targets are applied.
 
-MCP operations (separate from the template-based Qt workflow):
+Python API (separate from the template-based Qt workflow):
 
-- `save_protocol`: `{"protocol": <definition>, "replace": false}` saves in the open project.
-- `list_protocols`: `{}` lists files; `{"name": "short_run"}` reads one.
-- `plan_protocol_file`: `{"path": "/path/to/project.admetp/protocols/short_run.json"}`
-  reads and validates a JSON file, then returns an immutable plan.
-- `plan_protocol`: `{"operation_id": "run_json_protocol", "settings": {"protocol": <definition>}}`
-  plans an inline definition using exactly the same path.
-- `control_protocol`: `{"action": "execute", "plan_id": "plan_…"}` executes after review
+- `admet.do("save_protocol", {"protocol": definition, "replace": False})` saves in the open project.
+- `admet.do("list_protocols")` lists files; pass `{"name": "short_run"}` to read one.
+- `admet.plan_protocol_file(path)` validates a JSON file and returns an immutable plan.
+- `admet.plan_protocol("run_json_protocol", {"protocol": definition})` plans an inline definition.
+- `admet.control_protocol(action="execute", plan_id=plan_id)` executes after review
   and explicit human approval. Existing confirm/skip/pause/resume/abort actions apply.
 
 Unknown fields, duplicate file keys, invalid numbers, unknown channels, and
@@ -175,12 +173,12 @@ experiment.admetp/
 ```
 
 Qt does not create or browse a top-level `protocols/` directory. Its selector
-uses bundled templates, and edits stay in memory until execution. The older MCP
+uses bundled templates, and edits stay in memory until execution. The Python
 `save_protocol`/`list_protocols` file library remains separate; existing files
 are not deleted or modified by this Qt change.
 
 JSON protocol execution automatically records fluidics. The run summary references
 that CSV and contains the plan, settings, digest, rig mapping, corrections, limits,
 and outcome. The project manifest registers definitions and run summaries. Plans
-on disk are audit records; a new owner never silently restores their permission
+on disk are audit records; a new session never silently restores their permission
 to execute. Reopen the definition and create a fresh plan to repeat an experiment.

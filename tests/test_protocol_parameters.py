@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from admet.mcp.server import AdmetServer
+from admet.core.service import Admet
 from admet.workflows.json_protocol import normalize, resolve
 
 
@@ -113,17 +113,17 @@ class ParameterProtocolTests(unittest.TestCase):
 
     def test_save_reopen_plan_is_immutable_and_planning_has_no_engine_calls(self):
         with tempfile.TemporaryDirectory() as tmp:
-            server = AdmetServer(simulated=True, project=f"{tmp}/p.admetp", create=True)
+            admet = Admet()
+            admet.create_project(f"{tmp}/p.admetp")
             document = typed_parameter_protocol()
             document["parameter_values"] = normalize(document)["parameter_values"]
             document["parameter_values"]["oil_base_flow"] = 10
-            server.call("save_protocol", {"protocol": document})
-            loaded = server.call("list_protocols", {"name": document["name"]})["protocol"]
+            admet.do("save_protocol", {"protocol": document})
+            loaded = admet.do("list_protocols", {"name": document["name"]})["protocol"]
             self.assertEqual(loaded["parameters"], document["parameters"])
             self.assertEqual(loaded["parameter_values"], document["parameter_values"])
-            with patch.object(server.admet, "engine_action", side_effect=AssertionError("hardware call")):
-                plan = server.call("plan_protocol", {
-                    "operation_id": "run_json_protocol", "settings": {"protocol": loaded}})
+            with patch.object(admet, "engine_action", side_effect=AssertionError("hardware call")):
+                plan = admet.plan_protocol(operation_id="run_json_protocol", settings={"protocol": loaded})
             loaded["parameter_values"]["oil_base_flow"] = 100
             self.assertEqual(plan["steps"][0]["flow_setpoints_ul_min"], {"1": 15})
             self.assertEqual(plan["normalized_settings"]["protocol"]["parameter_values"]["oil_base_flow"], 10)

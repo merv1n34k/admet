@@ -1,4 +1,4 @@
-"""Standalone desktop entry; no MCP owner or terminal client is involved."""
+"""Standalone Qt desktop entry."""
 
 import argparse
 from pathlib import Path

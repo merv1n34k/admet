@@ -2,7 +2,7 @@
 
 This branch reuses the earlier Qt camera/fluidics/correction/plot window and the
 current Python service. The desktop owns the devices directly; it does not
-start or attach to MCP, a terminal interface, or a background server.
+require an agent or a background server.
 
 ## Install and launch
 
@@ -58,8 +58,8 @@ selects by platform. If using an external SDK, `ADMET_FLUIGENT_SDK_PATH` points
 to its Python directory containing `Fluigent/SDK`. Never copy macOS `.venv` to
 Windows: sync a fresh environment there.
 
-Only one desktop instance per user is allowed. Do not also launch a headless
-ADMET owner or vendor control software against the same devices. The desktop
+Only one desktop instance per user is allowed. Do not also run Python hardware
+control or vendor software against the same devices. The desktop
 lock does not coordinate with those other programs.
 
 ## Operate without an agent

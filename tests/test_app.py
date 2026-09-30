@@ -1,9 +1,4 @@
-"""The command line: discovery, starting the controller, and nothing else.
-
-Running an experiment from the terminal was removed deliberately. It happens
-through MCP or the Python binding, so these tests are about what the CLI no
-longer offers as much as what it does.
-"""
+"""The command line exposes only desktop launch and API discovery."""
 
 import io
 import json
@@ -27,13 +22,12 @@ def _commands() -> dict:
 
 class SurfaceTests(unittest.TestCase):
     def test_the_command_line_is_discovery_the_controller_and_the_monitor(self):
-        self.assertEqual(set(_commands()), {"qt", "describe", "serve", "control"})
+        self.assertEqual(set(_commands()), {"qt", "describe"})
 
     def test_qt_launches_desktop_and_forwards_only_project(self):
         for args, forwarded in (
             (["qt"], []),
             (["qt", "--project", "test.admetp"], ["--project", "test.admetp"]),
-            (["--project", "test.admetp", "qt"], ["--project", "test.admetp"]),
         ):
             with self.subTest(args=args), patch("admet.ui.app.main", return_value=0) as desktop:
                 self.assertEqual(main(args), 0)
@@ -94,36 +88,6 @@ class SurfaceTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("run_priming", json.loads(err)["message"])
-
-
-class ServeTests(unittest.TestCase):
-    """Real hardware is opt-in, and saying nothing is not a choice."""
-
-    def test_serving_without_saying_which_hardware_is_refused(self):
-        with self.assertRaises(SystemExit) as caught:
-            with redirect_stderr(io.StringIO()):
-                build_parser().parse_args(["serve"])
-
-        self.assertEqual(caught.exception.code, 2)
-
-    def test_simulated_and_live_cannot_both_be_asked_for(self):
-        with self.assertRaises(SystemExit):
-            with redirect_stderr(io.StringIO()):
-                build_parser().parse_args(["serve", "--simulated", "--live"])
-
-    def test_either_one_on_its_own_is_accepted(self):
-        simulated = build_parser().parse_args(["serve", "--simulated"])
-        live = build_parser().parse_args(["serve", "--live"])
-
-        self.assertTrue(simulated.simulated)
-        self.assertFalse(simulated.live)
-        self.assertTrue(live.live)
-        self.assertFalse(live.simulated)
-
-    def test_a_runtime_directory_can_be_named(self):
-        args = build_parser().parse_args(["--runtime", "/tmp/rt", "serve", "--simulated"])
-
-        self.assertEqual(args.runtime, "/tmp/rt")
 
 
 if __name__ == "__main__":

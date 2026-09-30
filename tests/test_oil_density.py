@@ -57,9 +57,9 @@ def recorded_density(directory, *, densities=(1.2, 1.2), missing=False, unsettle
 
 class RecordedDensityTests(unittest.TestCase):
     def test_templates_plan_without_actuation_and_have_correct_budget(self):
-        from admet.mcp.server import AdmetServer
+        from admet.core.service import Admet
 
-        server = AdmetServer(simulated=True)
+        admet = Admet()
         for oil in ("dSurf", "EvaGreen", "custom mix"):
             document = template_documents()["density"]
             document["parameter_values"]["oil_name"] = oil
@@ -67,10 +67,8 @@ class RecordedDensityTests(unittest.TestCase):
             self.assertEqual(normalize(document), document)
             self.assertNotIn("temperature", json.dumps(document))
             self.assertEqual(document["pressure_limits_mbar"], {})
-            with patch.object(server.admet, "engine_action", side_effect=AssertionError("actuation")):
-                plan = server.call("plan_protocol", {
-                    "operation_id": "run_json_protocol", "settings": {"protocol": document},
-                })
+            with patch.object(admet, "engine_action", side_effect=AssertionError("actuation")):
+                plan = admet.plan_protocol(operation_id="run_json_protocol", settings={"protocol": document})
             self.assertEqual(plan["expected_duration_s"], 540)
             self.assertEqual(len(plan["required_confirmations"]), 6)
             self.assertAlmostEqual(sum(s["sensor_setpoints"].get("1", 0)

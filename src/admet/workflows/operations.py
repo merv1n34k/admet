@@ -1,7 +1,6 @@
 """What the system can be asked to do, and what has to be true first.
 
-This is the exposed surface. A terminal, an MCP client and any future interface
-call operations from here; none of them reaches an engine directly. An engine
+This is the guarded surface used by the desktop and Python binding. An engine
 action is a hardware primitive with no opinion about whether now is a sensible
 moment -- an operation is that opinion.
 
@@ -52,7 +51,6 @@ class Runner(Protocol):
 
     def mark(self, name: str, value: Any) -> None: ...
 
-    def runtime_state(self) -> dict[str, Any]: ...
 
     def validation_state(self) -> dict[str, Any]: ...
 
@@ -316,7 +314,6 @@ def _observe(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
             name: {"met": bool(passes(state)), "why_not": "" if passes(state) else remedy}
             for name, (passes, remedy) in REQUIREMENTS.items()
         },
-        "runtime": runner.runtime_state(),
         "validation": runner.validation_state(),
         "safety": runner.safety_state(),
         "planned_protocols": runner.planned_protocols()["plans"],
@@ -364,9 +361,7 @@ def _protocol_events(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]
 
 
 def _set_flow(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
-    engine_settings = dict(settings)
-    engine_settings.pop("control_lease_s", None)
-    return runner.engine_action("acquisition", "set_channel_flow", engine_settings).metadata
+    return runner.engine_action("acquisition", "set_channel_flow", settings).metadata
 
 
 def _stop_channel(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
@@ -817,14 +812,6 @@ OPERATIONS: tuple[Operation, ...] = (
         params=(
             _whole("channel_index", "Channel", 0, minimum=0),
             _number("channel_flow_ul_min", "Flow", 0.0, unit="uL/min"),
-            _number(
-                "control_lease_s",
-                "Control lease",
-                10.0,
-                minimum=1.0,
-                maximum=60.0,
-                unit="s",
-            ),
         ),
         requires=("fluidics", "corrections", "idle", "safe"),
         uses=("set_channel_flow",),
