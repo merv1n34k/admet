@@ -28,7 +28,7 @@ class JsonProtocolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with chdir(tmp):
                 self.assertEqual(set(template_documents()), {
-                    "dead_volume", "density", "dropseq", "flow_stability_scout", "gravimetry",
+                    "dead_volume", "density", "dropseq", "flow_stability_scout", "gravimetry", "viscosity",
                 })
             directory = Path(tmp) / "templates"
             directory.mkdir()

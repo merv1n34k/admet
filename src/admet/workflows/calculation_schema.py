@@ -10,6 +10,7 @@ SCHEMAS = {
     "recording_summary": (None, None),
     "gravimetry": ("admet.workflows.gravimetry", "normalize_calculation"),
     "dead_volume": ("admet.workflows.dead_volume", "normalize_calculation"),
+    "viscosity": ("admet.workflows.viscosity", "normalize_calculation"),
 }
 
 
@@ -30,6 +31,10 @@ def resolve_declarations(document, values):
             raise ValueError("unknown calculation type")
         if "liquid" in entry:
             entry["liquid"] = interpolate(entry["liquid"], values)
+        if entry["type"] == "viscosity":
+            entry["path_id"] = interpolate(entry.get("path_id"), values)
+            for sample in entry.get("samples", []):
+                sample["settle_s"] = expression(sample.get("settle_s"), values)
         if entry["type"] == "flow_scout":
             entry["height_cm"] = expression(entry.get("height_cm"), values)
         elif entry["type"] == "oil_density":

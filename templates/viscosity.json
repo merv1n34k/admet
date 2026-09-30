@@ -1,0 +1,159 @@
+{
+  "name": "viscosity",
+  "parameters": {
+    "oil_name": {
+      "type": "text",
+      "label": "Oil name",
+      "default": "oil"
+    },
+    "path_id": {
+      "type": "text",
+      "label": "Unchanged flow path ID",
+      "default": "M1-path-1"
+    },
+    "base_pressure": [
+      "M1 base pressure, mbar",
+      30
+    ],
+    "settle_s": [
+      "Settling time, s",
+      10
+    ],
+    "average_s": [
+      "Averaging time, s",
+      20
+    ]
+  },
+  "steps": [
+    {
+      "name": "Pressure point 1",
+      "pressure_setpoints": {
+        "1": "base_pressure * 1"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + average_s"
+      },
+      "timeout_s": "settle_s + average_s + 10",
+      "on_complete": "zero",
+      "confirm_message": "M1 only: keep the same filled flow path and outlet height throughout both passes and the reference run. Confirm the pressure range and path ID. Use comparable temperature for reference comparison; select a gravimetry result or enter a recorded-flow multiplier before calculation."
+    },
+    {
+      "name": "Pressure point 2",
+      "pressure_setpoints": {
+        "1": "base_pressure * 2"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + average_s"
+      },
+      "timeout_s": "settle_s + average_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pressure point 3",
+      "pressure_setpoints": {
+        "1": "base_pressure * 3"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + average_s"
+      },
+      "timeout_s": "settle_s + average_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pressure point 4",
+      "pressure_setpoints": {
+        "1": "base_pressure * 3"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + average_s"
+      },
+      "timeout_s": "settle_s + average_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pressure point 5",
+      "pressure_setpoints": {
+        "1": "base_pressure * 2"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + average_s"
+      },
+      "timeout_s": "settle_s + average_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pressure point 6",
+      "pressure_setpoints": {
+        "1": "base_pressure * 1"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + average_s"
+      },
+      "timeout_s": "settle_s + average_s + 10",
+      "on_complete": "zero"
+    }
+  ],
+  "measurements": {
+    "flow_multiplier": {
+      "label": "Recorded-flow multiplier (or select gravimetry result in Calculations)",
+      "unit": "1",
+      "min": 0
+    },
+    "known_viscosity": {
+      "label": "Known viscosity (reference oil only; otherwise leave blank)",
+      "unit": "mPa.s",
+      "min": 0
+    }
+  },
+  "calculations": [
+    {
+      "type": "viscosity",
+      "channel": 1,
+      "liquid": "{oil_name}",
+      "path_id": "{path_id}",
+      "flow_multiplier": "flow_multiplier",
+      "known_viscosity": "known_viscosity",
+      "samples": [
+        {
+          "step": 1,
+          "pass": 1,
+          "settle_s": "settle_s"
+        },
+        {
+          "step": 2,
+          "pass": 1,
+          "settle_s": "settle_s"
+        },
+        {
+          "step": 3,
+          "pass": 1,
+          "settle_s": "settle_s"
+        },
+        {
+          "step": 4,
+          "pass": 2,
+          "settle_s": "settle_s"
+        },
+        {
+          "step": 5,
+          "pass": 2,
+          "settle_s": "settle_s"
+        },
+        {
+          "step": 6,
+          "pass": 2,
+          "settle_s": "settle_s"
+        }
+      ]
+    },
+    {
+      "type": "recording_summary"
+    }
+  ]
+}
