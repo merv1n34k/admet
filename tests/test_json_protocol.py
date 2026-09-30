@@ -65,6 +65,20 @@ class JsonProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown"):
             normalize(document)
 
+    def test_calculation_declarations_and_measurement_units(self):
+        document = deepcopy(DOCUMENT)
+        document["calculations"] = [{"type": "recording_summary"}]
+        document["measurements"] = {"mass": {"label": "Mass", "unit": "mg", "min": 0,
+                                               "required": True, "step": 1}}
+        self.assertEqual(normalize(document)["measurements"], document["measurements"])
+        for change in ({"calculations": [{"type": "unknown"}]},
+                       {"calculations": [{"type": "recording_summary", "unused": 1}]},
+                       {"analysis": {"type": "recording_summary"}},
+                       {"measurements": {"mass": {"label": "Mass", "unit": "kg"}}},
+                       {"measurements": {"mass": {"label": "Mass", "min": 2, "max": 1}}}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                normalize({**document, **change})
+
     def test_invalid_settings_are_refused(self):
         for field, value in (("timeout_s", -1), ("repeat", 1.5), ("unknown", 1),
                              ("sensor_setpoints", {"-1": 10}),

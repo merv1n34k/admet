@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 import re
 
+from admet.workflows.calculation_schema import normalize_calculations, resolve_declarations
+
 
 def parameter_declarations(document):
     declarations = document.get("parameters", {})
@@ -164,16 +166,7 @@ def resolve(document):
         if isinstance(result.get("pressure_limits_mbar"), dict):
             result["pressure_limits_mbar"] = {
                 k: expression(v, values) for k, v in result["pressure_limits_mbar"].items()}
-        if isinstance(result.get("analysis"), dict) and result["analysis"].get("type") == "flow_scout":
-            result["analysis"]["height_cm"] = expression(result["analysis"].get("height_cm"), values)
-        if isinstance(result.get("analysis"), dict) and result["analysis"].get("type") == "oil_density":
-            result["analysis"]["oil_id"] = interpolate(result["analysis"].get("oil_id"), values)
-            points = result["analysis"].get("points")
-            if not isinstance(points, list) or any(not isinstance(p, dict) for p in points):
-                raise ValueError("density analysis points must be a list of objects")
-            for point in points:
-                for key in ("height_cm", "settle_s"):
-                    point[key] = expression(point.get(key), values)
+    resolve_declarations(result, values)
     return _normalize_resolved(result)
 
 
@@ -212,12 +205,29 @@ def measurement_fields(value, step_count):
     for key, field in value.items():
         if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{0,63}", key):
             raise ValueError("invalid measurement key")
-        if (not isinstance(field, dict) or set(field) - {"label", "step"}
+        if (not isinstance(field, dict) or set(field) - {"label", "step", "unit", "min", "max", "required"}
                 or not isinstance(field.get("label"), str) or not field["label"].strip()):
             raise ValueError(f"measurement {key}: expected label and optional step")
         if "step" in field and (type(field["step"]) is not int or not 1 <= field["step"] <= step_count):
             raise ValueError(f"measurement {key}: step must identify an expanded step")
+        if "unit" in field and field["unit"] not in {"mg", "g", "s", "uL", "g/mL", "mPa.s", "mm", "cm", "1"}:
+            raise ValueError(f"measurement {key}: unsupported unit")
+        if "required" in field and type(field["required"]) is not bool:
+            raise ValueError(f"measurement {key}: required must be boolean")
+        for bound in ("min", "max"):
+            if bound in field:
+                number(field[bound], f"measurement {key} {bound}", minimum=-math.inf)
+        if field.get("min", -math.inf) > field.get("max", math.inf):
+            raise ValueError(f"measurement {key}: min exceeds max")
     return deepcopy(value)
+
+
+def validate_measurement(value, field):
+    if value is None:
+        return
+    number(value, "measurement", minimum=-math.inf)
+    if not field.get("min", -math.inf) <= value <= field.get("max", math.inf):
+        raise ValueError("measurement is outside declared bounds")
 
 
 def _normalize_resolved(document):
@@ -226,7 +236,7 @@ def _normalize_resolved(document):
 
     if not isinstance(document, dict):
         raise ValueError("protocol must be a JSON object")
-    unknown = set(document) - {"name", "steps", "pressure_limits_mbar", "analysis", "measurements"}
+    unknown = set(document) - {"name", "steps", "pressure_limits_mbar", "analysis", "calculations", "measurements"}
     if unknown:
         raise ValueError(f"unknown protocol fields: {', '.join(sorted(unknown))}")
     name = document.get("name")
@@ -290,13 +300,11 @@ def _normalize_resolved(document):
     result = {"name": name, "pressure_limits_mbar": limits, "steps": normalized}
     if "measurements" in document:
         result["measurements"] = measurement_fields(document["measurements"], len(expanded))
+    calculations = normalize_calculations(document, normalized, result.get("measurements", {}))
     if "analysis" in document:
-        if isinstance(document["analysis"], dict) and document["analysis"].get("type") == "flow_scout":
-            from admet.workflows.flow_scout import normalize_analysis
-        else:
-            from admet.workflows.oil_density import normalize_analysis
-
-        result["analysis"] = normalize_analysis(document["analysis"], normalized)
+        result["analysis"] = calculations[0]
+    elif "calculations" in document:
+        result["calculations"] = calculations
     return result
 
 

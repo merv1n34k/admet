@@ -1,13 +1,12 @@
 """Protocol definitions and run artifacts within an ADMET project."""
 
 import json
-import math
 import os
 from pathlib import Path
 import re
 import tempfile
 
-from admet.workflows.json_protocol import load, normalize
+from admet.workflows.json_protocol import load, normalize, validate_measurement
 from admet.core.compat import protocol_run_id, valid_recorded_run_id
 
 
@@ -96,9 +95,8 @@ class ProtocolStore:
         if changes is not None:
             if not isinstance(changes, dict) or set(changes) - set(payload["fields"]):
                 raise ValueError("undeclared measurement")
-            for value in changes.values():
-                if value is not None and (type(value) not in (int, float) or not math.isfinite(value)):
-                    raise ValueError("measurements must be finite numbers or null")
+            for key, value in changes.items():
+                validate_measurement(value, payload["fields"][key])
             payload["values"].update(changes)
             payload["revision"] += 1
             write_json(path, payload)

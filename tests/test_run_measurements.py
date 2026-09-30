@@ -50,6 +50,18 @@ class RunMeasurementsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid run ID"):
             store.measurements("plan_../../elsewhere")
 
+    def test_measurement_bounds_are_atomic_and_required_allows_null_until_calculation(self):
+        store = self.backend.service.protocol_store()
+        document = measured_protocol()
+        document["measurements"]["before_mg"].update(unit="mg", min=0, required=True)
+        run_id = "run_" + "b" * 32
+        store.begin({"plan_id": "p", "run_id": run_id, "normalized_settings": {"protocol": document}})
+        self.assertIsNone(store.measurements(run_id)["values"]["before_mg"])
+        with self.assertRaises(ValueError):
+            store.measurements(run_id, {"after_mg": 5, "before_mg": -1})
+        self.assertEqual(store.measurements(run_id)["revision"], 0)
+        self.assertIsNone(store.measurements(run_id)["values"]["after_mg"])
+
     def test_execution_initializes_null_values_and_rerun_is_independent(self):
         self.backend.call("connect_fluidics")
         self.backend.call("apply_corrections")
