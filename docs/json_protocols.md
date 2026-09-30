@@ -106,6 +106,12 @@ protocol names and valid trigger/completion choices). Substitution is single-pas
 inserted text is never evaluated. Booleans can label a run but do not conditionally
 skip steps. Raw JSON editing remains available.
 
+Channel keys can use a declared numeric choice: `"sensor_setpoints": {"{channel}": "working_flow"}`.
+The resolved key must be a valid channel index; duplicate resolved keys are refused.
+Use the same parameter in calculation `channel` so the selected sensor and analysis
+stay aligned. Changing the channel does not automatically change the flow value:
+set both explicitly in the Parameters table.
+
 The archived `protocol.json` preserves the template and chosen values;
 `plan.json` preserves exact resolved, expanded steps and the executable digest.
 Calculations resolve archived inputs, not current GUI values. Existing plain JSON
@@ -221,20 +227,43 @@ changing their execution targets, heights or confirmation gates.
 
 ### Gravimetry
 
-Three timed M1 collections: enter each vessel's before/after mass in the measurement
-table. Weigh the complete collection. Supply oil density manually, or explicitly
+The template runs one selected channel (0 Oil-L, 1 M1, 2 M2). Set working flow to
+67 µL/min for M1/M2 or 250 µL/min for L. There are three targets: `low_flow`,
+`(low_flow + working_flow) / 2`, and `working_flow`. The lower target defaults to
+15 µL/min. Run ascending, descending, then ascending: three independent collections
+per target, nine total. Each collection is nominally 100 µL by default; time is
+`collection_ul × 60 / target`. The budget is 900 µL nominal, excluding priming and
+any separate setup runs. Actual collected volume depends on the calibration.
+
+Enter only each vessel's before/after mass in the measurement table; there is no
+mass time-series requirement or new balance UI. Weigh the complete collection.
+Supply liquid density manually, or explicitly
 select a saved usable density result identifying the same oil in Calculations.
 
 - True volume (µL) = mass gain (mg) / density (g/mL).
 - Recorded volume = trapezoidal integral of recorded flow over the collection step.
-- Proposed multiplier = true volume / recorded volume.
+- Per-collection multiplier = true volume / recorded volume.
+- True and recorded mean flow = respective volume / actual collection time.
+- Fit true flow against recorded flow across collections; require R² ≥0.95 and
+  positive slope. This is **not** a mass-versus-time R².
 
 Recorded flow already includes the SDK correction. A proposed multiplier of 1.2
 means another 20% relative to that recorded flow, **not** replacing SDK scale 2.25
 with 1.2. There is no automatic application, and this number is not predefined by
-the experiment. Use at least two valid collections; repeat CV must be ≤10%.
-Repeat SD/SEM is reported, not total uncertainty: balance resolution, density,
-evaporation and retained droplets remain sources of systematic error.
+the experiment. Require three valid collections per target and true-flow repeat
+CV ≤5%. Mean recorded flow more than 20% from its target is flagged for capacity
+or settling investigation. Before/after measurements include startup; they measure
+complete-dispense calibration, not a separately isolated steady-state mass slope.
+
+Results show per-target corrections, repeat SD and a repeatability-only 95%
+Student-t interval (three independent, approximately normal collections). Direction
+differences are reported rather than averaged away; with two ascending passes and
+one descending pass they are exploratory, not a precise hysteresis estimate. A
+single multiplier is offered only when all factors span ≤5% of their mean;
+otherwise use the flow-dependent calibration curve. R² and three repeats alone
+do not establish absolute accuracy or guarantee statistical significance. Balance
+resolution, density, evaporation and retained droplets add systematic uncertainty.
+Historical single-rate before/after runs remain readable as single-rate checks.
 
 ### Dead volume
 

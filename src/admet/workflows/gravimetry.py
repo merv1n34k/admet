@@ -13,15 +13,26 @@ def normalize_calculation(entry, steps, fields):
         raise ValueError("gravimetry requires type, channel, liquid, density and samples")
     if not isinstance(entry["liquid"], str) or not entry["liquid"].strip():
         raise ValueError("liquid must identify the measured oil")
-    sample_steps(entry, steps, mode="flow")
+    expanded = sample_steps(entry, steps, mode="flow")
     measurement_binding(fields, entry["density"], {"g/mL"})
     for sample in entry["samples"]:
-        if set(sample) != {"step", "before", "after"}:
-            raise ValueError("gravimetry sample requires step, before and after")
+        if set(sample) not in ({"step", "before", "after"}, {"step", "pass", "before", "after"}):
+            raise ValueError("gravimetry sample requires step, before, after and optional pass")
         for key in ("before", "after"):
             measurement_binding(fields, sample[key], {"mg", "g"}, sample["step"])
         if sample["before"] == sample["after"]:
             raise ValueError("before and after masses must be distinct measurements")
+    if any("pass" in sample for sample in entry["samples"]):
+        passes = {1: [], 2: [], 3: []}
+        for sample in entry["samples"]:
+            if type(sample.get("pass")) is not int or sample["pass"] not in passes:
+                raise ValueError("flow calibration requires passes 1, 2 and 3")
+            passes[sample["pass"]].append(expanded[sample["step"] - 1].sensor_setpoints[entry["channel"]])
+        if (len(passes[1]) != 3 or passes[2] != passes[1][::-1] or passes[3] != passes[1]
+                or any(b <= a for a, b in zip(passes[1], passes[1][1:]))
+                or [s["step"] for s in entry["samples"]] != sorted(s["step"] for s in entry["samples"])
+                or [s["pass"] for s in entry["samples"]] != sorted(s["pass"] for s in entry["samples"])):
+            raise ValueError("flow calibration requires three increasing targets, reverse, then increasing again")
     return deepcopy(entry)
 
 
@@ -83,13 +94,65 @@ def calibration_identity(context):
             "simulated": rig.get("simulated")}
 
 
+def linear_fit(x, y):
+    if len(x) != len(y) or len(x) < 3:
+        raise ValueError("At least three independent points are required for a fit")
+    mx, my = mean(x), mean(y)
+    xx, yy = sum((v - mx) ** 2 for v in x), sum((v - my) ** 2 for v in y)
+    if xx <= 0 or yy <= 0:
+        raise ValueError("A fit requires distinct measured values")
+    slope = sum((a - mx) * (b - my) for a, b in zip(x, y)) / xx
+    intercept = my - slope * mx
+    residual = sum((b - intercept - slope * a) ** 2 for a, b in zip(x, y))
+    return {"slope": slope, "intercept": intercept, "r_squared": 1 - residual / yy,
+            "slope_standard_error": math.sqrt(residual / (len(x) - 2) / xx)}
+
+
+def flow_curve(rows, issues):
+    groups = []
+    for target in sorted({row["target_ul_min"] for row in rows}):
+        samples = [row for row in rows if row["target_ul_min"] == target and not row["issues"]]
+        stats = repeat_statistics([row["true_flow_ul_min"] for row in samples])
+        if len(samples) != 3:
+            issues.append(f"{target:g} µL/min: three valid independent collections required")
+        cv = stats["sd"] / stats["mean"] if stats["sd"] is not None and stats["mean"] > 0 else None
+        if cv is not None and cv > 0.05:
+            issues.append(f"{target:g} µL/min: true-flow repeat CV exceeds 5%")
+        up = [row["multiplier"] for row in samples if row["pass"] != 2]
+        down = [row["multiplier"] for row in samples if row["pass"] == 2]
+        hysteresis = (100 * (mean(up) - mean(down)) / mean(up) if up and down else None)
+        groups.append({"target_ul_min": target, "true_flow": stats, "repeat_cv": cv,
+                       "recorded_flow_ul_min": mean(row["recorded_flow_ul_min"] for row in samples) if samples else None,
+                       "multiplier": mean(row["multiplier"] for row in samples) if samples else None,
+                       "true_flow_repeat_ci95_ul_min": [stats["mean"] - 4.302653 * stats["sem"],
+                                                         stats["mean"] + 4.302653 * stats["sem"]]
+                       if len(samples) == 3 else None,
+                       "up_down_difference_percent": hysteresis})
+    fit = None
+    if not issues:
+        try:
+            fit = linear_fit([row["recorded_flow_ul_min"] for row in rows], [row["true_flow_ul_min"] for row in rows])
+            if fit["slope"] <= 0 or fit["r_squared"] < 0.95:
+                issues.append("Calibration curve requires positive slope and R² >= 0.95")
+        except ValueError as exc:
+            issues.append(str(exc))
+    return {"targets": groups, "flow_fit": fit,
+            "calibration_curve": [{"recorded_flow_ul_min": group["recorded_flow_ul_min"],
+                                    "true_flow_ul_min": group["true_flow"]["mean"]} for group in groups]
+            if not issues else None}
+
+
 def calculate(context):
     check(context)
     rho = density(context)
     config = context["config"]
     rows, issues, factors = [], [], []
     for sample in config["samples"]:
-        result = {"step": sample["step"], "true_volume_ul": None, "recorded_volume_ul": None,
+        step = context["summary"]["steps"][sample["step"] - 1]
+        result = {"step": sample["step"], "pass": sample.get("pass"),
+                  "target_ul_min": step["flow_setpoints_ul_min"][str(config["channel"])],
+                  "true_flow_ul_min": None, "recorded_flow_ul_min": None,
+                  "true_volume_ul": None, "recorded_volume_ul": None,
                   "multiplier": None, "issues": []}
         try:
             masses = [measurement(context, sample[key]) *
@@ -98,25 +161,36 @@ def calculate(context):
             true_volume = (masses[1] - masses[0]) / rho
             window = step_window(context, sample["step"])
             recorded = volume_ul(trace(context, config["channel"], *window))
-            if true_volume <= 0 or recorded <= 0:
+            if not all(math.isfinite(v) and v > 0 for v in (true_volume, recorded)):
                 raise ValueError("Collection mass and recorded volume must be positive")
             factor = true_volume / recorded
             factors.append(factor)
             result.update(true_volume_ul=true_volume, recorded_volume_ul=recorded, multiplier=factor,
-                          window_elapsed_s=window)
+                          window_elapsed_s=window, true_flow_ul_min=true_volume * 60 / (window[1] - window[0]),
+                          recorded_flow_ul_min=recorded * 60 / (window[1] - window[0]))
+            if abs(result["recorded_flow_ul_min"] - result["target_ul_min"]) > 0.2 * result["target_ul_min"]:
+                raise ValueError("Recorded mean flow differs from target by more than 20%; investigate capacity/settling")
         except ValueError as exc:
             result["issues"].append(str(exc))
             issues.append(f"Step {sample['step']}: {exc}")
         rows.append(result)
     stats = repeat_statistics(factors)
-    if stats["sd"] is not None and stats["sd"] > 0.1 * stats["mean"]:
+    curve = flow_curve(rows, issues) if any("pass" in s for s in config["samples"]) else {}
+    if not curve and stats["sd"] is not None and stats["sd"] > 0.1 * stats["mean"]:
         issues.append("Correction repeat CV exceeds 10%; investigate collection consistency")
+    scalar_ok = not curve or (factors and max(factors) - min(factors) <= 0.05 * stats["mean"])
     return {"status": "usable" if len(factors) >= 2 and not issues else "inconclusive",
             "channel": config["channel"], "liquid": config["liquid"], "density_g_ml": rho, "samples": rows,
-            "multiplier": stats["mean"] if len(factors) >= 2 and not issues else None,
-            "repeat_statistics": stats, "uncertainty": None, "issues": issues,
-            "thresholds": {"repeat_cv_max": 0.1, "minimum_repeats": 2},
+            "multiplier": stats["mean"] if len(factors) >= 2 and not issues and scalar_ok else None,
+            **curve,
+            **({"repeat_statistics": stats} if not curve else {}), "uncertainty": None, "issues": issues,
+            "thresholds": {"repeat_cv_max": 0.05 if curve else 0.1, "minimum_repeats": 3 if curve else 2,
+                           "flow_fit_r_squared_min": 0.95 if curve else None},
             "correction_settings": calibration_context(context),
             "calibration_identity": calibration_identity(context),
             "note": "Multiplier applies to recorded flow, not raw sensor readings. No hardware changes. "
-                    "SEM describes repeatability only; density, balance, timing and retained droplets add uncertainty."}
+                    "Before/after weights characterize complete dispenses, including startup. R² describes the "
+                    "recorded-versus-true flow curve, not mass versus time. Per-target 95% intervals use three "
+                    "independent normally distributed collections, not sensor sample count. Direction differences "
+                    "are exploratory (two ascending passes, one descending). Density, balance, evaporation and "
+                    "retained droplets add uncertainty. A flow-dependent correction must not be averaged away."}

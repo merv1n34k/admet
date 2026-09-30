@@ -28,6 +28,21 @@ def typed_parameter_protocol():
 
 
 class ParameterProtocolTests(unittest.TestCase):
+    def test_selected_channel_resolves_targets_and_refuses_collisions(self):
+        doc = parameter_protocol()
+        doc["parameters"]["channel"] = {"type": "choice", "label": "Channel", "default": 1, "options": [0, 1, 2]}
+        doc["steps"][0]["sensor_setpoints"] = {"{channel}": "oil_base_flow"}
+        for channel in (0, 1, 2):
+            doc["parameter_values"] = {"channel": channel}
+            self.assertEqual(resolve(doc)["steps"][0]["sensor_setpoints"], {str(channel): 5})
+        doc["steps"][0]["sensor_setpoints"]["2"] = 10
+        with self.assertRaisesRegex(ValueError, "duplicate targets"):
+            normalize(doc)
+        doc["steps"][0]["sensor_setpoints"].pop("2")
+        doc["pressure_limits_mbar"] = {"{channel}": 100, "2": 200}
+        with self.assertRaisesRegex(ValueError, "duplicate limits"):
+            normalize(doc)
+
     def test_typed_parameters_resolve_without_changing_source_or_casting_booleans(self):
         document = typed_parameter_protocol()
         before = deepcopy(document)

@@ -31,6 +31,8 @@ def resolve_declarations(document, values):
             raise ValueError("unknown calculation type")
         if "liquid" in entry:
             entry["liquid"] = interpolate(entry["liquid"], values)
+        if "channel" in entry:
+            entry["channel"] = expression(entry["channel"], values)
         if entry["type"] == "viscosity":
             entry["path_id"] = interpolate(entry.get("path_id"), values)
             samples = entry.get("samples")

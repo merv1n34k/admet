@@ -34,7 +34,7 @@ class JsonProtocolTests(unittest.TestCase):
                     backend.call("connect_fluidics")
                     self.assertTrue(backend.engine.hardware.state.simulated)
                     backend.call("apply_corrections")
-                    for name, parameters in (("gravimetry", {"collection_s": 0.3}),
+                    for name, parameters in (("gravimetry", {"collection_ul": 0.1}),
                                              ("dead_volume", {"window_s": 0.3}),
                                              ("viscosity", {"settle_s": 0, "average_s": 5})):
                         source = template_documents()[name]

@@ -130,10 +130,10 @@ CALCULATIONS = {
                     "check": dead_volume.check, "files": ("protocol.json", "events.jsonl"),
                     "references": {"calibration": "gravimetry"},
                     "description": "Integrate calibrated flow between observed marker injection and arrival."},
-    "gravimetry": {"label": "Gravimetry", "version": 1, "calculate": gravimetry.calculate,
+    "gravimetry": {"label": "Gravimetry", "version": 2, "calculate": gravimetry.calculate,
                    "check": gravimetry.check, "files": ("protocol.json", "events.jsonl"),
                    "references": {"density": "oil_density"},
-                   "description": "Weighed collections versus integrated measured flow; proposes a multiplier only."},
+                   "description": "Before/after weights: calibration curve, per-rate repeatability and direction differences."},
     "oil_density": {"label": "Oil density", "version": 2, "calculate": _density,
                     "files": ("protocol.json", "events.jsonl"),
                     "description": "Two height passes from a density protocol; excludes scout and settling."},
@@ -204,6 +204,19 @@ def result_text(payload):
                       "STEP | MASS-DERIVED (µL) | RECORDED (µL) | MULTIPLIER"]
             lines += [f"{s['step']} | {number(s['true_volume_ul'])} | {number(s['recorded_volume_ul'])} | "
                       f"{number(s['multiplier'])}" for s in result["samples"]]
+            if result.get("targets"):
+                fit = result.get("flow_fit") or {}
+                lines += [f"Flow-curve R²: {number(fit.get('r_squared'))}",
+                          f"True Q = {number(fit.get('slope'))} × recorded Q + {number(fit.get('intercept'))} µL/min",
+                          "TARGET | TRUE Q ± REPEAT SD (µL/min) | N | FACTOR | UP/DOWN Δ (%)"]
+                for row in result["targets"]:
+                    stats = row["true_flow"]
+                    lines.append(f"{number(row['target_ul_min'])} | {number(stats['mean'])} ± {number(stats['sd'])} | "
+                                 f"{stats['repeats']} | {number(row['multiplier'])} | "
+                                 f"{number(row['up_down_difference_percent'])}")
+                    interval = row["true_flow_repeat_ci95_ul_min"]
+                    if interval:
+                        lines.append(f"  Repeatability 95% CI: {number(interval[0])}–{number(interval[1])} µL/min")
         elif kind == "dead_volume":
             lines += [f"Effective displacement volume: {number(result['volume_ul'])} µL",
                       "STEP | TRANSIT (s) | VOLUME (µL) | TIMING UNCERTAINTY (µL)"]

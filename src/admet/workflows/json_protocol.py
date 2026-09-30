@@ -155,8 +155,13 @@ def resolve(document):
                 raise ValueError("each step must be an object")
             for key in ("sensor_setpoints", "pressure_setpoints", "trigger_params"):
                 if isinstance(step.get(key), dict):
-                    step[key] = {k: interpolate(v, values) if k == "message" else expression(v, values)
-                                 for k, v in step[key].items()}
+                    compiled = {}
+                    for k, v in step[key].items():
+                        target_key = interpolate(k, values) if key != "trigger_params" else k
+                        if target_key in compiled:
+                            raise ValueError("channel parameters resolve to duplicate targets")
+                        compiled[target_key] = interpolate(v, values) if k == "message" else expression(v, values)
+                    step[key] = compiled
             for key in ("timeout_s", "repeat"):
                 if key in step:
                     step[key] = expression(step[key], values)
@@ -164,8 +169,13 @@ def resolve(document):
                 if isinstance(step.get(key), str):
                     step[key] = interpolate(step[key], values)
         if isinstance(result.get("pressure_limits_mbar"), dict):
-            result["pressure_limits_mbar"] = {
-                k: expression(v, values) for k, v in result["pressure_limits_mbar"].items()}
+            limits = {}
+            for k, v in result["pressure_limits_mbar"].items():
+                target_key = interpolate(k, values)
+                if target_key in limits:
+                    raise ValueError("channel parameters resolve to duplicate limits")
+                limits[target_key] = expression(v, values)
+            result["pressure_limits_mbar"] = limits
     resolve_declarations(result, values)
     return _normalize_resolved(result)
 
