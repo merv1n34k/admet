@@ -9,8 +9,8 @@ requirement that is not met refuses the operation and says which one and what to
 do about it. There is no override: a guard that can be waved through is a guard
 nobody trusts.
 
-To add an experiment: write a builder in protocols.py, then add an Operation here
-naming it. The parameters are declared on the operation, so nothing else changes.
+Experiments use JSON definitions through run_json_protocol. Priming and Wash
+also retain named operations for library callers.
 """
 
 from __future__ import annotations
@@ -26,10 +26,6 @@ from admet.core.engine import READ, START, WRITE, Param, ParamKind, ParamOption
 from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNELS,
     FLUIDIC_CHANNEL_UNITS,
-    GRAVIMETRIC_REPLICATES,
-    STABILITY_DURATION_S,
-    STABILITY_TIMEOUT_S,
-    STABILITY_TOLERANCE_UL_MIN,
 )
 from admet.engines.acquisition.pipeline import ON_COMPLETE, ProtocolStep
 from admet.engines.acquisition.triggers import TRIGGER_TYPES, trigger_params
@@ -51,18 +47,11 @@ class Runner(Protocol):
 
     def mark(self, name: str, value: Any) -> None: ...
 
-
-    def validation_state(self) -> dict[str, Any]: ...
-
     def safety_state(self) -> dict[str, Any]: ...
 
     def emergency_stop(self, reason: str) -> dict[str, Any]: ...
 
     def arm_pressure_limits(self, limits: dict[int, float]) -> dict[str, Any]: ...
-
-    def save_validation(self, summary: dict[str, Any], *, check_id: str) -> Any: ...
-
-    def start_validation(self, run: Any) -> None: ...
 
     def polling_started_monotonic(self) -> float: ...
 
@@ -230,61 +219,6 @@ def _apply_corrections(runner: Runner, settings: dict[str, Any]) -> dict[str, An
     return result.metadata
 
 
-def _validate_oil_capacity(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
-    """Measure how much oil the path carries, stopping short of the ceiling."""
-    from admet.workflows import validation
-
-    configuration = str(settings["configuration"])
-    if configuration not in validation.CONFIGURATIONS:
-        raise Refused(
-            f"configuration must be one of: {', '.join(validation.CONFIGURATIONS)}; "
-            f"got {configuration!r}"
-        )
-    trip_mbar = settings["oil_pressure_trip_mbar"]
-    targets = [float(t) for t in (settings.get("flow_targets_ul_min") or [])]
-    if not targets:
-        raise Refused("validate_oil_capacity needs at least one flow target")
-
-    observed = runner.engine_action("acquisition", "read_observation", {}).metadata
-    channels = observed.get("channels") or []
-    if len(channels) <= validation.OIL_CHANNEL:
-        raise Refused(
-            f"the instrument reports {len(channels)} channels, so there is no "
-            f"channel {validation.OIL_CHANNEL} to run the oil line on"
-        )
-    if not observed.get("polling"):
-        raise Refused("the fluidics are not being polled; nothing would be measured")
-
-    prepared = {**settings, "flow_targets_ul_min": targets, "configuration": configuration}
-    steps, plan = validation.build_steps(prepared, channels[validation.OIL_CHANNEL])
-
-    # Apply this run's explicit limits (or disarm old limits) before actuation.
-    runner.arm_pressure_limits({validation.OIL_CHANNEL: trip_mbar} if trip_mbar is not None else {})
-
-    check_id = f"oilcap_{configuration}_{now_iso()[:19].replace(':', '').replace('-', '')}"
-    started = runner.do(
-        "start_recording",
-        {"recording_label": check_id, "include_video": bool(settings.get("include_video", False))},
-    )
-
-    run = validation.ValidationRun(runner, prepared, plan, check_id=check_id)
-    if started.get("csv_path"):
-        run.note_artifact("fluidics_csv", started["csv_path"])
-    result = runner.run_steps(steps, tick_s=float(settings.get("tick_s", 0.2)))
-    runner.start_validation(run)
-
-    return {
-        **result.metadata,
-        "validation_id": check_id,
-        "configuration": configuration,
-        "targets_ul_min": sorted(set(targets)),
-        "oil_pressure_trip_mbar": trip_mbar,
-        "fluidics_csv": started.get("csv_path"),
-        "steps": len(steps),
-        "awaiting": "confirm_protocol -- the channel mapping must be confirmed before oil moves",
-    }
-
-
 def _emergency_stop(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]:
     return runner.emergency_stop(str(settings.get("stop_reason") or ""))
 
@@ -314,7 +248,6 @@ def _observe(runner: Runner, _settings: dict[str, Any]) -> dict[str, Any]:
             name: {"met": bool(passes(state)), "why_not": "" if passes(state) else remedy}
             for name, (passes, remedy) in REQUIREMENTS.items()
         },
-        "validation": runner.validation_state(),
         "safety": runner.safety_state(),
         "planned_protocols": runner.planned_protocols()["plans"],
     }
@@ -354,7 +287,6 @@ def _protocol_events(runner: Runner, settings: dict[str, Any]) -> dict[str, Any]
         "latest_sequence": events[-1]["sequence"] if events else after,
         "events": events,
     }
-
 
 
 # ---- channels --------------------------------------------------------------
@@ -570,16 +502,6 @@ def build_protocol_steps(
         if not declared:
             raise Refused("run_steps needs at least one step")
         return [_step_from(entry, index) for index, entry in enumerate(declared)]
-    if operation.id == "validate_oil_capacity":
-        from admet.workflows import validation
-
-        configuration = str(settings["configuration"])
-        if configuration not in validation.CONFIGURATIONS:
-            raise Refused(f"configuration must be one of: {', '.join(validation.CONFIGURATIONS)}")
-        if len(channels) <= validation.OIL_CHANNEL:
-            raise Refused("the configured rig has no Oil-L channel to plan against")
-        steps, _ = validation.build_steps(settings, channels[validation.OIL_CHANNEL])
-        return steps
     return protocols.build_protocol(operation.protocol, settings)
 
 
@@ -704,62 +626,6 @@ OPERATIONS: tuple[Operation, ...] = (
         run=_apply_corrections,
     ),
     Operation(
-        "validate_oil_capacity",
-        "Validate oil-path capacity",
-        "Measure how much oil the path carries, one target at a time, stopping "
-        "short of the controller's ceiling rather than finding it. Asks the "
-        "operator to confirm the channel mapping before anything flows. Returns "
-        "once started; poll observe and protocol_events while it runs.",
-        kind=START,
-        starts_protocol=True,
-        requires=("project", "fluidics", "corrections", "idle", "safe"),
-        params=(
-            Param(
-                "configuration",
-                "Configuration",
-                ParamKind.CHOICE,
-                default="bypass_chip",
-                required=True,
-                options=(
-                    ParamOption("bypass_chip", "Bypass the chip"),
-                    ParamOption("with_chip", "Through the chip"),
-                ),
-                description="What is plumbed in; the difference isolates chip resistance",
-            ),
-            _number("settle_tolerance_ul_min", "Settle tolerance", 5.0, unit="uL/min"),
-            _number("settle_window_s", "Settle window", 5.0, minimum=0.1, unit="s"),
-            _number("settle_timeout_s", "Settle timeout", 30.0, minimum=0.1, unit="s"),
-            _number("sample_window_s", "Sample window", 10.0, minimum=0.1, unit="s"),
-            Param(
-                "oil_pressure_trip_mbar",
-                "Oil pressure trip",
-                ParamKind.FLOAT,
-                default=None,
-                minimum=1.0,
-                description="Optional measured-pressure trip (mbar); omitted means off. "
-                "Must not exceed the detected controller range.",
-            ),
-            _number("minimum_flow_fraction", "Minimum flow fraction", 0.85, minimum=0.0),
-            Param(
-                "include_video",
-                "Include video",
-                ParamKind.BOOLEAN,
-                default=False,
-                description="A capacity run measures fluidics; video is off unless asked for",
-            ),
-            TICK,
-        ),
-        raw={
-            "flow_targets_ul_min": {
-                "type": "array",
-                "description": "Oil flow targets in uL/min, run from lowest to highest. "
-                "Start at [50, 100, 150] on a bench rig.",
-                "items": {"type": "number", "minimum": 0.0},
-            }
-        },
-        run=_validate_oil_capacity,
-    ),
-    Operation(
         "emergency_stop",
         "Emergency stop",
         "Take every channel to zero now, stop the protocol, close the recording, "
@@ -785,7 +651,7 @@ OPERATIONS: tuple[Operation, ...] = (
         "observe",
         "Observe",
         "Everything measurable right now: the session, the instrument, every "
-        "channel, the running protocol, the validation, and the safety state. "
+        "channel, the running protocol, and the safety state. "
         "Callable while disconnected, where measurements come back null.",
         target=GENERAL,
         kind=READ,
@@ -860,60 +726,6 @@ OPERATIONS: tuple[Operation, ...] = (
         run=_protocol("Wash"),
     ),
     Operation(
-        "run_characterisation",
-        "Flow check",
-        "Sweep the working flows to measure what the plumbing and chip cost.",
-        kind=START,
-        params=(
-            _number("run_oil_flow_ul_min", "Oil flow", 300.0, unit="uL/min"),
-            _number("run_aqueous_total_flow_ul_min", "Total aqueous flow", 80.0, unit="uL/min"),
-            _number("sweep_tolerance_ul_min", "Settle tolerance", STABILITY_TOLERANCE_UL_MIN,
-                    minimum=0.1, unit="uL/min"),
-            _number("sweep_window_s", "Settle window", STABILITY_DURATION_S, minimum=0.5, unit="s"),
-            _number("sweep_timeout_s", "Settle timeout", STABILITY_TIMEOUT_S, minimum=1.0, unit="s"),
-            TICK,
-        ),
-        requires=("fluidics", "corrections", "idle", "safe"),
-        protocol="Characterise",
-        starts_protocol=True,
-        run=_protocol("Characterise"),
-    ),
-    Operation(
-        "run_gravimetry",
-        "Dispense check",
-        "Dispense a weighed volume from every channel, gated on the operator.",
-        kind=START,
-        params=(
-            _number("gravimetric_target_ul", "Target volume", 100.0, minimum=0.1, unit="uL"),
-            _number("gravimetric_flow_ul_min", "Dispense flow", 250.0, minimum=0.1, unit="uL/min"),
-            _whole("gravimetric_replicates", "Replicates", GRAVIMETRIC_REPLICATES,
-                   maximum=GRAVIMETRIC_REPLICATES),
-            TICK,
-        ),
-        requires=("fluidics", "corrections", "idle", "safe"),
-        protocol="Gravimetry",
-        starts_protocol=True,
-        run=_protocol("Gravimetry"),
-    ),
-    Operation(
-        "run_dropseq",
-        "Drop-Seq run",
-        "Generate droplets for each set and replicate.",
-        kind=START,
-        params=(
-            _whole("set_count", "Sets", 1),
-            _whole("replicate_count", "Replicates", 1),
-            _number("run_volume_ul", "Oil volume per run", 150.0, minimum=0.1, unit="uL"),
-            _number("run_oil_flow_ul_min", "Oil flow", 300.0, unit="uL/min"),
-            _number("run_aqueous_total_flow_ul_min", "Total aqueous flow", 80.0, unit="uL/min"),
-            TICK,
-        ),
-        requires=("project", "fluidics", "corrections", "idle", "safe"),
-        protocol="Drop-Seq",
-        starts_protocol=True,
-        run=_protocol("Drop-Seq"),
-    ),
-    Operation(
         "run_steps",
         "Run steps you wrote",
         "Run a protocol given as a list of steps, without adding it to this build.",
@@ -951,7 +763,7 @@ OPERATIONS: tuple[Operation, ...] = (
             _whole("recording_max_frames", "Frame limit", 100_000, minimum=0),
             _number("recording_max_seconds", "Time limit", 0.0, unit="s"),
         ),
-        # No camera requirement: a validation run measures fluidics, and a rig
+        # No camera requirement: a fluidics-only run measures fluidics, and a rig
         # with no camera on it must still be able to record what it measured.
         # A video that was never written is not registered, so nothing claims
         # a file that is not there.

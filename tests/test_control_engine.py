@@ -15,7 +15,6 @@ from admet.engines.acquisition.pipeline import (
     build_pipeline_steps,
 )
 from admet.workflows.protocols import (
-    build_dropseq_protocol,
     build_priming_protocol,
     build_wash_protocol,
 )
@@ -464,18 +463,6 @@ class AcquisitionEngineTests(unittest.TestCase):
         self.assertEqual(getattr(pipeline[1].trigger, "_target_ul"), 8.0)
         self.assertEqual(getattr(pipeline[2].trigger, "_target_ul"), 8.0)
 
-    def test_dropseq_protocol_splits_total_aqueous_flow(self):
-        steps = build_dropseq_protocol(
-            {
-                "set_count": 1,
-                "replicate_count": 1,
-                "run_volume_ul": 150.0,
-                "run_aqueous_total_flow_ul_min": 100.0,
-            }
-        )
-
-        self.assertEqual(steps[0].sensor_setpoints, {0: 300.0, 1: 50.0, 2: 50.0})
-        self.assertIn("Cells M/Beads M 50", steps[0].confirm_message)
 
     def test_wash_protocol_uses_configured_volume_pressure_and_duration(self):
         engine = make_engine(FakeControlSDK())

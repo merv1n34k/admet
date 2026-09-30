@@ -23,9 +23,6 @@ FLUIDIC_CHANNEL_UNITS = {
     "cells_m": "M",
     "beads_m": "M",
 }
-# Weighed dispenses per channel. The dispense table holds this many rows, so a
-# check asking for more would have nowhere to write its weights.
-GRAVIMETRIC_REPLICATES = 3
 
 OIL_L_SENSOR = 0
 CELLS_M_SENSOR = 1
@@ -33,7 +30,6 @@ BEADS_M_SENSOR = 2
 
 PRIMING_OIL_FLOW_UL_MIN = 250.0
 PRIMING_AQUEOUS_FLOW_UL_MIN = 67.0
-DROPSEQ_OIL_FLOW_UL_MIN = 300.0
 
 SIM_INSTR_TYPE = 4
 SIM_INSTRUMENTS = [

@@ -37,18 +37,15 @@ class JsonProtocolTests(unittest.TestCase):
                 self.assertEqual(set(template_documents()), {"short_run"})
 
     def test_dropseq_template_preserves_existing_recipe_with_bounded_execution(self):
-        from admet.workflows.operations import operation
-        from admet.workflows.protocols import build_dropseq_protocol
-
-        settings = {p.name: p.default for p in operation("run_dropseq").params}
-        recipe = build_dropseq_protocol(settings)
         document = template_documents()["dropseq"]
         self.assertEqual(document["pressure_limits_mbar"], {})
-        self.assertEqual(len(document["steps"]), len(recipe))
-        for step, declared in zip(document["steps"], recipe, strict=True):
-            self.assertEqual(step["sensor_setpoints"], {str(k): v for k, v in declared.sensor_setpoints.items()})
-            self.assertEqual(step["trigger_type"], declared.trigger_type)
-            self.assertEqual(step["trigger_params"], declared.trigger_params)
+        self.assertEqual(len(document["steps"]), 2)
+        self.assertEqual(document["steps"][0]["trigger_type"], "volume")
+        self.assertEqual(document["steps"][0]["trigger_params"], {"sensor_index": 0, "target_volume_ul": 150})
+        self.assertEqual(document["steps"][1]["sensor_setpoints"], {})
+        self.assertEqual(document["steps"][1]["trigger_type"], "time")
+        self.assertEqual(document["steps"][1]["trigger_params"], {"duration_s": 0})
+        for step in document["steps"]:
             self.assertEqual(step["on_complete"], "zero")
             self.assertTrue(step["confirm_message"])
         self.assertEqual(document["steps"][0]["timeout_s"], 120)

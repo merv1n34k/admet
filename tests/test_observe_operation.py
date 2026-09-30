@@ -17,7 +17,7 @@ class DisconnectedTests(unittest.TestCase):
         self.assertFalse(self.observed["connection"]["fluidics"])
         self.assertTrue(self.observed["observed_at"])
         self.assertEqual(self.observed["channels"], [])
-        self.assertFalse(self.observed["validation"]["active"])
+        self.assertNotIn("validation", self.observed)
         self.assertFalse(self.observed["safety"]["armed"])
         self.assertFalse(self.observed["safety"]["tripped"])
         guards = self.observed["guards"]

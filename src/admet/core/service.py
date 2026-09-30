@@ -164,7 +164,6 @@ class Admet:
         self._engines: dict[str, Any] = {}
         self._marks: dict[str, Any] = {}
         self.project: ProjectStore | None = None
-        self._validation: Any | None = None
         self._protocol_plans: dict[str, dict[str, Any]] = {}
         self._executing_plan_id: str | None = None
         self._plan_stores: dict[str, Any] = {}
@@ -432,11 +431,7 @@ class Admet:
             json.dumps(executable, sort_keys=True, separators=(",", ":"), default=str).encode()
         ).hexdigest()
         plan_id = f"plan_{uuid.uuid4().hex}"
-        pressure_limits = (
-            {"0": normalized["oil_pressure_trip_mbar"]}
-            if operation_id == "validate_oil_capacity" and normalized["oil_pressure_trip_mbar"] is not None
-            else {}
-        )
+        pressure_limits = {}
         if operation_id == "run_json_protocol":
             from admet.workflows.json_protocol import resolve
 
@@ -465,7 +460,7 @@ class Admet:
                 step["confirmation"] for step in described_steps if step["confirmation"]
             ],
             "recording": {
-                "required": operation_id in {"validate_oil_capacity", "run_json_protocol"},
+                "required": operation_id == "run_json_protocol",
                 "include_video": bool(normalized.get("include_video", False)),
             },
             "camera_required": bool(normalized.get("include_video", False)),
@@ -688,8 +683,6 @@ class Admet:
         ]
 
 
-
-
     def wait_for_protocol(self, *, timeout_s: float = 600.0, poll_s: float = 0.1) -> str:
         """Wait for the running protocol to end, or to want the operator.
 
@@ -806,20 +799,6 @@ class Admet:
             "sources": len(self.analysis_sources()),
         }
 
-    def validation_state(self) -> dict[str, Any]:
-        """The validation run in progress, if there is one."""
-        if self._validation is None:
-            return {
-                "active": False,
-                "id": None,
-                "state": "idle",
-                "configuration": None,
-                "current_target_ul_min": None,
-                "artifacts": {},
-                "error": "",
-                "classification": None,
-            }
-        return self._validation.describe()
 
     def safety_state(self) -> dict[str, Any]:
         """Whether a limit is armed, and whether anything has tripped it.
@@ -842,22 +821,6 @@ class Admet:
         engine = self._engines.get("acquisition")
         return engine.polling_started_monotonic() if engine is not None else 0.0
 
-    def save_validation(self, summary: dict[str, Any], *, check_id: str = "") -> Path:
-        """Keep a validation's summary in the project, beside its raw data."""
-        if self.project is None:
-            raise NoProject("no project is open; create or open one first")
-        path = self.project.append_system_check(
-            summary,
-            summary=summary.get("classification_reason", ""),
-            check_id=check_id,
-        )
-        self.project = ProjectStore(self.project.path)
-        return path
-
-    def start_validation(self, run: Any) -> None:
-        """Hand core the supervisor watching the run, so observe can report it."""
-        self._validation = run
-        run.start()
 
     def emergency_stop(self, reason: str = "") -> dict[str, Any]:
         """Zero everything now. Works whatever else is or is not true."""

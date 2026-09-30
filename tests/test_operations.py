@@ -8,6 +8,7 @@ why, and that a pipeline cannot slip past one by going through the back.
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from admet.core.service import Admet
 from admet.core.engine import KINDS, READ, START
@@ -24,6 +25,20 @@ from admet.workflows.operations import (
 
 
 class DeclarationTests(unittest.TestCase):
+    def test_retired_operations_are_absent_and_refused_without_actuation(self):
+        admet = Admet()
+        retired = {"run_characterisation", "run_gravimetry", "run_dropseq", "validate_oil_capacity"}
+        listed = {entry["id"] for entry in admet.describe()["operations"]}
+        self.assertFalse(retired & listed)
+        self.assertTrue({"run_priming", "run_wash", "run_steps", "run_json_protocol",
+                         "save_protocol", "list_protocols", "plan_protocol_file"} <= listed)
+        with patch.object(admet, "engine_action", side_effect=AssertionError("actuated")), \
+                patch.object(admet, "state", side_effect=AssertionError("read hardware")):
+            for name in retired:
+                for method in (admet.do, admet.plan_protocol, admet.describe):
+                    with self.subTest(operation=name, method=method.__name__), self.assertRaises(LookupError):
+                        method(name)
+
     def test_every_operation_can_be_carried_out(self):
         for op in OPERATIONS:
             with self.subTest(operation=op.id):
@@ -37,7 +52,7 @@ class DeclarationTests(unittest.TestCase):
                     self.assertIn(name, REQUIREMENTS)
 
     def test_a_protocol_operation_needs_hardware_corrections_and_an_idle_rig(self):
-        for name in ("run_priming", "run_characterisation", "run_gravimetry", "run_dropseq"):
+        for name in ("run_priming", "run_steps", "run_json_protocol"):
             with self.subTest(operation=name):
                 requires = set(operation(name).requires)
                 self.assertIn("fluidics", requires)
@@ -45,12 +60,12 @@ class DeclarationTests(unittest.TestCase):
                 self.assertIn("idle", requires)
 
     def test_anything_that_writes_needs_a_project(self):
-        for name in ("run_dropseq", "start_recording", "stop_recording"):
+        for name in ("run_json_protocol", "start_recording", "stop_recording"):
             with self.subTest(operation=name):
                 self.assertIn("project", operation(name).requires)
 
     def test_recording_does_not_need_a_camera(self):
-        # A validation run measures fluidics. Requiring a camera would make a
+        # A fluidics-only run measures fluidics. Requiring a camera would make a
         # rig without one unable to record what it measured -- and a video that
         # was never written is not registered, so nothing claims a missing file.
         self.assertEqual(set(operation("start_recording").requires), {"project", "fluidics"})
@@ -232,7 +247,7 @@ class GuardTests(unittest.TestCase):
 
     def test_the_first_unmet_requirement_is_the_one_reported(self):
         with self.assertRaises(Refused) as caught:
-            operation("run_dropseq").check(self.COLD)
+            operation("run_json_protocol").check(self.COLD)
 
         self.assertIn("no project is open", str(caught.exception))
 
@@ -263,7 +278,7 @@ class ProjectAwareTests(unittest.TestCase):
         admet.do("apply_corrections")
         try:
             with self.assertRaises(Refused) as caught:
-                admet.do("run_dropseq", {"tick_s": 0.1})
+                admet.do("run_json_protocol", {"tick_s": 0.1})
             self.assertIn("no project is open", str(caught.exception))
         finally:
             admet.do("disconnect_fluidics")
@@ -275,7 +290,9 @@ class ProjectAwareTests(unittest.TestCase):
             admet.do("connect_fluidics", {"simulated": True})
             admet.do("apply_corrections")
             try:
-                admet.do("run_dropseq", {"set_count": 1, "replicate_count": 1, "tick_s": 0.1})
+                from admet.workflows.json_protocol import template_documents
+
+                admet.do("run_json_protocol", {"protocol": template_documents()["dropseq"], "tick_s": 0.1})
                 self.assertTrue(admet.state()["running"])
             finally:
                 admet.do("stop_protocol")
@@ -309,10 +326,7 @@ class DescribeTests(unittest.TestCase):
                     self.assertIn(op.protocol, PROTOCOLS)
 
     def test_an_operation_that_starts_a_shipped_protocol_names_which(self):
-        # Two build their steps rather than naming one of this build's
-        # protocols: run_steps runs what the caller wrote, and
-        # validate_oil_capacity composes its own from the targets it is given.
-        builds_its_own = {"run_steps", "run_json_protocol", "validate_oil_capacity"}
+        builds_its_own = {"run_steps", "run_json_protocol"}
         for op in OPERATIONS:
             if op.id in builds_its_own:
                 continue

@@ -36,6 +36,11 @@ remain in existing projects but are no longer shown on this page. The protocol
 selector offers density, Drop-Seq and flow stability scout; gravimetry and
 dead-volume protocols will be redesigned with their run-based calculations.
 
+The former Python operations `run_characterisation`, `run_gravimetry`,
+`run_dropseq` and `validate_oil_capacity` are retired. Use JSON protocols for
+experiments (including the bundled Drop-Seq protocol). Priming, Wash, expert
+`run_steps` and protocol save/list/file-planning operations remain available.
+
 Custom JSON can declare editable parameters with arithmetic step expressions.
 They appear in the same settings table as Priming; change a base flow once to
 update every linked step when rebuilding the plan. See the

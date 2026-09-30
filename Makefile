@@ -4,7 +4,7 @@
 ANALYZE_TESTS := $(wildcard tests/test_analyze_*.py tests/test_cellpose_helpers.py tests/test_opencv_engine.py)
 DESKTOP_TESTS := $(wildcard tests/test_qt_desktop.py tests/test_qt_theme.py)
 CONTROL_TESTS := $(wildcard tests/test_control_*.py tests/test_camera_backend.py tests/test_fluidics.py tests/test_observation.py tests/test_recording_limits.py)
-INTEGRATION_TESTS := tests/test_core_service.py tests/test_json_protocol.py tests/test_operations.py tests/test_observe_operation.py tests/test_protocol_planning.py tests/test_safety.py tests/test_validation.py tests/test_flow_scout.py tests/test_qt_backend.py
+INTEGRATION_TESTS := tests/test_core_service.py tests/test_json_protocol.py tests/test_operations.py tests/test_observe_operation.py tests/test_protocol_planning.py tests/test_safety.py tests/test_flow_scout.py tests/test_qt_backend.py
 CORE_TESTS := $(filter-out $(ANALYZE_TESTS) $(DESKTOP_TESTS) $(CONTROL_TESTS) $(INTEGRATION_TESTS),$(wildcard tests/test_*.py))
 modules = $(patsubst tests/%.py,tests.%,$(1))
 
