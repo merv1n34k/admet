@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-
+from admet.core.compat import converted_frame_rate
 
 VIDEO_TABLE_COLUMNS = (
     ("video", "Video"),
@@ -18,7 +18,7 @@ VIDEO_TABLE_COLUMNS = (
 def video_metadata(recording: dict[str, Any]) -> dict[str, Any]:
     width = int(float(recording.get("width") or 0))
     height = int(float(recording.get("height") or 0))
-    converted_fps = float(recording.get("converted_fps") or recording.get("fps") or 0.0)
+    converted_fps = float(converted_frame_rate(recording) or 0.0)
     acquisition_fps = float(recording.get("acquisition_fps") or 0.0)
     return {
         "video_path": str(recording.get("video_path") or ""),

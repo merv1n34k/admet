@@ -59,6 +59,12 @@ density result rather than guessing measurement windows. The calculation
 selector is backed by `workflows/calculations.py`; additional calculators can
 register there without adding experiment-specific TOC pages.
 
+Historical project/recording aliases and relocated recording paths are read through
+`core/compat.py`; old label-based density definitions through `workflows/compat.py`.
+These readers do not migrate files or change executable protocols. Saving preflight
+settings retains historical check entries, although the removed checkup UI no longer
+displays them. Current density metadata takes precedence over historical step labels.
+
 See [Windows desktop setup and workflow](docs/windows-qt.md). Desktop operation
 is covered by offscreen Qt, simulated fluidics, and mocked camera tests on macOS;
 Windows drivers and physical devices still need acceptance testing on the target PC.

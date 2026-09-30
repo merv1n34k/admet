@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .compat import allows_external_path, session_project_id
+
 PROJECT_EXTENSION = ".admetp"
 MANIFEST_FILENAME = "manifest.json"
 
@@ -45,7 +47,7 @@ class AdmetSession:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AdmetSession:
         session = cls(
-            project_id=str(data.get("project_id") or data.get("id") or "project"),
+            project_id=session_project_id(data),
             files=tuple(
                 _session_file_from_dict(item, index)
                 for index, item in enumerate(data.get("files", ()), start=1)
@@ -202,19 +204,11 @@ def _relativize_path(path: str, root: Path, *, metadata: dict[str, Any]) -> str:
     try:
         return stored.resolve().relative_to(root).as_posix()
     except ValueError:
-        if _allows_external_path(metadata):
+        if allows_external_path(metadata):
             return str(stored)
         raise ValueError(
             f"absolute path outside project bundle requires metadata.external=true: {path}"
         ) from None
-
-
-def _allows_external_path(metadata: dict[str, Any]) -> bool:
-    return bool(
-        metadata.get("external")
-        or metadata.get("external_media")
-        or metadata.get("nas")
-    )
 
 
 def _unique_ids(label: str, values) -> set[str]:

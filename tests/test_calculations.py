@@ -55,6 +55,38 @@ class CalculationTests(unittest.TestCase):
         write_json(path, summary)
         self.assertAlmostEqual(calculate_run(self.directory, "oil_density")["result"]["density_g_ml"], 1.2)
 
+    def test_current_density_metadata_takes_precedence_over_historical_labels(self):
+        from admet.workflows.compat import density_analysis
+
+        path = self.directory / "protocol.json"
+        document = json.loads(path.read_text())
+        document["analysis"] = density_analysis(document)
+        for step in document["steps"]:
+            step["name"] = "Current step without legacy geometry label"
+        write_json(path, document)
+        summary_path = self.directory / "summary.json"
+        summary = json.loads(summary_path.read_text())
+        summary["run_id"] = "run_current"
+        write_json(summary_path, summary)
+        before = path.read_bytes()
+        result = calculate_run(self.directory, "oil_density")
+        self.assertAlmostEqual(result["result"]["density_g_ml"], 1.2)
+        self.assertEqual(result["run_id"], "run_current")
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_historical_density_rejects_mismatched_targets_and_timing(self):
+        path = self.directory / "protocol.json"
+        original = path.read_text()
+        for field, value, message in (("sensor_setpoints", {"1": 999}, "flow target disagree"),
+                                      ("trigger_params", {"duration_s": 5}, "20-second")):
+            with self.subTest(field=field):
+                document = json.loads(original)
+                step = next(step for step in document["steps"] if step["name"].startswith("Scout"))
+                step[field] = value
+                write_json(path, document)
+                with self.assertRaisesRegex(ValueError, message):
+                    calculate_run(self.directory, "oil_density")
+
     def test_active_or_unclosed_recording_is_refused(self):
         path = self.directory / "summary.json"
         summary = json.loads(path.read_text())

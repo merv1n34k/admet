@@ -8,6 +8,7 @@ import re
 import tempfile
 
 from admet.workflows.json_protocol import load, normalize
+from admet.core.compat import protocol_run_id, valid_recorded_run_id
 
 
 def write_json(path, payload):
@@ -68,7 +69,7 @@ class ProtocolStore:
             write_json(self.root / "records" / "protocols" / plan["run_id"] / "plan.json", plan)
 
     def begin(self, plan):
-        directory = self.root / "records" / "protocols" / plan.get("run_id", plan["plan_id"])
+        directory = self.root / "records" / "protocols" / protocol_run_id(plan)
         write_json(directory / "plan.json", plan)
         definition = plan["normalized_settings"].get("protocol")
         if definition is not None:
@@ -76,7 +77,7 @@ class ProtocolStore:
             fields = definition.get("measurements", {})
             if fields:
                 write_json(directory / "measurements.json", {
-                    "run_id": plan.get("run_id", plan["plan_id"]), "revision": 0,
+                    "run_id": protocol_run_id(plan), "revision": 0,
                     "fields": fields, "values": {key: None for key in fields},
                 })
         path = directory / "summary.json"
@@ -86,7 +87,7 @@ class ProtocolStore:
         return directory
 
     def measurements(self, run_id, changes=None):
-        if not isinstance(run_id, str) or not re.fullmatch(r"(?:run|plan)_[a-f0-9]{32}", run_id):
+        if not valid_recorded_run_id(run_id):
             raise ValueError("invalid run ID")
         path = self.root / "records" / "protocols" / run_id / "measurements.json"
         if not path.resolve().is_relative_to(self.root.resolve()):

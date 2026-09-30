@@ -10,7 +10,9 @@ import re
 from statistics import mean, stdev
 import uuid
 
+from admet.core.compat import protocol_run_id, recording_path
 from admet.core.protocol_store import write_json
+from admet.workflows.compat import density_analysis
 from admet.workflows.oil_density import _finite, analyze_density_run
 from admet.workflows.flow_scout import analyze_scout
 
@@ -33,25 +35,6 @@ def recorded_runs(project):
     return sorted(runs, key=lambda run: run["at"], reverse=True)
 
 
-def _recording_path(directory, summary):
-    value = summary.get("artifacts", {}).get("fluidics_csv")
-    if not isinstance(value, str) or not value:
-        raise ValueError("This run has no fluidics recording")
-    path = Path(value)
-    # Rebase project-local recordings first when an .admetp was moved to another PC.
-    normalized = value.replace("\\", "/")
-    if "/records/" in normalized:
-        relative = "records/" + normalized.rsplit("/records/", 1)[1]
-        candidate = directory.parents[2] / relative
-        if candidate.is_file():
-            return candidate
-    if not path.is_absolute():
-        path = directory.parents[2] / path
-    if not path.is_file():
-        raise ValueError(f"Recording not found: {value}")
-    return path
-
-
 def _density(context):
     document = deepcopy(context["document"])
     if "parameters" in document:
@@ -68,26 +51,7 @@ def _density(context):
                     or expected.get("trigger_params") != step["trigger_params"]
                     or (expected.get("confirmation") or "") != step.get("confirm_message", "")):
                 raise ValueError("Recorded density execution and protocol parameters disagree")
-    if "analysis" not in document:
-        # The protocol-only density templates store geometry in their explicit step labels.
-        # Never infer heights from step order or quietly assume an arbitrary run is density.
-        points = []
-        pattern = r"(Scout|Pass ([12])) ([0-9]+(?:\.[0-9]+)?) cm / ([0-9]+(?:\.[0-9]+)?) uL-min"
-        for index, step in enumerate(document["steps"], 1):
-            match = re.fullmatch(pattern, step.get("name", ""))
-            if match is None:
-                if any(step.get("sensor_setpoints", {}).values()):
-                    raise ValueError("This protocol has no recognized density height/pass labels")
-                continue
-            if step.get("sensor_setpoints") != {"1": float(match[4])}:
-                raise ValueError(f"Step {index}: density label and M1 flow target disagree")
-            if step.get("trigger_params", {}).get("duration_s") != 20:
-                raise ValueError("Protocol-only density recordings require the declared 20-second points")
-            points.append({"step": index, "pass": int(match[2]) if match[2] else 0,
-                           "height_cm": float(match[3]), "settle_s": 10})
-        if not points:
-            raise ValueError("Choose a density protocol run; heights cannot be recovered from a bare CSV")
-        document["analysis"] = {"type": "oil_density", "oil_id": document["name"], "points": points}
+    document["analysis"] = density_analysis(document)
     mapping = document["analysis"]["points"]
     previous = None
     for point in mapping:
@@ -156,7 +120,7 @@ def calculate_run(directory, calculation_id):
         raise ValueError("Wait until the recording has finished before calculating")
     if summary.get("artifacts", {}).get("recording_closed") is False:
         raise ValueError("This recording was not successfully closed; do not analyze an active file")
-    csv_path = _recording_path(directory, summary)
+    csv_path = recording_path(directory, summary)
     protocol_path = directory / "protocol.json"
     sources = [summary_path, csv_path]
     document = None
@@ -174,7 +138,7 @@ def calculate_run(directory, calculation_id):
         raise ValueError("Recording changed during calculation; refresh and try again")
     payload = {"calculation_id": calculation_id, "calculation_version": calculation["version"],
                "created_at": datetime.now(timezone.utc).isoformat(), "plan_id": summary.get("plan_id"),
-               "run_id": summary.get("run_id", summary.get("plan_id")),
+               "run_id": protocol_run_id(summary),
                "inputs": inputs, "result": result}
     path = directory / "calculations" / f"{calculation_id}_{uuid.uuid4().hex}.json"
     write_json(path, payload)

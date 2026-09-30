@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from admet.core.run import RunResult
+from admet.core.compat import preflight_metadata
 from admet.core.service import Admet
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
 
@@ -92,9 +93,9 @@ class DesktopBackend:
             if self.service.project:
                 if checkup is not None:
                     project = self.service.project
-                    project.session = replace(project.session, metadata={
-                        **project.session.metadata, "qt_checkup": checkup,
-                    })
+                    project.session = replace(project.session, metadata=preflight_metadata(
+                        project.session.metadata, checkup,
+                    ))
                 self.service.project.save()
 
     def measurements(self, run_id, changes=None):

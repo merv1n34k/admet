@@ -37,6 +37,25 @@ class DesktopBackendTests(unittest.TestCase):
         self.backend.call("connect_fluidics")
         self.backend.call("apply_corrections")
 
+    def test_preflight_save_preserves_historical_check_entries(self):
+        from copy import deepcopy
+        from dataclasses import replace
+
+        old = {"flow_checks": [{"channel": "Oil L", "samples": [{"pressure_mbar": None}]}],
+               "dispense_checks": [{"weights_g": [{"empty": 1.25, "full": None}]}],
+               "conditions": {"flows_ul_min": {"oil": 10}}}
+        before = deepcopy(old)
+        project = self.backend.service.project
+        project.session = replace(project.session, metadata={"qt_checkup": old, "note": "retain"})
+        self.backend.save_project(checkup={"conditions": {"flows_ul_min": {"oil": 20}}})
+        self.backend.open_project(project.path)
+        saved = self.backend.session.metadata
+        self.assertEqual(saved["note"], "retain")
+        self.assertEqual(saved["qt_checkup"]["flow_checks"], before["flow_checks"])
+        self.assertEqual(saved["qt_checkup"]["dispense_checks"], before["dispense_checks"])
+        self.assertEqual(saved["qt_checkup"]["conditions"]["flows_ul_min"]["oil"], 20)
+        self.assertEqual(old, before)
+
     def test_corrected_range_is_refreshed_before_planning_scout_base_15(self):
         from admet.workflows.json_protocol import template_documents
 

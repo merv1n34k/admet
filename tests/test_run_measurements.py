@@ -37,6 +37,19 @@ class RunMeasurementsTests(unittest.TestCase):
                 normalize(doc)
         self.assertEqual(normalize(measured_protocol())["measurements"], measured_protocol()["measurements"])
 
+    def test_historical_plan_named_run_retains_null_measurements(self):
+        store = self.backend.service.protocol_store()
+        plan_id = "plan_" + "a" * 32
+        plan = {"plan_id": plan_id, "normalized_settings": {"protocol": measured_protocol()}}
+        directory = store.begin(plan)
+        self.assertEqual(directory.name, plan_id)
+        values = store.measurements(plan_id)
+        self.assertEqual(values["run_id"], plan_id)
+        self.assertTrue(all(value is None for value in values["values"].values()))
+        self.assertEqual(store.measurements(plan_id, {"before_mg": 1})["values"]["before_mg"], 1)
+        with self.assertRaisesRegex(ValueError, "invalid run ID"):
+            store.measurements("plan_../../elsewhere")
+
     def test_execution_initializes_null_values_and_rerun_is_independent(self):
         self.backend.call("connect_fluidics")
         self.backend.call("apply_corrections")
