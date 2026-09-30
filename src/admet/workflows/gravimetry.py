@@ -62,6 +62,27 @@ def calibration_context(context):
     return deepcopy(context["summary"].get("rig_fingerprint", {}).get("correction_settings"))
 
 
+def calibration_identity(context):
+    from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNELS
+
+    channel = context["config"]["channel"]
+    rig = context["summary"].get("rig_fingerprint", {})
+    mapping = rig.get("channel_mapping", [])
+    if channel >= len(mapping) or channel >= len(FLUIDIC_CHANNELS) or not mapping[channel]:
+        return None
+    detected = mapping[channel]
+    keys = ("sensor_index", "sensor_device_sn", "sensor_type", "controller_sn")
+    if any(detected.get(key) is None for key in keys):
+        return None
+    prefix = FLUIDIC_CHANNELS[channel][0]
+    settings = calibration_context(context) or {}
+    corrections = {key: settings.get(f"{prefix}_{key}") for key in ("calibration", "scale", "offset", "quadratic")}
+    if any(value is None for value in corrections.values()):
+        return None
+    return {"sensor": {key: detected[key] for key in keys}, "corrections": corrections,
+            "simulated": rig.get("simulated")}
+
+
 def calculate(context):
     check(context)
     rho = density(context)
@@ -96,5 +117,6 @@ def calculate(context):
             "repeat_statistics": stats, "uncertainty": None, "issues": issues,
             "thresholds": {"repeat_cv_max": 0.1, "minimum_repeats": 2},
             "correction_settings": calibration_context(context),
+            "calibration_identity": calibration_identity(context),
             "note": "Multiplier applies to recorded flow, not raw sensor readings. No hardware changes. "
                     "SEM describes repeatability only; density, balance, timing and retained droplets add uncertainty."}

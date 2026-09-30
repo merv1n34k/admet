@@ -5,7 +5,7 @@ import math
 
 from admet.workflows.calculation_schema import measurement_binding, sample_steps
 from admet.workflows.calculation_inputs import step_window, trace, volume_ul
-from admet.workflows.gravimetry import measurement, repeat_statistics, calibration_context
+from admet.workflows.gravimetry import measurement, repeat_statistics, calibration_identity
 
 
 def flow_multiplier(context):
@@ -15,9 +15,9 @@ def flow_multiplier(context):
         config = context["config"]
         if result.get("liquid") != config["liquid"] or result.get("channel") != config["channel"]:
             raise ValueError("Flow calibration must use the same liquid and channel")
-        corrections = calibration_context(context)
-        if not corrections or result.get("correction_settings") != corrections:
-            raise ValueError("Flow calibration requires matching recorded correction settings")
+        identity = calibration_identity(context)
+        if not identity or result.get("calibration_identity") != identity:
+            raise ValueError("Flow calibration requires matching recorded sensor identity and correction settings")
         value = result.get("multiplier")
     else:
         value = measurement(context, context["config"]["flow_multiplier"])

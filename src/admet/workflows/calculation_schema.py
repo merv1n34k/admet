@@ -33,7 +33,10 @@ def resolve_declarations(document, values):
             entry["liquid"] = interpolate(entry["liquid"], values)
         if entry["type"] == "viscosity":
             entry["path_id"] = interpolate(entry.get("path_id"), values)
-            for sample in entry.get("samples", []):
+            samples = entry.get("samples")
+            if not isinstance(samples, list) or any(not isinstance(s, dict) for s in samples):
+                raise ValueError("viscosity samples must be a list of objects")
+            for sample in samples:
                 sample["settle_s"] = expression(sample.get("settle_s"), values)
         if entry["type"] == "flow_scout":
             entry["height_cm"] = expression(entry.get("height_cm"), values)

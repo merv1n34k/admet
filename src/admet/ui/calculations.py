@@ -85,7 +85,8 @@ class CalculationsPanel(QWidget):
             box.addItem(f"{role}: no reference (use recorded inputs)", None)
             for run in recorded_runs(self.project):
                 for result in saved_results(run["directory"]):
-                    if result["calculation_id"] == kind and not result["outdated"]:
+                    if (result["calculation_id"] == kind and not result["outdated"]
+                            and result["result"].get("status") in {"usable", "consistent", "complete"}):
                         box.addItem(f"{role}: {run['name']} · {result['created_at']}", result["path"])
             box.currentIndexChanged.connect(self.ready)
             self.reference_layout.addWidget(box)
@@ -101,7 +102,8 @@ class CalculationsPanel(QWidget):
         self.status.setText(reason or "Inputs ready. Calculate when ready.")
 
     def _busy(self, busy):
-        self.calculate_button.setEnabled(not busy and bool(self.runs.currentData()))
+        self.calculate_button.setEnabled(not busy and not calculation_readiness(
+            self.runs.currentData(), self.calculation.currentData(), self.reference_values()))
         self.refresh_button.setEnabled(not busy)
 
     def _submit(self, work, success):

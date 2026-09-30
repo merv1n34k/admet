@@ -144,7 +144,7 @@
       "on_complete": "zero"
     }
   ],
-  "analysis": {
+  "calculations": [{
     "type": "flow_scout",
     "height_cm": "outlet_height_cm",
     "points": [
@@ -189,7 +189,7 @@
         "pass": 2
       }
     ]
-  },
+  }],
   "parameters": {
     "oil_base_flow": [
       "Oil base flow, µL/min",

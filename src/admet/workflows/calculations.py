@@ -193,7 +193,38 @@ def saved_results(directory):
 
 def result_text(payload):
     result = payload["result"]
-    if payload["calculation_id"] == "oil_density":
+    kind = payload["calculation_id"]
+    def number(value):
+        return f"{value:.5g}" if value is not None else "unavailable"
+
+    if kind in {"gravimetry", "dead_volume", "viscosity"}:
+        lines = [f"{CALCULATIONS[kind]['label']}: {result['status']}"]
+        if kind == "gravimetry":
+            lines += [f"Recorded-flow multiplier: {number(result['multiplier'])}",
+                      "STEP | MASS-DERIVED (µL) | RECORDED (µL) | MULTIPLIER"]
+            lines += [f"{s['step']} | {number(s['true_volume_ul'])} | {number(s['recorded_volume_ul'])} | "
+                      f"{number(s['multiplier'])}" for s in result["samples"]]
+        elif kind == "dead_volume":
+            lines += [f"Effective displacement volume: {number(result['volume_ul'])} µL",
+                      "STEP | TRANSIT (s) | VOLUME (µL) | TIMING UNCERTAINTY (µL)"]
+            lines += [f"{s['step']} | {number(s.get('transit_s'))} | {number(s['volume_ul'])} | "
+                      f"{number(s['timing_uncertainty_ul'])}" for s in result["samples"]]
+        else:
+            lines += [f"Hydraulic resistance: {number(result['resistance_mbar_min_ul'])} mbar·min/µL",
+                      f"Relative viscosity: {number(result['relative_viscosity'])}",
+                      f"Absolute viscosity: {number(result['viscosity_mpa_s'])} mPa·s",
+                      "PASS | RESISTANCE (mbar·min/µL) | P0 (mbar) | R² | SLOPE SE"]
+            lines += [f"{p['pass']} | {number(p['resistance_mbar_min_ul'])} | {number(p['intercept_mbar'])} | "
+                      f"{number(p['r_squared'])} | {number(p['slope_standard_error'])}" for p in result["passes"]]
+            lines += ["STEP | FLOW (µL/min) | PRESSURE (mbar)"]
+            lines += [f"{s['step']} | {number(s['flow_ul_min'])} | {number(s['pressure_mbar'])}"
+                      for s in result["samples"]]
+        if "repeat_statistics" in result:
+            stats = result["repeat_statistics"]
+            lines += [f"Repeat SD: {number(stats['sd'])}; SEM: {number(stats['sem'])} (repeatability only)"]
+        lines += ["Total uncertainty: not established", result["note"], *result["issues"],
+                  "Thresholds: " + json.dumps(result["thresholds"])]
+    elif kind == "oil_density":
         value = result.get("density_g_ml")
         lines = [f"Density: {value:.4f} g/mL" if value is not None else "Density: inconclusive"]
         for entry in result.get("passes", []):

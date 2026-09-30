@@ -97,6 +97,13 @@
       },
       "timeout_s": "settle_s + average_s + 10",
       "on_complete": "zero"
+    },
+    {
+      "name": "Finish recording",
+      "pressure_setpoints": {"1": 0},
+      "trigger_type": "time",
+      "trigger_params": {"duration_s": 1},
+      "on_complete": "zero"
     }
   ],
   "measurements": {

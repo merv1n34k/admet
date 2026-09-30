@@ -125,9 +125,10 @@ def _fit(points):
 
 def analyze_scout(context):
     from admet.workflows.json_protocol import resolve
+    from admet.workflows.calculation_schema import declarations
 
     document = resolve(context["document"])
-    config = document.get("analysis", {})
+    config = next((item for item in declarations(document) if item["type"] == "flow_scout"), {})
     if config.get("type") != "flow_scout":
         raise ValueError("Choose a single-height flow scout recording")
     result = {"type": "flow_scout", "status": "inconclusive", "density_g_ml": None,

@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from admet.workflows.calculations import calculate_run
+from admet.workflows.calculation_schema import declarations
 from admet.workflows.flow_scout import analyze_scout
 from admet.workflows.json_protocol import normalize, resolve, template_documents
 
@@ -55,7 +56,7 @@ def scout_context(directory, *, drift=0, missing=False, short=False, curved=Fals
     rows, events = [], []
     clock, origin = 20.0, 100.0
     plant = ImperfectOil(drift=drift)
-    for point in document["analysis"]["points"]:
+    for point in declarations(document)[0]["points"]:
         index = point["step"] - 1
         step = document["steps"][index]
         target = step["sensor_setpoints"]["1"]
@@ -139,7 +140,7 @@ def run_simulated_scout(project_path=None, *, speed=20, protocol=None):
             backend.call("apply_corrections", {"cells_m_calibration": "IPA", "cells_m_scale": 2.25})
             source = protocol or template_documents()["flow_stability_scout"]
             resolved = resolve(source)
-            heights = {p["step"] - 1: p["height_cm"] for p in resolved["analysis"]["points"]
+            heights = {p["step"] - 1: p["height_cm"] for p in declarations(resolved)[0]["points"]
                        if "height_cm" in p}
             calls = setter.call_count
             plan = backend.call("plan_protocol", {
@@ -168,7 +169,7 @@ def run_simulated_scout(project_path=None, *, speed=20, protocol=None):
             if plant.target != 0:
                 raise AssertionError("M1 was not zeroed")
             directory = project_path / "records" / "protocols" / current["run_id"]
-            calculation = calculate_run(directory, resolved["analysis"]["type"])
+            calculation = calculate_run(directory, declarations(resolved)[0]["type"])
             return {"project": str(project_path), "plan_id": plan["plan_id"], "run_id": current["run_id"], "confirmed": confirmed,
                     "state": current["state"], "final_target_ul_min": plant.target,
                     "simulation": {"density_g_ml": 1.6, "scale": 2.25, "seed": 16000,
@@ -189,7 +190,7 @@ def density_recovery(directory, *, seed=16000, drift=0):
     plant = ImperfectOil(seed=seed, drift=drift)
     rows, events = [], []
     origin, clock = 100, 10
-    for point in document["analysis"]["points"]:
+    for point in declarations(document)[0]["points"]:
         step = document["steps"][point["step"] - 1]
         plant.height = point["height_cm"]
         plant.set_flow(0, clock - 2)
@@ -260,13 +261,13 @@ class ScoutTests(unittest.TestCase):
         source = template_documents()["flow_stability_scout"]
         self.assertEqual(normalize(source), source)
         document = resolve(source)
-        self.assertEqual(document["analysis"]["height_cm"], 5)
+        self.assertEqual(declarations(document)[0]["height_cm"], 5)
         self.assertEqual([s["sensor_setpoints"]["1"] for s in document["steps"]],
                          [0, 5, 15, 20, 30, 45, 45, 30, 20, 15, 5, 0])
         self.assertEqual(sum(bool(s.get("confirm_message")) for s in document["steps"]), 1)
-        for mutation in (lambda d: d["analysis"].update(height_cm=-1),
+        for mutation in (lambda d: declarations(d)[0].update(height_cm=-1),
                          lambda d: d["steps"][2].update(sensor_setpoints={"0": 15}),
-                         lambda d: d["analysis"]["points"].pop(),
+                         lambda d: declarations(d)[0]["points"].pop(),
                          lambda d: d["parameter_values"].update(point_duration_s=5)):
             invalid = deepcopy(source)
             mutation(invalid)

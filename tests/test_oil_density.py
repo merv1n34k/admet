@@ -15,6 +15,7 @@ from admet.workflows.oil_density import (
     analyze_density_run,
 )
 from admet.workflows.json_protocol import normalize, resolve, template_documents
+from admet.workflows.calculation_schema import declarations
 
 
 def recorded_density(directory, *, densities=(1.2, 1.2), missing=False, unsettled=False, scouted=False, curvature=0):
@@ -63,7 +64,7 @@ class RecordedDensityTests(unittest.TestCase):
         for oil in ("dSurf", "EvaGreen", "custom mix"):
             document = template_documents()["density"]
             document["parameter_values"]["oil_name"] = oil
-            self.assertEqual(resolve(document)["analysis"]["oil_id"], oil)
+            self.assertEqual(declarations(resolve(document))[0]["oil_id"], oil)
             self.assertEqual(normalize(document), document)
             self.assertNotIn("temperature", json.dumps(document))
             self.assertEqual(document["pressure_limits_mbar"], {})
@@ -74,7 +75,7 @@ class RecordedDensityTests(unittest.TestCase):
             self.assertAlmostEqual(sum(s["sensor_setpoints"].get("1", 0)
                                        * s["trigger_params"]["duration_s"] / 60
                                        for s in resolve(document)["steps"]), 270)
-            self.assertEqual(len(document["analysis"]["points"]), 18)
+            self.assertEqual(len(declarations(document)[0]["points"]), 18)
             self.assertTrue(all(s["on_complete"] == "zero" for s in document["steps"]))
 
     def test_scouted_density_parameters_gates_and_curved_pressure_response(self):

@@ -22,6 +22,72 @@ DOCUMENT = {
 
 
 class JsonProtocolTests(unittest.TestCase):
+    def test_metrology_templates_execute_on_simulator_and_save_separate_results(self):
+        from admet.ui.backend import DesktopBackend
+        from admet.workflows.calculations import calculate_run
+
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = DesktopBackend(simulated=True)
+            backend.create_project(Path(tmp) / "metrology.admetp")
+            with patch.object(backend.engine.sdk, "detect_instruments", side_effect=AssertionError("live discovery")):
+                try:
+                    backend.call("connect_fluidics")
+                    self.assertTrue(backend.engine.hardware.state.simulated)
+                    backend.call("apply_corrections")
+                    for name, parameters in (("gravimetry", {"collection_s": 0.3}),
+                                             ("dead_volume", {"window_s": 0.3}),
+                                             ("viscosity", {"settle_s": 0, "average_s": 5})):
+                        source = template_documents()[name]
+                        source["parameter_values"].update(parameters)
+                        with patch.object(backend.engine, "run", side_effect=AssertionError("planning actuated")):
+                            plan = backend.preview("experiment_1", source)
+                        self.assertFalse(backend.engine.recording_active)
+                        backend.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"],
+                                                          "timeout_s": 0.1})
+                        deadline = time.monotonic() + 40
+                        last_gate = None
+                        while time.monotonic() < deadline:
+                            current = backend.call("planned_protocols", {"plan_id": plan["plan_id"]})["plans"][0]
+                            status = backend.engine.observation()["protocol"]
+                            if status.get("confirmation_message") and status["step_index"] != last_gate:
+                                last_gate = status["step_index"]
+                                time.sleep(0.15)  # Preserve samples on both sides of operator gates.
+                                backend.call("control_protocol", {"action": "confirm", "timeout_s": 0.1})
+                            if current["state"] in {"completed", "failed", "cancelled"}:
+                                break
+                            time.sleep(0.01)
+                        self.assertEqual(current["state"], "completed", current.get("error"))
+                        self.assertFalse(backend.engine.recording_active)
+                        channels = backend.engine.observation()["channels"]
+                        self.assertTrue(all(c["requested_flow_ul_min"] in (None, 0) and
+                                            c["requested_pressure_mbar"] in (None, 0) for c in channels))
+                        data = backend.measurements(current["run_id"])
+                        self.assertTrue(all(value is None for value in data["values"].values()))
+                        values = {}
+                        for key in data["values"]:
+                            if key == "density_g_ml":
+                                values[key] = 1.6
+                            elif key == "flow_multiplier":
+                                values[key] = 1
+                            elif key.startswith("mass_"):
+                                values[key] = 100 if "before" in key else 100.24
+                            elif key.startswith("injection"):
+                                values[key] = 0.05
+                            elif key.startswith("arrival"):
+                                values[key] = 0.25
+                            elif key.startswith("timing_uncertainty"):
+                                values[key] = 0.01
+                        backend.measurements(current["run_id"], values)
+                        directory = Path(backend.workdir) / "records" / "protocols" / current["run_id"]
+                        with patch.object(backend.engine, "run", side_effect=AssertionError("calculation actuated")):
+                            result = calculate_run(directory, name)
+                        self.assertTrue(Path(result["path"]).is_file())
+                        self.assertEqual(result["measurement_revision"], 1)
+                        self.assertIn(result["result"]["status"], {"usable", "inconclusive"})
+                        self.assertTrue((directory / "events.jsonl").read_text())
+                finally:
+                    backend.shutdown()
+
     def test_templates_load_outside_checkout_and_from_packaged_resources(self):
         from contextlib import chdir
 

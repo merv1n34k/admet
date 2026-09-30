@@ -423,9 +423,10 @@ def _point_statistics(point, step, rows, events, origin):
 def analyze_density_run(document, csv_path, events_path, polling_origin, *, completed):
     """Read closed artifacts only. Sensor samples are not independent replicates."""
     from admet.workflows.json_protocol import resolve
+    from admet.workflows.calculation_schema import declarations
 
     document = resolve(document)
-    config = document["analysis"]
+    config = next(item for item in declarations(document) if item["type"] == "oil_density")
     result = {"type": "oil_density", "oil_id": config["oil_id"], "status": "inconclusive",
               "density_g_ml": None, "repeat_difference_percent": None, "ci95_g_ml": None,
               "passes": [], "points": [], "issues": [], "warnings": [],

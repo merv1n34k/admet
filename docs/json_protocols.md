@@ -4,7 +4,7 @@ Bundled experiment definitions live in the repository-root `templates/` director
 They are included as package data when building the Python wheel. Loading templates
 does not depend on the terminal's current directory.
 
-The Qt desktop or agent saves JSON protocols in the project. A definition
+Execution archives JSON protocols in the project. A definition
 contains a name, optional parameters/pressure trips, and ordered steps. Saving and planning do
 not actuate hardware. Execution always takes the reviewed plan ID.
 
@@ -23,9 +23,9 @@ Declare measurements separately from parameters:
 
 ```json
 "measurements": {
-  "before_mg": {"label": "Vessel before (mg)", "step": 2},
-  "after_mg": {"label": "Vessel after (mg)", "step": 2},
-  "density": {"label": "Oil density (g/mL)"}
+  "before_mg": {"label": "Vessel before", "unit": "mg", "step": 2, "required": true},
+  "after_mg": {"label": "Vessel after", "unit": "mg", "step": 2, "required": true},
+  "density": {"label": "Oil density", "unit": "g/mL", "min": 0}
 }
 ```
 
@@ -35,6 +35,10 @@ becomes editable on Execute. Entries save to that run's `measurements.json`; the
 never change execution or trigger calculations. The run selector restores earlier
 entries for review/correction. Repeating a protocol starts a fresh empty table.
 Calculate processes measurements only on request, after the recording finishes.
+Optional `unit`, `min`, `max` and `required` fields validate measurements.
+Supported units: `mg`, `g`, `s`, `uL`, `g/mL`, `mPa.s`, `mm`, `cm`, `1` (dimensionless).
+Numbers must be finite; missing entries remain null, including required entries
+while the run is in progress. Required inputs block calculation, not execution.
 
 Declare only the values the operator should edit. Qt renders them in the same
 **Parameter / Value** settings table as Priming, separate from the read-only plan.
@@ -182,3 +186,118 @@ that CSV and contains the plan, settings, digest, rig mapping, corrections, limi
 and outcome. The project manifest registers definitions and run summaries. Plans
 on disk are audit records; a new session never silently restores their permission
 to execute. Reopen the definition and create a fresh plan to repeat an experiment.
+
+## Run calculations
+
+The workflow is **Setup / Preflight → Plan → Execute → enter measurements →
+Calculate → repeat experiments → Wash → Cleanup**. Parameters define execution;
+measurements are observations only. Neither measurement entry nor calculation
+changes instrument setpoints or calibrations.
+
+JSON declares a list of known calculators, with one entry per calculation type:
+
+```json
+"calculations": [
+  {
+    "type": "gravimetry", "channel": 1, "liquid": "{oil_name}",
+    "density": "density",
+    "samples": [
+      {"step": 2, "before": "before_mg", "after": "after_mg"}
+    ]
+  },
+  {"type": "recording_summary"}
+]
+```
+
+This illustrates bindings; a usable gravimetry result needs at least two repeats.
+Use the bundled three-repeat template as a complete example. References to steps
+use expanded, one-based indices; measurement `step` associations must match.
+Unknown types/fields, incompatible units, missing step references and invalid
+sampling recipes are rejected before execution. `liquid` and viscosity `path_id`
+accept text parameters; viscosity `settle_s` accepts numeric parameter expressions.
+Existing saved `analysis` blocks remain readable, but cannot coexist with
+`calculations`. Bundled density and scout templates now use the list without
+changing their execution targets, heights or confirmation gates.
+
+### Gravimetry
+
+Three timed M1 collections: enter each vessel's before/after mass in the measurement
+table. Weigh the complete collection. Supply oil density manually, or explicitly
+select a saved usable density result identifying the same oil in Calculations.
+
+- True volume (µL) = mass gain (mg) / density (g/mL).
+- Recorded volume = trapezoidal integral of recorded flow over the collection step.
+- Proposed multiplier = true volume / recorded volume.
+
+Recorded flow already includes the SDK correction. A proposed multiplier of 1.2
+means another 20% relative to that recorded flow, **not** replacing SDK scale 2.25
+with 1.2. There is no automatic application, and this number is not predefined by
+the experiment. Use at least two valid collections; repeat CV must be ≤10%.
+Repeat SD/SEM is reported, not total uncertainty: balance resolution, density,
+evaporation and retained droplets remain sources of systematic error.
+
+### Dead volume
+
+Three marker passes at one fixed M1 flow. The parameter table sets flow and the
+observation window; lengthen the window if the marker cannot arrive in time.
+For each pass, the **Measurements** table has injection time, outlet breakthrough
+time and the standard uncertainty of each timestamp, all in seconds. Times are
+relative to the step's actual running start, not the confirmation gate. Record
+times manually using a synchronized time reference; there is no automatic marker
+detection or timestamp button. Introduce the marker after settling without changing
+the flow path; repeat the same first-breakthrough criterion each time.
+
+Effective volume = integral of calibrated measured flow from injection to arrival.
+The marker must arrive inside its step. This estimates displacement volume, not
+pressure startup delay or a guarantee of complete fluid replacement. Marker
+dispersion affects the result. Three repeats are provided; ≥2 valid passes and
+repeat CV ≤10% are required. Invalid declared passes are not silently discarded.
+Timing-only standard uncertainty is
+`sqrt(Q_injection² + Q_arrival²) × timestamp_sigma / 60`, with calibrated Q in
+µL/min. Repeat SEM and this timing contribution are separate, not total uncertainty.
+
+### Viscosity
+
+M1 pressure control: `base_pressure × (1, 2, 3, 3, 2, 1)` with settling then averaging
+at each level. Each point ends at zero pressure; the final one-second zero-pressure
+step closes out recording coverage. Keep the filled geometry, outlet height and
+identified `path_id` unchanged between sample and reference runs. Temperature must
+be comparable; record it separately, not in a mandatory ADMET field.
+
+Fit measured `P = P0 + RQ` separately for the two passes. Q uses the explicitly
+chosen flow multiplier. Minimum averaging is 5 seconds/10 samples; default is
+20 seconds after 10 seconds settling. Required checks are positive R, R² ≥0.95,
+flow CV and early/late pressure/flow drift ≤5%, and slope disagreement ≤10%.
+These thresholds flag problems; they do not establish absolute accuracy.
+
+Hydraulic resistance R is reported in mbar·min/µL. With a selected usable viscosity
+reference from the same path/channel, relative viscosity is `R / R_reference`.
+If that reference run has a manually entered known viscosity, absolute viscosity
+is the ratio multiplied by that known value. Otherwise absolute viscosity stays
+null. The known value is reference input, never presented as an independent ADMET
+measurement. This assumes Newtonian laminar flow, unchanged geometry and comparable
+temperature; matching a path label does not verify the physical setup. Fit standard
+errors do not include calibration/geometry/temperature uncertainty.
+
+### Calibration selection and saved results
+
+Dead volume and viscosity need either a positive, explicitly entered recorded-flow
+multiplier or a selected usable gravimetry result. Enter 1 only when the logged
+flow is already calibrated. Selected gravimetry must match oil, channel, sensor
+identity and the recorded channel corrections. Reapplying corrections after
+gravimetry invalidates reuse of that multiplier: do not apply it twice. If both a
+reference and a manual value exist, the explicitly selected reference takes precedence.
+
+Calculations consume closed recordings, actual step events and run measurements.
+Missing/nonfinite samples, gaps over one second, pauses, skipped/incomplete steps
+or insufficient trace coverage do not become zeros. New metrology calculations
+also verify saved definitions against the archived executed steps. Missing inputs
+are explained before calculation; quality failures save an inconclusive result
+with per-step reasons rather than a fabricated estimate.
+
+Each result records calculator version, measurement revision, selected references
+and hashes of its input files, including reference dependencies. Editing input
+measurements marks existing results **outdated** without deleting them. Outdated
+or inconclusive results cannot be selected as references. References are explicit,
+never inferred from the latest run. Result history is separate from protocols and
+recordings, which are never rewritten by a calculation.

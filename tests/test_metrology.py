@@ -45,7 +45,11 @@ def archive(root, name, *, flow=30, slope=2, multiplier=1.2, run_id=None, parame
     (directory / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
     write_json(directory / "protocol.json", source)
     write_json(directory / "summary.json", {**plan, "state": "completed", "run_id": run_id or name,
-               "rig_fingerprint": {"correction_settings": {"cells_scale": 2.25, "cells_calibration": "IPA"}},
+               "rig_fingerprint": {"simulated": True,
+                                   "channel_mapping": [None, {"sensor_index": 1, "sensor_device_sn": 42,
+                                                              "sensor_type": "Flow_M", "controller_sn": 1002}],
+                                   "correction_settings": {"cells_m_scale": 2.25, "cells_m_calibration": "IPA",
+                                                           "cells_m_offset": 0, "cells_m_quadratic": 0}},
                "artifacts": {"fluidics_csv": str(csv_path), "recording_closed": True,
                              "polling_origin_monotonic": 100}})
     values = {key: None for key in source.get("measurements", {})}
@@ -141,7 +145,7 @@ class MetrologyTests(unittest.TestCase):
         self.assertAlmostEqual(result["result"]["volume_ul"], 12, places=2)
         summary_path = directory / "summary.json"
         summary = json.loads(summary_path.read_text())
-        summary["rig_fingerprint"]["correction_settings"]["cells_scale"] = 3
+        summary["rig_fingerprint"]["correction_settings"]["cells_m_scale"] = 3
         write_json(summary_path, summary)
         with self.assertRaisesRegex(ValueError, "matching recorded"):
             calculate_run(directory, "dead_volume", references=refs)
@@ -210,6 +214,85 @@ class MetrologyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "5 seconds"):
             normalize(source)
         source["parameter_values"] = {}
-        source["steps"][-1]["pressure_setpoints"]["1"] = "base_pressure * 2"
+        source["steps"][5]["pressure_setpoints"]["1"] = "base_pressure * 2"
         with self.assertRaisesRegex(ValueError, "reverse pass"):
             normalize(source)
+
+    def test_changed_execution_and_calculation_bindings_are_refused(self):
+        for name in ("gravimetry", "dead_volume", "viscosity"):
+            directory = archive(self.tmp.name, name)
+            path = directory / "protocol.json"
+            document = json.loads(path.read_text())
+            document["steps"][0]["on_complete"] = "hold"
+            write_json(path, document)
+            with self.assertRaises(ValueError):
+                calculate_run(directory, name)
+        directory = archive(self.tmp.name, "gravimetry", run_id="changed-binding")
+        path = directory / "protocol.json"
+        document = json.loads(path.read_text())
+        sample = document["calculations"][0]["samples"][0]
+        sample["before"], sample["after"] = sample["after"], sample["before"]
+        write_json(path, document)
+        with self.assertRaisesRegex(ValueError, "declarations disagree"):
+            calculate_run(directory, "gravimetry")
+
+    def test_reference_identity_and_results_survive_project_move(self):
+        import shutil
+        from admet.workflows.calculations import result_text
+
+        calibration = archive(self.tmp.name, "gravimetry")
+        ref = calculate_run(calibration, "gravimetry")
+        directory = archive(self.tmp.name, "dead_volume")
+        result = calculate_run(directory, "dead_volume", references={"calibration": ref["path"]})
+        self.assertIn("TIMING UNCERTAINTY", result_text(result))
+        copied = Path(self.tmp.name) / "copied"
+        shutil.copytree(Path(self.tmp.name) / "records", copied / "records")
+        self.assertFalse(saved_results(copied / "records" / "protocols" / "dead_volume")[0]["outdated"])
+        path = directory / "summary.json"
+        summary = json.loads(path.read_text())
+        summary["rig_fingerprint"]["channel_mapping"][1]["sensor_device_sn"] = 99
+        write_json(path, summary)
+        with self.assertRaisesRegex(ValueError, "sensor identity"):
+            calculate_run(directory, "dead_volume", references={"calibration": ref["path"]})
+
+    def test_new_schema_expanded_repeats_and_invalid_sample_units(self):
+        from copy import deepcopy
+
+        for name in ("gravimetry", "dead_volume", "viscosity"):
+            source = template_documents()[name]
+            sample = source["calculations"][0]["samples"][0]
+            sample["step"] = 999
+            with self.assertRaisesRegex(ValueError, "expanded step"):
+                normalize(source)
+        source = template_documents()["gravimetry"]
+        first = deepcopy(source["steps"][0])
+        first["repeat"] = 3
+        source["steps"] = [first, source["steps"][-1]]
+        self.assertEqual(len(normalize(source)["calculations"][0]["samples"]), 3)
+        source["measurements"]["mass_after_3"]["unit"] = "s"
+        with self.assertRaisesRegex(ValueError, "unit"):
+            normalize(source)
+
+    def test_viscosity_flags_hysteresis_and_nonlinearity_without_dropping_points(self):
+        for case in ("hysteresis", "nonlinear"):
+            directory = archive(self.tmp.name, "viscosity", run_id=case)
+            events = [json.loads(line) for line in (directory / "events.jsonl").read_text().splitlines()]
+            windows = [(events[i]["monotonic"] - 101, events[i + 1]["monotonic"] - 99)
+                       for i in range(0, len(events), 2)]
+            path = directory / "fluidics.csv"
+            with path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            for row in rows:
+                t = float(row["elapsed_s"])
+                affected = (3, 4, 5) if case == "hysteresis" else (1, 4)
+                if any(windows[i][0] <= t <= windows[i][1] for i in affected):
+                    row["flow_1_ul_min"] = float(row["flow_1_ul_min"]) * (2 if case == "hysteresis" else 0.1)
+            with path.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+            result = calculate_run(directory, "viscosity")["result"]
+            self.assertEqual(result["status"], "inconclusive")
+            self.assertEqual(len(result["samples"]), 6)
+            self.assertIsNone(result["resistance_mbar_min_ul"])
+            self.assertIn("10%" if case == "hysteresis" else "R²", " ".join(result["issues"]))

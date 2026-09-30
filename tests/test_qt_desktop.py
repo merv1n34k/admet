@@ -486,7 +486,7 @@ class DesktopWindowTests(unittest.TestCase):
             [self.panel.library.itemText(i) for i in range(self.panel.library.count())],
             ["Select protocol…", "dead volume", "density", "dropseq", "flow stability scout", "gravimetry", "viscosity"],
         )
-        for name in ("density", "flow_stability_scout", "dropseq"):
+        for name in ("gravimetry", "dead_volume", "viscosity", "density", "flow_stability_scout", "dropseq"):
             self.panel.library.setCurrentIndex(self.panel.library.findData("@" + name))
             with patch.object(self.backend.engine, "run", side_effect=AssertionError("template actuated")):
                 self.panel.build_plan()
@@ -504,6 +504,37 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertEqual(stored["steps"][0]["sensor_setpoints"]["0"], 25)
         self.assertEqual(self.panel.templates["dropseq"]["steps"][0]["sensor_setpoints"]["0"], 300)
 
+    def test_calculation_references_require_explicit_choice_and_show_results(self):
+        from tests.test_metrology import archive
+        from admet.workflows.calculations import calculate_run
+
+        calibration = archive(self.backend.workdir, "gravimetry")
+        ref = calculate_run(calibration, "gravimetry")
+        directory = archive(self.backend.workdir, "dead_volume")
+        import json
+        from admet.core.protocol_store import write_json
+        path = directory / "measurements.json"
+        data = json.loads(path.read_text())
+        data["values"]["flow_multiplier"] = None
+        write_json(path, data)
+        index = next(i for i, s in enumerate(self.window.workflow.stages) if s.id == "calculations")
+        self.window._select_stage(index)
+        panel = self.window._calculations
+        self.drain(lambda: not panel.tasks.busy)
+        panel.runs.setCurrentIndex(panel.runs.findData(str(directory)))
+        self.assertEqual(panel.calculation.currentData(), "dead_volume")
+        box = panel.references["calibration"]
+        self.assertIsNone(box.currentData())
+        self.assertFalse(panel.calculate_button.isEnabled())
+        reference_index = next(i for i in range(1, box.count())
+                               if Path(box.itemData(i)).resolve() == Path(ref["path"]).resolve())
+        box.setCurrentIndex(reference_index)
+        self.assertTrue(panel.calculate_button.isEnabled(), panel.status.text())
+        panel.calculate()
+        self.drain(lambda: not panel.tasks.busy)
+        self.assertIn("Effective displacement volume: 12", panel.output.toPlainText())
+        self.assertIn("TIMING UNCERTAINTY", panel.output.toPlainText())
+
     def test_density_template_and_persistent_calculations_section(self):
         from tests.test_calculations import archived_density
 
@@ -516,7 +547,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertEqual(self.panel.plan["expected_duration_s"], 540)
         self.assertIn("5 cm ABOVE", self.panel.plan["steps"][1]["confirmation"])
         self.assertNotIn("temperature", self.panel.editor.toPlainText())
-        self.assertEqual(self.panel.document()["analysis"]["type"], "oil_density")
+        self.assertEqual(self.panel.document()["calculations"][0]["type"], "oil_density")
         calculation_index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "calculations")
         with patch.object(self.backend.engine, "run", side_effect=AssertionError("calculation actuated")):
             self.window._select_stage(calculation_index)

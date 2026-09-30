@@ -33,8 +33,8 @@ the exact protocol, parameters and run. Run measurements/results remain persiste
 Preflight is a non-actuating setup page for flow/phase ratios, fluidics layout and
 consumption formulas; **Save Project** preserves the layout. Legacy check data
 remain in existing projects but are no longer shown on this page. The protocol
-selector offers density, Drop-Seq and flow stability scout; gravimetry and
-dead-volume protocols will be redesigned with their run-based calculations.
+selector offers density, Drop-Seq, flow stability scout, gravimetry, dead volume
+and viscosity. The measurement protocols use M1 only by default.
 
 The former Python operations `run_characterisation`, `run_gravimetry`,
 `run_dropseq` and `validate_oil_capacity` are retired. Use JSON protocols for
@@ -51,10 +51,11 @@ flow sweep, with editable base flow and point duration. Review its settling/fit
 recommendations before preparing a density run. See
 the protocol's editable parameters and saved calculation report.
 
-**Calculations** is a separate TOC section: select **Flow stability scout**, **Oil density** or **Recording
-summary**, select a finished recorded run, then **Calculate**. It reads archived
+**Calculations** is a separate TOC section: choose a finished recorded run and
+one of its declared calculations, then **Calculate**. Gravimetry, dead volume,
+viscosity, flow scout, density and recording summary share this panel. It reads archived
 files, never operates devices, and saves each result separately under
-`records/protocols/<plan_id>/calculations/`. Saved results are available after
+`records/protocols/<run_id>/calculations/`. Saved results are available after
 reopening the project; Checkup and protocol execution do not run calculations.
 Density uses the confirmed density templates' height/pass labels and recorded
 step times (10 seconds settling, then sampling). Keep those labels unchanged;
@@ -63,6 +64,15 @@ Older recordings without the saved polling clock origin return an inconclusive
 density result rather than guessing measurement windows. The calculation
 selector is backed by `workflows/calculations.py`; additional calculators can
 register there without adding experiment-specific TOC pages.
+
+Enter masses or marker times in the experiment's separate **Measurements** table,
+enabled when execution starts. Choose reference results explicitly in Calculations;
+the app never chooses the latest calibration or applies a computed multiplier to
+hardware. Changed measurements or reference inputs mark saved results outdated.
+See [calculation definitions and workflow](docs/json_protocols.md#run-calculations)
+for formulas, reference compatibility and uncertainty limits. New recipes and
+calculations have offline/simulated coverage; validate them on your physical setup
+before relying on their numerical accuracy.
 
 Historical project/recording aliases and relocated recording paths are read through
 `core/compat.py`; old label-based density definitions through `workflows/compat.py`.

@@ -24,8 +24,8 @@ def fingerprint(paths, directory):
 
 def input_path(directory, value):
     path = Path(value)
-    if path.is_absolute():
-        normalized = value.replace("\\", "/")
+    normalized = str(value).replace("\\", "/")
+    if path.is_absolute() or (len(normalized) > 2 and normalized[1:3] == ":/"):
         if "/records/" in normalized:
             candidate = directory.parents[2] / ("records/" + normalized.rsplit("/records/", 1)[1])
             if candidate.is_file():
@@ -37,7 +37,7 @@ def input_path(directory, value):
 def result_current(payload):
     directory = Path(payload["path"]).parent.parent
     try:
-        return all(hashlib.sha256(input_path(directory, item["path"]).read_bytes()).hexdigest() == item["sha256"]
+        return bool(payload["inputs"]) and all(hashlib.sha256(input_path(directory, item["path"]).read_bytes()).hexdigest() == item["sha256"]
                    for item in payload["inputs"])
     except (OSError, KeyError, TypeError):
         return False
@@ -62,6 +62,8 @@ def load_context(directory, calculation_id, entry, references=None):
     if document and "parameters" in document:
         resolved = resolve(document)
         config = next((item for item in declarations(resolved) if item["type"] == calculation_id), config)
+    if calculation_id in {"gravimetry", "dead_volume", "viscosity"}:
+        verify_execution(document, summary)
     measurements = {"values": {}, "fields": {}, "revision": None}
     measurement_path = directory / "measurements.json"
     if document and document.get("measurements"):
@@ -95,6 +97,28 @@ def load_context(directory, calculation_id, entry, references=None):
     return {"directory": directory, "summary": summary, "document": document, "csv": csv_path,
             "config": config, "measurements": measurements, "references": loaded_references,
             "paths": paths}
+
+
+def verify_execution(document, summary):
+    from admet.engines.acquisition.pipeline import expand_protocol_steps
+    from admet.workflows.operations import _step_from
+
+    resolved = resolve(document)
+    expanded = expand_protocol_steps([_step_from(step, i) for i, step in enumerate(resolved["steps"])])
+    recorded = summary.get("steps", [])
+    if len(recorded) != len(expanded):
+        raise ValueError("Recorded execution steps are missing or disagree with protocol")
+    for saved, step in zip(recorded, expanded):
+        expected = {"flow_setpoints_ul_min": {str(k): v for k, v in step.sensor_setpoints.items()},
+                    "pressure_setpoints_mbar": {str(k): v for k, v in step.pressure_setpoints.items()},
+                    "trigger_type": step.trigger_type, "trigger_params": step.trigger_params,
+                    "timeout_s": step.timeout_s if step.timeout_s is not None else step.trigger_params.get("timeout_s"),
+                    "on_complete": step.on_complete, "confirmation": step.confirm_message or None}
+        if any(saved.get(key) != value for key, value in expected.items()):
+            raise ValueError("Recorded execution and protocol parameters disagree")
+    archived = summary.get("normalized_settings", {}).get("protocol")
+    if archived is None or resolve(archived) != resolved:
+        raise ValueError("Calculation declarations disagree with executed protocol")
 
 
 def step_window(context, step, settle_s=0):
