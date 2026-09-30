@@ -44,6 +44,18 @@ packages = ["src/admet"]
 [tool.hatch.build.targets.wheel.force-include]
 "templates" = "admet/templates"
 
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/templates",
+  "/tests",
+  "/docs",
+  "/README.md",
+  "/Makefile",
+  "/pyproject.toml",
+  "/uv.lock",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
