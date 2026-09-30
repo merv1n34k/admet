@@ -254,7 +254,7 @@ class MetrologyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "5 seconds"):
             normalize(source)
         source["parameter_values"] = {}
-        source["steps"][5]["pressure_setpoints"]["1"] = "base_pressure * 2"
+        source["steps"][5]["sensor_setpoints"]["{channel}"] = "working_flow"
         with self.assertRaisesRegex(ValueError, "reverse pass"):
             normalize(source)
 
@@ -275,6 +275,32 @@ class MetrologyTests(unittest.TestCase):
         write_json(path, document)
         with self.assertRaisesRegex(ValueError, "declarations disagree"):
             calculate_run(directory, "gravimetry")
+
+    def test_viscosity_reuses_flow_curve_and_checks_coverage(self):
+        calibration = archive(self.tmp.name, "gravimetry")
+        reference = calculate_run(calibration, "gravimetry")
+        directory = archive(self.tmp.name, "viscosity")
+        refs = {"calibration": reference["path"]}
+        result = calculate_run(directory, "viscosity", references=refs)["result"]
+        self.assertEqual(result["status"], "usable", result["issues"])
+        self.assertIsNone(result["flow_multiplier"])
+        self.assertTrue(all(abs(p["flow_multiplier"] - 1.2) < 0.001 for p in result["samples"]))
+        outside = archive(self.tmp.name, "viscosity", run_id="outside", parameters={"working_flow": 100})
+        result = calculate_run(outside, "viscosity", references=refs)["result"]
+        self.assertEqual(result["status"], "inconclusive")
+        self.assertIn("calibrated range", " ".join(result["issues"]))
+
+    def test_viscosity_channel_selection_and_archived_pressure_mode(self):
+        for channel, working in ((0, 250), (1, 67), (2, 67)):
+            source = template_documents()["viscosity"]
+            source["parameter_values"].update(channel=channel, working_flow=working)
+            resolved = resolve(source)
+            self.assertTrue(all(set(s["sensor_setpoints"]) == {str(channel)} for s in resolved["steps"]))
+            self.assertEqual(resolved["steps"][2]["sensor_setpoints"][str(channel)], working)
+        source = template_documents()["viscosity"]
+        for step in source["steps"]:
+            step["pressure_setpoints"] = step.pop("sensor_setpoints")
+        self.assertEqual(len(normalize(source)["calculations"][0]["samples"]), 6)
 
     def test_reference_identity_and_results_survive_project_move(self):
         import shutil

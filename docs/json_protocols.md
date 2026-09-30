@@ -287,15 +287,20 @@ Timing-only standard uncertainty is
 
 ### Viscosity
 
-M1 pressure control: `base_pressure × (1, 2, 3, 3, 2, 1)` with settling then averaging
-at each level. Each point ends at zero pressure; the final one-second zero-pressure
-step closes out recording coverage. Keep the filled geometry, outlet height and
+Select the channel and the same low/working flow parameters as gravimetry.
+The template uses flow control: low → middle → working → working → middle → low,
+measuring the pressure needed at each level. Confirm each pass. Each point ends at
+zero flow; the final one-second zero-flow step closes out recording coverage.
+Older pressure-controlled recipes remain readable and calculable.
+Keep the filled geometry, outlet height and
 identified `path_id` unchanged between sample and reference runs. Temperature must
 be comparable; record it separately, not in a mandatory ADMET field.
 
 Fit measured `P = P0 + RQ` separately for the two passes. Q uses the explicitly
-chosen flow multiplier. Minimum averaging is 5 seconds/10 samples; default is
-20 seconds after 10 seconds settling. Required checks are positive R, R² ≥0.95,
+chosen flow multiplier or the matching gravimetry curve at that point's measured
+mean flow. Minimum averaging is 5 seconds/10 samples; default is
+30 seconds after 20 seconds settling. Only interior measured samples enter the
+point statistics, not interpolated boundary values. Required checks are positive R, R² ≥0.95,
 flow CV and early/late pressure/flow drift ≤5%, and slope disagreement ≤10%.
 These thresholds flag problems; they do not establish absolute accuracy.
 
@@ -316,6 +321,13 @@ flow is already calibrated. Selected gravimetry must match oil, channel, sensor
 identity and the recorded channel corrections. Reapplying corrections after
 gravimetry invalidates reuse of that multiplier: do not apply it twice. If both a
 reference and a manual value exist, the explicitly selected reference takes precedence.
+Multi-rate gravimetry results supply a piecewise-linear recorded-to-true flow
+curve, not an averaged multiplier. Viscosity uses the point mean; marker volume
+integrates corrected flow samples. At most 5% outside the measured endpoint range
+is allowed using the nearest endpoint's multiplier to accommodate repeatability;
+larger excursions are refused rather than silently extrapolated. Matching liquid,
+channel and correction state still applies. Curve-based results leave the single
+`flow_multiplier` null and preserve their explicit calibration reference.
 
 Calculations consume closed recordings, actual step events and run measurements.
 Missing/nonfinite samples, gaps over one second, pauses, skipped/incomplete steps

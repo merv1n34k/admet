@@ -122,7 +122,7 @@ def _recording_summary(context):
 
 
 CALCULATIONS = {
-    "viscosity": {"label": "Viscosity", "version": 1, "calculate": viscosity.calculate,
+    "viscosity": {"label": "Viscosity", "version": 2, "calculate": viscosity.calculate,
                   "check": viscosity.check, "files": ("protocol.json", "events.jsonl"),
                   "references": {"calibration": "gravimetry", "reference": "viscosity"},
                   "description": "Pressure/flow resistance; same-path reference comparison for viscosity."},

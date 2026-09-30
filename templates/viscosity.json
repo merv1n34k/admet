@@ -1,34 +1,48 @@
 {
   "name": "viscosity",
   "parameters": {
+    "channel": {
+      "type": "choice",
+      "label": "Channel: 0 Oil-L / 1 M1 / 2 M2",
+      "default": 1,
+      "options": [
+        0,
+        1,
+        2
+      ]
+    },
     "oil_name": {
       "type": "text",
-      "label": "Oil name",
+      "label": "Liquid name",
       "default": "oil"
     },
+    "low_flow": [
+      "Lowest flow, µL/min",
+      15
+    ],
+    "working_flow": [
+      "Working flow, µL/min (M: 67; L: 250)",
+      67
+    ],
     "path_id": {
       "type": "text",
       "label": "Unchanged flow path ID",
-      "default": "M1-path-1"
+      "default": "path-1"
     },
-    "base_pressure": [
-      "M1 base pressure, mbar",
-      30
-    ],
     "settle_s": [
       "Settling time, s",
-      10
+      20
     ],
     "average_s": [
       "Averaging time, s",
-      20
+      30
     ]
   },
   "steps": [
     {
-      "name": "Pressure point 1",
-      "pressure_setpoints": {
-        "1": "base_pressure * 1"
+      "name": "Pass 1 / level 1",
+      "sensor_setpoints": {
+        "{channel}": "low_flow"
       },
       "trigger_type": "time",
       "trigger_params": {
@@ -36,12 +50,12 @@
       },
       "timeout_s": "settle_s + average_s + 10",
       "on_complete": "zero",
-      "confirm_message": "M1 only: keep the same filled flow path and outlet height throughout both passes and the reference run. Confirm the pressure range and path ID. Use comparable temperature for reference comparison; select a gravimetry result or enter a recorded-flow multiplier before calculation."
+      "confirm_message": "Channel {channel} only. Keep the filled bypass path, outlet height and path ID unchanged for both passes and the reference run. Confirm this pass. Select the matching gravimetry result or enter a recorded-flow multiplier before calculation. Compare reference liquids at comparable temperature."
     },
     {
-      "name": "Pressure point 2",
-      "pressure_setpoints": {
-        "1": "base_pressure * 2"
+      "name": "Pass 1 / level 2",
+      "sensor_setpoints": {
+        "{channel}": "(low_flow + working_flow) / 2"
       },
       "trigger_type": "time",
       "trigger_params": {
@@ -51,9 +65,9 @@
       "on_complete": "zero"
     },
     {
-      "name": "Pressure point 3",
-      "pressure_setpoints": {
-        "1": "base_pressure * 3"
+      "name": "Pass 1 / level 3",
+      "sensor_setpoints": {
+        "{channel}": "working_flow"
       },
       "trigger_type": "time",
       "trigger_params": {
@@ -63,9 +77,22 @@
       "on_complete": "zero"
     },
     {
-      "name": "Pressure point 4",
-      "pressure_setpoints": {
-        "1": "base_pressure * 3"
+      "name": "Pass 2 / level 3",
+      "sensor_setpoints": {
+        "{channel}": "working_flow"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + average_s"
+      },
+      "timeout_s": "settle_s + average_s + 10",
+      "on_complete": "zero",
+      "confirm_message": "Channel {channel} only. Keep the filled bypass path, outlet height and path ID unchanged for both passes and the reference run. Confirm this pass. Select the matching gravimetry result or enter a recorded-flow multiplier before calculation. Compare reference liquids at comparable temperature."
+    },
+    {
+      "name": "Pass 2 / level 2",
+      "sensor_setpoints": {
+        "{channel}": "(low_flow + working_flow) / 2"
       },
       "trigger_type": "time",
       "trigger_params": {
@@ -75,21 +102,9 @@
       "on_complete": "zero"
     },
     {
-      "name": "Pressure point 5",
-      "pressure_setpoints": {
-        "1": "base_pressure * 2"
-      },
-      "trigger_type": "time",
-      "trigger_params": {
-        "duration_s": "settle_s + average_s"
-      },
-      "timeout_s": "settle_s + average_s + 10",
-      "on_complete": "zero"
-    },
-    {
-      "name": "Pressure point 6",
-      "pressure_setpoints": {
-        "1": "base_pressure * 1"
+      "name": "Pass 2 / level 1",
+      "sensor_setpoints": {
+        "{channel}": "low_flow"
       },
       "trigger_type": "time",
       "trigger_params": {
@@ -100,9 +115,13 @@
     },
     {
       "name": "Finish recording",
-      "pressure_setpoints": {"1": 0},
+      "sensor_setpoints": {
+        "{channel}": 0
+      },
       "trigger_type": "time",
-      "trigger_params": {"duration_s": 1},
+      "trigger_params": {
+        "duration_s": 1
+      },
       "on_complete": "zero"
     }
   ],
@@ -113,7 +132,7 @@
       "min": 0
     },
     "known_viscosity": {
-      "label": "Known viscosity (reference oil only; otherwise leave blank)",
+      "label": "Known viscosity (reference liquid only; otherwise leave blank)",
       "unit": "mPa.s",
       "min": 0
     }
@@ -121,7 +140,7 @@
   "calculations": [
     {
       "type": "viscosity",
-      "channel": 1,
+      "channel": "channel",
       "liquid": "{oil_name}",
       "path_id": "{path_id}",
       "flow_multiplier": "flow_multiplier",

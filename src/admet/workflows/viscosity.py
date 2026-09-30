@@ -6,7 +6,7 @@ from statistics import mean, stdev
 
 from admet.workflows.calculation_schema import measurement_binding, sample_steps
 from admet.workflows.calculation_inputs import step_window, trace
-from admet.workflows.gravimetry import measurement, calibration_context
+from admet.workflows.gravimetry import measurement, calibration_context, linear_fit
 from admet.workflows.dead_volume import flow_multiplier
 
 
@@ -16,10 +16,11 @@ def normalize_calculation(entry, steps, fields):
     for key in ("liquid", "path_id"):
         if not isinstance(entry[key], str) or not entry[key].strip():
             raise ValueError(f"viscosity requires a nonempty {key}")
-    expanded = sample_steps(entry, steps, mode="pressure")
+    expanded = sample_steps(entry, steps, mode="either")
     measurement_binding(fields, entry["flow_multiplier"], {"1"})
     measurement_binding(fields, entry["known_viscosity"], {"mPa.s"})
     passes = {1: [], 2: []}
+    modes = set()
     for sample in entry["samples"]:
         if (set(sample) != {"step", "pass", "settle_s"} or type(sample["pass"]) is not int
                 or sample["pass"] not in passes):
@@ -29,12 +30,13 @@ def normalize_calculation(entry, steps, fields):
         if (type(settle) not in (int, float) or not math.isfinite(settle) or settle < 0
                 or step.trigger_params["duration_s"] - settle < 5):
             raise ValueError("viscosity requires nonnegative settling and at least 5 seconds averaging")
-        passes[sample["pass"]].append(step.pressure_setpoints[entry["channel"]])
-    if (len(passes[1]) < 3 or passes[2] != list(reversed(passes[1]))
+        modes.add("flow" if step.sensor_setpoints else "pressure")
+        passes[sample["pass"]].append((step.sensor_setpoints or step.pressure_setpoints)[entry["channel"]])
+    if (len(modes) != 1 or len(passes[1]) < 3 or passes[2] != list(reversed(passes[1]))
             or any(b <= a for a, b in zip(passes[1], passes[1][1:]))
             or [s["step"] for s in entry["samples"]] != sorted(s["step"] for s in entry["samples"])
             or [s["pass"] for s in entry["samples"]] != sorted(s["pass"] for s in entry["samples"])):
-        raise ValueError("viscosity requires ordered increasing pressure levels and their reverse pass")
+        raise ValueError("viscosity requires one control mode, ordered increasing levels and their reverse pass")
     return deepcopy(entry)
 
 
@@ -53,16 +55,9 @@ def check(context):
 
 
 def fit(points):
-    x, y = [p["flow_ul_min"] for p in points], [p["pressure_mbar"] for p in points]
-    xx = sum((v - mean(x)) ** 2 for v in x)
-    yy = sum((v - mean(y)) ** 2 for v in y)
-    if len(points) < 3 or xx <= 0 or yy <= 0:
-        raise ValueError("At least three distinct measured pressure/flow points are required")
-    slope = sum((a - mean(x)) * (b - mean(y)) for a, b in zip(x, y)) / xx
-    intercept = mean(y) - slope * mean(x)
-    residual = sum((b - intercept - slope * a) ** 2 for a, b in zip(x, y))
-    return {"resistance_mbar_min_ul": slope, "intercept_mbar": intercept,
-            "r_squared": 1 - residual / yy, "slope_standard_error": math.sqrt(residual / (len(x) - 2) / xx)}
+    result = linear_fit([p["flow_ul_min"] for p in points], [p["pressure_mbar"] for p in points])
+    return {"resistance_mbar_min_ul": result["slope"], "intercept_mbar": result["intercept"],
+            "r_squared": result["r_squared"], "slope_standard_error": result["slope_standard_error"]}
 
 
 def calculate(context):
@@ -75,15 +70,17 @@ def calculate(context):
                  "pressure_mbar": None, "issues": []}
         try:
             window = step_window(context, sample["step"], sample["settle_s"])
-            rows = trace(context, config["channel"], *window, pressure=True)
-            q, p = [r[1] * factor for r in rows], [r[2] for r in rows]
-            if window[1] - window[0] < 5 or len(rows) < 10 or min(q) <= 0:
+            rows = trace(context, config["channel"], *window, pressure=True)[1:-1]
+            raw = [r[1] for r in rows]
+            if window[1] - window[0] < 5 or len(rows) < 10 or min(raw) <= 0:
                 raise ValueError("Insufficient settled positive-flow samples")
+            point_factor = flow_multiplier(context, mean(raw))
+            q, p = [v * point_factor for v in raw], [r[2] for r in rows]
             cv = stdev(q) / mean(q)
             quarter = max(2, len(q) // 4)
             drift = abs(mean(q[:quarter]) - mean(q[-quarter:])) / mean(q)
             pressure_drift = abs(mean(p[:quarter]) - mean(p[-quarter:])) / max(abs(mean(p)), 1)
-            point.update(flow_ul_min=mean(q), pressure_mbar=mean(p), flow_cv=cv,
+            point.update(flow_ul_min=mean(q), pressure_mbar=mean(p), flow_cv=cv, flow_multiplier=point_factor,
                          flow_drift_fraction=drift, pressure_drift_fraction=pressure_drift, samples=len(rows))
             if max(cv, drift, pressure_drift) > 0.05:
                 raise ValueError("Settled flow CV or pressure/flow drift exceeds 5%")

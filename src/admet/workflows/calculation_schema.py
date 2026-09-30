@@ -104,7 +104,8 @@ def sample_steps(entry, steps, *, mode):
         seen.add(index)
         step = expanded[index - 1]
         controlled = set(step.sensor_setpoints) | set(step.pressure_setpoints)
-        targets = step.sensor_setpoints if mode == "flow" else step.pressure_setpoints
+        targets = (step.sensor_setpoints or step.pressure_setpoints) if mode == "either" else (
+            step.sensor_setpoints if mode == "flow" else step.pressure_setpoints)
         if controlled != {channel} or targets.get(channel, 0) <= 0 or step.trigger_type != "time":
             raise ValueError(f"sample step {index} must use positive single-channel {mode} control and time")
         if step.on_complete != "zero":
