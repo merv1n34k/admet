@@ -44,6 +44,7 @@ def archive(root, name, *, flow=30, slope=2, multiplier=1.2):
     (directory / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
     write_json(directory / "protocol.json", source)
     write_json(directory / "summary.json", {**plan, "state": "completed", "run_id": name,
+               "rig_fingerprint": {"correction_settings": {"cells_scale": 2.25, "cells_calibration": "IPA"}},
                "artifacts": {"fluidics_csv": str(csv_path), "recording_closed": True,
                              "polling_origin_monotonic": 100}})
     values = {key: None for key in source.get("measurements", {})}
@@ -53,6 +54,12 @@ def archive(root, name, *, flow=30, slope=2, multiplier=1.2):
             duration = document["steps"][sample["step"] - 1]["trigger_params"]["duration_s"]
             values[sample["before"]] = 1000
             values[sample["after"]] = 1000 + flow * duration / 60 * multiplier * 1.6
+    elif name == "dead_volume":
+        values["flow_multiplier"] = multiplier
+        for sample in config["samples"]:
+            values[sample["injection"]] = 10
+            values[sample["arrival"]] = 30
+            values[sample["timing_uncertainty"]] = 0.2
     write_json(directory / "measurements.json", {"fields": source.get("measurements", {}),
                "values": values, "revision": 1})
     return directory
@@ -96,3 +103,54 @@ class MetrologyTests(unittest.TestCase):
         document["measurements"]["density_g_ml"]["unit"] = "s"
         with self.assertRaisesRegex(ValueError, "unit"):
             normalize(document)
+
+    def test_dead_volume_integrates_marker_interval_and_reports_uncertainty(self):
+        directory = archive(self.tmp.name, "dead_volume")
+        result = calculate_run(directory, "dead_volume")["result"]
+        self.assertEqual(result["status"], "usable")
+        self.assertAlmostEqual(result["volume_ul"], 12, places=3)
+        self.assertGreater(result["samples"][0]["timing_uncertainty_ul"], 0)
+        self.assertIsNone(result["uncertainty"])
+        path = directory / "measurements.json"
+        payload = json.loads(path.read_text())
+        for arrival in (5, 100):
+            payload["values"]["arrival_1"] = arrival
+            write_json(path, payload)
+            result = calculate_run(directory, "dead_volume")["result"]
+            self.assertEqual(result["status"], "inconclusive")
+            self.assertIsNone(result["volume_ul"])
+        payload["values"]["arrival_1"] = None
+        write_json(path, payload)
+        self.assertIn("Missing measurement", calculation_readiness(directory, "dead_volume"))
+
+    def test_dead_volume_explicit_calibration_reference_and_staleness(self):
+        calibration = archive(self.tmp.name, "gravimetry")
+        reference = calculate_run(calibration, "gravimetry")
+        directory = archive(self.tmp.name, "dead_volume")
+        path = directory / "measurements.json"
+        payload = json.loads(path.read_text())
+        payload["values"]["flow_multiplier"] = None
+        write_json(path, payload)
+        with self.assertRaisesRegex(ValueError, "Missing measurement"):
+            calculate_run(directory, "dead_volume")
+        refs = {"calibration": reference["path"]}
+        result = calculate_run(directory, "dead_volume", references=refs)
+        self.assertAlmostEqual(result["result"]["volume_ul"], 12, places=2)
+        summary_path = directory / "summary.json"
+        summary = json.loads(summary_path.read_text())
+        summary["rig_fingerprint"]["correction_settings"]["cells_scale"] = 3
+        write_json(summary_path, summary)
+        with self.assertRaisesRegex(ValueError, "matching recorded"):
+            calculate_run(directory, "dead_volume", references=refs)
+        calibration.joinpath("measurements.json").write_text("{}")
+        with self.assertRaisesRegex(ValueError, "outdated"):
+            calculate_run(directory, "dead_volume", references=refs)
+
+    def test_trace_ignores_missing_values_outside_exact_window(self):
+        from admet.workflows.calculation_inputs import trace, volume_ul
+
+        path = Path(self.tmp.name) / "trace.csv"
+        path.write_text("elapsed_s,flow_1_ul_min\n0,\n1,30\n2,30\n3,\n")
+        self.assertEqual(volume_ul(trace({"csv": path}, 1, 1, 2)), 0.5)
+        with self.assertRaisesRegex(ValueError, "Missing samples"):
+            trace({"csv": path}, 1, 0.5, 2)

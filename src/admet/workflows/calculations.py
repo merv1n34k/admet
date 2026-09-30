@@ -16,7 +16,7 @@ from admet.workflows.oil_density import _finite, analyze_density_run
 from admet.workflows.flow_scout import analyze_scout
 from admet.workflows.calculation_schema import declarations
 from admet.workflows.calculation_inputs import load_context, fingerprint, result_current, read_json
-from admet.workflows import gravimetry
+from admet.workflows import gravimetry, dead_volume
 
 
 def available_calculations(directory):
@@ -122,6 +122,10 @@ def _recording_summary(context):
 
 
 CALCULATIONS = {
+    "dead_volume": {"label": "Dead volume", "version": 1, "calculate": dead_volume.calculate,
+                    "check": dead_volume.check, "files": ("protocol.json", "events.jsonl"),
+                    "references": {"calibration": "gravimetry"},
+                    "description": "Integrate calibrated flow between observed marker injection and arrival."},
     "gravimetry": {"label": "Gravimetry", "version": 1, "calculate": gravimetry.calculate,
                    "check": gravimetry.check, "files": ("protocol.json", "events.jsonl"),
                    "references": {"density": "oil_density"},

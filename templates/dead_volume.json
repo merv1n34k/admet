@@ -1,0 +1,172 @@
+{
+  "name": "dead_volume",
+  "parameters": {
+    "oil_name": {
+      "type": "text",
+      "label": "Oil name",
+      "default": "oil"
+    },
+    "transit_flow": [
+      "M1 flow, µL/min",
+      30
+    ],
+    "window_s": [
+      "Marker observation window, s",
+      60
+    ]
+  },
+  "steps": [
+    {
+      "name": "Marker pass 1",
+      "sensor_setpoints": {
+        "1": "transit_flow"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "window_s"
+      },
+      "timeout_s": "window_s + 10",
+      "on_complete": "zero",
+      "confirm_message": "M1 only, marker pass 1: reset the marker and keep the same filled path. After flow settles, introduce the marker without changing the path. Record injection and first outlet breakthrough times relative to actual step start (not this confirmation). Use the same breakthrough criterion for all passes."
+    },
+    {
+      "name": "Marker pass 2",
+      "sensor_setpoints": {
+        "1": "transit_flow"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "window_s"
+      },
+      "timeout_s": "window_s + 10",
+      "on_complete": "zero",
+      "confirm_message": "M1 only, marker pass 2: reset the marker and keep the same filled path. After flow settles, introduce the marker without changing the path. Record injection and first outlet breakthrough times relative to actual step start (not this confirmation). Use the same breakthrough criterion for all passes."
+    },
+    {
+      "name": "Marker pass 3",
+      "sensor_setpoints": {
+        "1": "transit_flow"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "window_s"
+      },
+      "timeout_s": "window_s + 10",
+      "on_complete": "zero",
+      "confirm_message": "M1 only, marker pass 3: reset the marker and keep the same filled path. After flow settles, introduce the marker without changing the path. Record injection and first outlet breakthrough times relative to actual step start (not this confirmation). Use the same breakthrough criterion for all passes."
+    },
+    {
+      "name": "Record final marker times",
+      "sensor_setpoints": {
+        "1": 0
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": 0
+      },
+      "on_complete": "zero",
+      "confirm_message": "Enter final marker times and timing uncertainty, then confirm completion. Calculate dead volume afterwards."
+    }
+  ],
+  "measurements": {
+    "flow_multiplier": {
+      "label": "Recorded-flow multiplier (or select gravimetry result in Calculations)",
+      "unit": "1",
+      "min": 0
+    },
+    "injection_1": {
+      "label": "Pass 1: Marker injection time",
+      "unit": "s",
+      "step": 1,
+      "required": true,
+      "min": 0
+    },
+    "arrival_1": {
+      "label": "Pass 1: Outlet breakthrough time",
+      "unit": "s",
+      "step": 1,
+      "required": true,
+      "min": 0
+    },
+    "timing_uncertainty_1": {
+      "label": "Pass 1: Standard uncertainty of each timestamp",
+      "unit": "s",
+      "step": 1,
+      "required": true,
+      "min": 0
+    },
+    "injection_2": {
+      "label": "Pass 2: Marker injection time",
+      "unit": "s",
+      "step": 2,
+      "required": true,
+      "min": 0
+    },
+    "arrival_2": {
+      "label": "Pass 2: Outlet breakthrough time",
+      "unit": "s",
+      "step": 2,
+      "required": true,
+      "min": 0
+    },
+    "timing_uncertainty_2": {
+      "label": "Pass 2: Standard uncertainty of each timestamp",
+      "unit": "s",
+      "step": 2,
+      "required": true,
+      "min": 0
+    },
+    "injection_3": {
+      "label": "Pass 3: Marker injection time",
+      "unit": "s",
+      "step": 3,
+      "required": true,
+      "min": 0
+    },
+    "arrival_3": {
+      "label": "Pass 3: Outlet breakthrough time",
+      "unit": "s",
+      "step": 3,
+      "required": true,
+      "min": 0
+    },
+    "timing_uncertainty_3": {
+      "label": "Pass 3: Standard uncertainty of each timestamp",
+      "unit": "s",
+      "step": 3,
+      "required": true,
+      "min": 0
+    }
+  },
+  "calculations": [
+    {
+      "type": "dead_volume",
+      "channel": 1,
+      "liquid": "{oil_name}",
+      "flow_multiplier": "flow_multiplier",
+      "samples": [
+        {
+          "step": 1,
+          "injection": "injection_1",
+          "arrival": "arrival_1",
+          "timing_uncertainty": "timing_uncertainty_1"
+        },
+        {
+          "step": 2,
+          "injection": "injection_2",
+          "arrival": "arrival_2",
+          "timing_uncertainty": "timing_uncertainty_2"
+        },
+        {
+          "step": 3,
+          "injection": "injection_3",
+          "arrival": "arrival_3",
+          "timing_uncertainty": "timing_uncertainty_3"
+        }
+      ]
+    },
+    {
+      "type": "recording_summary"
+    }
+  ]
+}

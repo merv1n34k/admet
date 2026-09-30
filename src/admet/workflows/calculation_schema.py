@@ -9,6 +9,7 @@ SCHEMAS = {
     "flow_scout": ("admet.workflows.flow_scout", "normalize_analysis"),
     "recording_summary": (None, None),
     "gravimetry": ("admet.workflows.gravimetry", "normalize_calculation"),
+    "dead_volume": ("admet.workflows.dead_volume", "normalize_calculation"),
 }
 
 

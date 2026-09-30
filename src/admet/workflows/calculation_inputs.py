@@ -137,7 +137,12 @@ def trace(context, channel, lower, upper, *, pressure=False):
     inside = [i for i, row in enumerate(rows) if lower <= row[0] <= upper]
     if not inside:
         raise ValueError("No recorded samples in measurement window")
-    selected = rows[max(0, inside[0] - 1):min(len(rows), inside[-1] + 2)]
+    first, last = inside[0], inside[-1]
+    if rows[first][0] > lower:
+        first = max(0, first - 1)
+    if rows[last][0] < upper:
+        last = min(len(rows) - 1, last + 1)
+    selected = rows[first:last + 1]
     if (selected[0][0] > lower or selected[-1][0] < upper
             or any(not all(math.isfinite(v) for v in row) for row in selected)
             or any(b[0] - a[0] > 1 for a, b in zip(selected, selected[1:]))):

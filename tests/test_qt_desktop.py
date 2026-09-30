@@ -484,7 +484,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.window._select_stage(self.experiment_index)
         self.assertEqual(
             [self.panel.library.itemText(i) for i in range(self.panel.library.count())],
-            ["Select protocol…", "density", "dropseq", "flow stability scout", "gravimetry"],
+            ["Select protocol…", "dead volume", "density", "dropseq", "flow stability scout", "gravimetry"],
         )
         for name in ("density", "flow_stability_scout", "dropseq"):
             self.panel.library.setCurrentIndex(self.panel.library.findData("@" + name))
