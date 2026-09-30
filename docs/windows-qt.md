@@ -209,7 +209,7 @@ previous calculations after reopening the project; recalculation adds a new resu
 
 Density templates are **density dsurf**, **density evagreen** and **density custom
 mix**. All use channel 1 only: 5/15/20 µL/min for 20 seconds per point, one scout
-and two opposite height passes. See [density method](../junk/oil_density_experiment.md).
+and two opposite height passes.
 The files contain ordinary protocol steps, not mandatory analysis metadata.
 Density analysis recognizes their explicit height/pass labels and validates them
 against the confirmation text; keep these labels intact. Unknown geometry is

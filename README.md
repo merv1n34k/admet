@@ -44,7 +44,7 @@ update every linked step when rebuilding the plan. See the
 Start oil testing with **Template · flow stability scout**: a single-height M1
 flow sweep, with editable base flow and point duration. Review its settling/fit
 recommendations before preparing a density run. See
-[scout protocol and thresholds](junk/oil_density_experiment.md#first-separate-single-height-scout).
+the protocol's editable parameters and saved calculation report.
 
 **Calculations** is a separate TOC section: select **Flow stability scout**, **Oil density** or **Recording
 summary**, select a finished recorded run, then **Calculate**. It reads archived
