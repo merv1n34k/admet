@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from admet.workflows import Stage
 
 
 @dataclass(frozen=True)
@@ -11,13 +10,6 @@ class PanelSpec:
     key: str
     title: str
     object_name: str = "Panel"
-
-
-@dataclass(frozen=True)
-class SettingsPanelState:
-    kind: str
-    source: str = ""
-    stage_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -49,17 +41,6 @@ def panel_specs(*, channel_manager: bool = False, include_results: bool = True) 
     if include_results:
         return panels
     return tuple(panel for panel in panels if panel.key != "results")
-
-
-def settings_panel_state(stage: Stage) -> SettingsPanelState:
-    panel = stage.settings_panel
-    if panel is None:
-        return SettingsPanelState(kind="none", stage_id=stage.id)
-    return SettingsPanelState(
-        kind=panel.kind,
-        source=str(panel.options.get("source") or ""),
-        stage_id=stage.id,
-    )
 
 
 def log_state(entries: list[str] | tuple[str, ...], *, limit: int = 80, empty_text: str = "No actions yet.") -> LogState:

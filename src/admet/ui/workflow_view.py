@@ -25,38 +25,8 @@ class TocRowState:
     status: Any
 
 
-def current_stage(workflow: Workflow, state: WorkflowState) -> Stage:
-    index = max(0, min(state.index, len(workflow.stages) - 1))
-    return workflow.stages[index]
-
-
-def stage_by_id(workflow: Workflow, state: WorkflowState, stage_id: str) -> Stage:
-    return next((stage for stage in workflow.stages if stage.id == stage_id), current_stage(workflow, state))
-
-
 def has_feature(stage: Stage, feature: str) -> bool:
     return feature in stage.features
-
-
-# Every guard name the control window answers to. An unrecognised guard reads as
-# true, so a name that never reaches the window would silently enable its button.
-KNOWN_GUARDS = frozenset(
-    {
-        "project_ready",
-        "camera_connected",
-        "camera_live",
-        "fluidics_connected",
-        "pipeline_running",
-        "pipeline_waiting",
-        "pipeline_complete",
-        "corrections_applied",
-        "devices_released",
-        "check_infeasible",
-        "check_recorded",
-        "check_due",
-        "check_satisfied",
-    }
-)
 
 
 # What a protocol reports while it is doing something, and once it is not.
@@ -76,18 +46,6 @@ def pipeline_is_running(polled_state: str, event_state: str = "") -> bool:
     if event_state in PIPELINE_FINISHED:
         return False
     return polled_state in PIPELINE_BUSY
-
-
-def guard_terms(guard: str) -> tuple[str, ...]:
-    """The names a guard expression refers to, without their negation."""
-    terms = []
-    for part in guard.split(" and "):
-        part = part.strip()
-        if part.startswith("not "):
-            part = part[4:].strip()
-        if part:
-            terms.append(part)
-    return tuple(terms)
 
 
 def guard_enabled(guard: str, value: Callable[[str], bool]) -> bool:

@@ -62,20 +62,6 @@ from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES, LIQUID_PR
 from admet.engines.acquisition.fluidics.liquids import profile_by_id
 from admet.ui.preflight import PreflightPanel
 from admet.ui.tables import GridTable, SummaryLabel, fit_table_height
-from admet.workflows.check_history import (
-    CHECK_INTERVAL_DAYS,
-    CheckRecord,
-    discover_checks,
-    latest_check,
-    load_check,
-)
-from admet.workflows.preflight import (
-    CHECK_COMPLETE,
-    CHECK_DISPENSE,
-    CHECK_FLOW,
-    CHECK_PARTIAL,
-    CHECK_STARTED,
-)
 from admet.ui import theme as ui
 from admet.ui.data import (
     VIDEO_TABLE_COLUMNS,
@@ -164,15 +150,6 @@ PREVIEW_MIN_HEIGHT = 280
 PREVIEW_MAX_HEIGHT = 520
 
 LEFT_RAIL_WIDTH = 246
-
-# How many past checks a stage shows before the list starts scrolling.
-CHECK_HISTORY_ROWS = 6
-
-# Which stages produce a stored check, and what kind of snapshot each one writes.
-CHECK_KINDS = {
-    "characterise": CHECK_FLOW,
-    "gravimetry": CHECK_DISPENSE,
-}
 
 
 class NumericParamEdit(QLineEdit):
@@ -373,7 +350,6 @@ class ControlWindow(QMainWindow):
         self.log_entries: list[str] = ["Control UI ready."]
         self.toc_rows: list[dict[str, Any]] = []
         self.project_path = Path(api.workdir) if api.workdir else None
-        self._control_recording_dir: Path | None = None
         self._last_frame_id = 0
         self._last_status_poll = 0.0
         self._last_poll_error = ""
@@ -389,23 +365,11 @@ class ControlWindow(QMainWindow):
         self._instruction_text = ""
         self._notification_text = ""
         self._notification_kind = "primary"
-        self._runs_completion_confirmed = False
         # Corrections have to reach the hardware before the stage can be left, and
         # editing any correction value makes the applied set stale again.
         self._corrections_applied = False
         self._preflight: PreflightPanel | None = None
         self._calculations = None
-        self._last_sweep_step = -1
-        self._sweep_reading: tuple[list[float], list[float]] | None = None
-        # A finished check writes its snapshot once; the completion state is polled.
-        self._stored_check_stage = ""
-        # Scanning every project is cheap but not free, so the history is read once
-        # and dropped whenever something could have changed it.
-        self._check_records: tuple[CheckRecord, ...] | None = None
-        # The record a running check writes to, so its start and its end are one.
-        self._check_run_id = ""
-        self.check_history_table: QTableWidget | None = None
-        self._check_history_rows: list[CheckRecord] = []
 
         self.setWindowTitle("ADMET Qt" + (" — TEST SIMULATION" if api.simulated else ""))
         self.resize(1440, 920)
@@ -448,7 +412,6 @@ class ControlWindow(QMainWindow):
         self._latest_pipeline_event: Any | None = None
         self._pipeline_stage_id = ""
         self._pipeline_pending_confirmation = ""
-        self._tube_switch_notice_step = -1
         self._mounted_signature: tuple[Any, ...] | None = None
         self._transport_button_refs: list[QPushButton] = []
         self._protocol_status_label: QLabel | None = None
@@ -777,7 +740,6 @@ class ControlWindow(QMainWindow):
             self._set_status("Project create failed", "danger")
             self._notify(f"Project create failed: {exc}", "danger", timeout_ms=0)
             return
-        self._control_recording_dir = None
         self._remember_project()
         self._sync_project_badge()
         self._set_status("Project created", "success")
@@ -824,7 +786,6 @@ class ControlWindow(QMainWindow):
     def _build_project_menu(self) -> QMenu:
         """Discovered projects, listed the way the analyze picker lists them."""
         self.project_refs = discover_projects(self.discovery_root, recent=self.recent_projects)
-        self._check_records = None
         menu = QMenu(self)
         menu.setToolTipsVisible(True)
         current = str(self.project_path.resolve()) if self.project_path else ""
@@ -867,7 +828,6 @@ class ControlWindow(QMainWindow):
             self._set_status("Project load failed", "danger")
             self._notify(f"Project load failed: {exc}", "danger", timeout_ms=0)
             return
-        self._control_recording_dir = None
         self._remember_project()
         self._sync_project_badge()
         self._set_status("Project selected", "success")
@@ -1033,91 +993,14 @@ class ControlWindow(QMainWindow):
         if page is None:
             return
         self._clear_layout(page.sections_layout, delete=False)
-        self.check_history_table: QTableWidget | None = None
-        self._check_history_rows: list[CheckRecord] = []
         keys = tuple(stage.settings_options.get("sections") or ())
-        history = self._build_check_history(stage)
-        if not keys and history is None:
+        if not keys:
             page.sections_host.hide()
             return
         for section in self._ensure_preflight().sections_for(keys):
             page.sections_layout.addWidget(section)
             section.show()
-        if history is not None:
-            page.sections_layout.addWidget(history)
         page.sections_host.show()
-
-    def _build_check_history(self, stage: Stage) -> QWidget | None:
-        """Every check of this kind already on record, oldest question first:
-        what did this rig read last time?
-        """
-        kind = self._check_kind(stage)
-        if not kind:
-            return None
-        panel, body = _panel_box(f"Previous {kind or 'system'} checks")
-        hint = QLabel(
-            "Every run of this check that has been recorded, on this rig, in any "
-            "project. A run that was stopped part way is listed with what it did "
-            "measure. Click a run to put its readings and the setup it was measured "
-            "on back into this stage."
-        )
-        hint.setObjectName("StageSummary")
-        hint.setWordWrap(True)
-        body.addWidget(hint)
-
-        table = GridTable(0, 3)
-        table.setHorizontalHeaderLabels(("When", "Project", "Result"))
-        table.verticalHeader().hide()
-        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        table.setCursor(Qt.CursorShape.PointingHandCursor)
-        table.cellClicked.connect(self._load_check_row)
-        body.addWidget(table)
-        self.check_history_table = table
-        self._sync_check_history(stage)
-        return panel
-
-    def _load_check_row(self, row: int, _column: int = 0) -> None:
-        if 0 <= row < len(self._check_history_rows):
-            self._load_check_record(self._check_history_rows[row])
-
-    def _sync_check_history(self, stage: Stage | None = None) -> None:
-        table = self.check_history_table
-        if table is None:
-            return
-        stage = stage or self.workflow.current_stage(self.workflow_state)
-        kind = self._check_kind(stage)
-        records = [record for record in self._check_history() if not kind or record.kind == kind]
-        self._check_history_rows = records
-        table.setRowCount(len(records) or 1)
-        if not records:
-            empty = QTableWidgetItem("No run of this check has been recorded yet.")
-            empty.setFlags(empty.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            table.setItem(0, 0, empty)
-            table.setSpan(0, 0, 1, table.columnCount())
-        else:
-            table.clearSpans()
-            for row, record in enumerate(records):
-                when = record.recorded_at[:16].replace("T", " ") or "unrecorded"
-                for column, text in enumerate((when, record.project_id, record.summary)):
-                    item = QTableWidgetItem(text)
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    table.setItem(row, column, item)
-        table.resizeRowsToContents()
-        # Every run stays listed. The panel is tall enough to read at a glance and
-        # scrolls past that, so a rig checked weekly for a year neither loses its
-        # history nor pushes the rest of the stage off the page.
-        fit_table_height(table, max_rows=CHECK_HISTORY_ROWS)
-        table.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-            if len(records) > CHECK_HISTORY_ROWS
-            else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
 
     def _sync_stage(self, stage: Stage) -> None:
         preview_column = self.preview.parentWidget() if self.preview is not None else None
@@ -1128,7 +1011,6 @@ class ControlWindow(QMainWindow):
         self._sync_liquid_profile_summary()
         self._sync_results()
         self._sync_log()
-        self._sync_check_history(stage)
         self._sync_toc()
         self._show_stage_instruction(stage)
 
@@ -1376,83 +1258,6 @@ class ControlWindow(QMainWindow):
                 lambda _checked=False, c=control: self._run(
                     c.off_action if active_when(c.active_when, self._guard_value) else c.action
                 ),
-                state.enabled,
-                state.active,
-                state.toggle,
-            )
-        if action == "run_protocol":
-            state = action_button_state(
-                control,
-                self._guard_value,
-                enabled=self._action_enabled("run_protocol"),
-                active=self._pipeline_active(),
-                toggle=True,
-                label=_short_control_label(control.label),
-            )
-            return (
-                state.label,
-                lambda _checked=False, s=stage: self._toggle_pipeline(s),
-                state.enabled,
-                state.active,
-                state.toggle,
-            )
-        if action == "pause_protocol":
-            paused = self._pipeline_paused()
-            state = action_button_state(
-                control,
-                self._guard_value,
-                enabled=self._action_enabled("pause_protocol"),
-                active=paused,
-                toggle=True,
-                label="Resume" if paused else "Pause",
-            )
-            return (
-                state.label,
-                lambda _checked=False: self._toggle_pause(),
-                state.enabled,
-                state.active,
-                state.toggle,
-            )
-        if action == "confirm_protocol":
-            state = action_button_state(
-                control,
-                self._guard_value,
-                enabled=self._action_enabled(action),
-                active=False,
-                label=_short_control_label(control.label),
-            )
-            return (
-                state.label,
-                lambda _checked=False, s=stage: self._confirm_pipeline_step(s),
-                state.enabled,
-                state.active,
-                state.toggle,
-            )
-        if action == "load_last_check":
-            state = action_button_state(
-                control,
-                self._guard_value,
-                active=False,
-                label=_short_control_label(control.label),
-            )
-            return (
-                state.label,
-                lambda _checked=False, s=stage: self._load_last_check(s),
-                state.enabled,
-                state.active,
-                state.toggle,
-            )
-        if action == "skip_protocol":
-            state = action_button_state(
-                control,
-                self._guard_value,
-                enabled=self._action_enabled(action),
-                active=False,
-                label=_short_control_label(control.label),
-            )
-            return (
-                state.label,
-                lambda _checked=False, s=stage: self._skip_pipeline_step(s),
                 state.enabled,
                 state.active,
                 state.toggle,
@@ -1937,94 +1742,6 @@ class ControlWindow(QMainWindow):
             self._render_current_stage()
         return result
 
-    def _toggle_pipeline(self, stage: Stage) -> None:
-        if self._pipeline_active():
-            self._run("stop_protocol", refresh=False)
-            if stage.completion_gate == "recording_confirmation" and self.last_metadata.get("recording_active"):
-                self._run("stop_recording", refresh=False)
-            self._render_current_stage()
-            return
-
-        if stage.completion_gate == "recording_confirmation":
-            self._runs_completion_confirmed = False
-        self._latest_pipeline_event = None
-        if stage.id in CHECK_KINDS:
-            self._stored_check_stage = ""
-            self._check_run_id = ""
-        if stage.settings_options.get("pipeline_name") == "Characterise":
-            self._last_sweep_step = -1
-            self._sweep_reading = None
-            self._ensure_preflight().clear_sweep()
-        self._pipeline_stage_id = stage.id
-        statuses = dict(self.workflow_state.statuses)
-        statuses[stage.id] = StageStatus.ACTIVE
-        self.workflow_state = replace(self.workflow_state, statuses=statuses)
-        started = self._run("run_protocol", self._protocol_run_settings(stage), refresh=False)
-        if started is not None:
-            # On disk before the first reading: a run that is stopped or that
-            # never finishes still leaves the setup it was measuring.
-            self._store_system_check(stage, status=CHECK_STARTED)
-        self._render_current_stage()
-
-    def _skip_pipeline_step(self, stage: Stage) -> None:
-        self._run("skip_protocol", refresh=False, notify_success=False)
-        self._clear_pipeline_confirmation()
-        self._dismiss_notification()
-        self._refresh_action_box(stage)
-
-    def _confirm_pipeline_step(self, stage: Stage | None = None) -> None:
-        if stage is None:
-            stage = self.workflow.current_stage(self.workflow_state)
-        confirmation = self._pending_pipeline_confirmation()
-        run_complete_label = _run_complete_label(confirmation)
-        if stage.completion_gate == "recording_confirmation":
-            run_label = _run_start_label(confirmation)
-            if run_label and not self.last_metadata.get("recording_active"):
-                if self._run(
-                    "start_recording",
-                    self._recording_settings(run_label),
-                    refresh=False,
-                    notify_success=False,
-                ) is None:
-                    self._refresh_action_box(stage)
-                    return
-        if self._run("confirm_protocol", refresh=False, notify_success=False) is None:
-            self._refresh_action_box(stage)
-            return
-        if stage.completion_gate == "recording_confirmation" and run_complete_label:
-            self._runs_completion_confirmed = True
-        self._clear_pipeline_confirmation()
-        self._dismiss_notification()
-        if stage.pipeline:
-            self._refresh_action_box(stage)
-
-    def _protocol_run_settings(self, stage: Stage) -> dict[str, Any]:
-        settings = {
-            "pipeline_name": stage.settings_options.get("pipeline_name", self.values.get("pipeline_name")),
-            "tick_s": self.values.get("tick_s"),
-        }
-        for name in stage.settings_options.get("main", ()):
-            settings[name] = self.values.get(name)
-        return settings
-
-    def _recording_settings(self, run_label: str) -> dict[str, Any]:
-        if self.project_path is None:
-            return {}
-        if self._control_recording_dir is None:
-            self._control_recording_dir = self.project_path / "records"
-        return {
-            "recording_root": str(self._control_recording_dir),
-            "recording_label": run_label,
-        }
-
-    def _toggle_pause(self) -> None:
-        action = "resume_protocol" if self._pipeline_paused() else "pause_protocol"
-        result = self._run(action, refresh=False, notify_success=False)
-        if result is None:
-            self._render_current_stage()
-            return
-        self._render_current_stage()
-
     def _pipeline_active(self) -> bool:
         return self.last_metadata.get("pipeline_state") in {"running", "paused", "stopping"}
 
@@ -2145,10 +1862,6 @@ class ControlWindow(QMainWindow):
         if self.last_metadata.get("pipeline_state") != was_running:
             self._refresh_action_box(self.workflow.current_stage(self.workflow_state))
 
-    def _stop_recording_on_finished_pipeline(self) -> None:
-        # Recording finalization and artifact registration belong to the service.
-        return
-
     def _poll_pipeline_events(self) -> None:
         queue = getattr(self.api.engine, "pipeline_queue", None)
         if queue is None:
@@ -2180,136 +1893,22 @@ class ControlWindow(QMainWindow):
             confirmation = str(getattr(latest, "confirmation_message", "") or "").strip()
             if confirmation:
                 self._pipeline_pending_confirmation = confirmation
-                if stage.completion_gate == "recording_confirmation":
-                    self._sync_run_recording_for_confirmation(confirmation)
             elif self._pipeline_event_state(latest) not in {"paused"}:
                 self._clear_pipeline_confirmation()
-            self._maybe_notify_tube_switch(stage, latest)
-            self._capture_sweep_point(stage, latest)
             if self.workflow.current_stage(self.workflow_state).id == stage.id:
                 self._refresh_action_box(stage)
             else:
                 self._sync_toc()
         finished = self._pipeline_event_state(latest)
         if finished in PIPELINE_FINISHED:
-            # However it ended, what it measured is worth keeping: a sweep stopped
-            # half way still says what those steps cost.
-            self._store_system_check(
-                stage,
-                status=CHECK_COMPLETE if finished == "completed" else CHECK_PARTIAL,
-            )
             self._refresh_action_box(stage)
-
-    def _store_system_check(self, stage: Stage, *, status: str = CHECK_COMPLETE) -> None:
-        """Keep a check as a project record, from the moment it starts.
-
-        Written twice: as the run begins, carrying everything entered -- tube runs,
-        bores, flows, limits, liquids, the settling rule -- and again as it ends,
-        carrying what was measured. The first write is what survives a run that is
-        stopped, crashes, or is walked away from; the second replaces it in place,
-        so one run is one record. Numbers only: no video and no fluidics trace,
-        because a check is about the rig rather than about a sample.
-        """
-        kind = CHECK_KINDS.get(stage.id, "")
-        if not kind:
-            return
-        if status != CHECK_STARTED and self._stored_check_stage == stage.id:
-            return
-        if self.project_path is None or self.api.session is None:
-            self._append_log("system check: no project open, nothing stored")
-            return
-        snapshot = self._ensure_preflight().snapshot(
-            kind,
-            datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            status=status,
-            settings=self._protocol_run_settings(stage),
-        )
-        try:
-            store = ProjectStore(self.project_path, self.api.session)
-            path = store.append_system_check(
-                snapshot.to_dict(),
-                summary=snapshot.summary(),
-                check_id=self._check_run_id,
-            )
-        except Exception as exc:
-            self._append_log(f"system check: not stored ({type(exc).__name__}: {exc})")
-            return
-        self._check_run_id = path.stem
-        if status != CHECK_STARTED:
-            self._stored_check_stage = stage.id
-        self.project_path = store.path
-        self.api.session = store.session
-        self.api.workdir = str(store.path)
-        self._check_records = None
-        # The list on this very stage is one of the things the record changes.
-        self._sync_check_history(stage)
-        self._append_log(f"system check stored as {path.name}: {snapshot.summary()}")
-
-    def _capture_sweep_point(self, stage: Stage, event: Any) -> None:
-        """Record a settled sweep step into the pre-flight table.
-
-        Taken as the step advances, so the readings are the ones the step ended on --
-        settled if the flow steadied, saturated if it never did, which is itself the
-        measurement. Nothing is written to the project: the sweep only fills the table.
-        """
-        if stage.settings_options.get("pipeline_name") != "Characterise":
-            return
-        step_index = _event_step_index(event)
-        if step_index < 0:
-            return
-        if step_index != self._last_sweep_step:
-            # The step changed, so whatever was last seen belongs to the one that
-            # ended -- reading at the moment of the change would catch flows already
-            # moving towards the next setpoint.
-            if self._last_sweep_step >= 0 and self._sweep_reading is not None:
-                pressures, flows = self._sweep_reading
-                self._ensure_preflight().record_sweep_point(
-                    self._last_sweep_step, pressures, flows
-                )
-                self._append_log(f"sweep: recorded step {self._last_sweep_step + 1}")
-            self._last_sweep_step = step_index
-            self._sweep_reading = None
-        if self._latest_snapshot is not None:
-            self._sweep_reading = (
-                list(self._latest_snapshot.pressures),
-                list(self._latest_snapshot.flows),
-            )
-
-    def _sync_run_recording_for_confirmation(self, confirmation: str) -> None:
-        if not _run_complete_label(confirmation):
-            return
-        if not self.last_metadata.get("recording_active"):
-            return
-        self._run("stop_recording", raise_errors=False, refresh=False, notify_success=False)
-
-    def _maybe_notify_tube_switch(self, stage: Stage, event: Any | None) -> None:
-        if stage.id != "runs" or event is None:
-            return
-        if self._pipeline_event_state(event) != "running":
-            return
-        step_name = str(getattr(event, "step_name", "") or "")
-        if not step_name.startswith("Run set"):
-            return
-        step_index = _event_step_index(event)
-        if step_index == self._tube_switch_notice_step:
-            return
-        progress = max(0.0, min(1.0, float(getattr(event, "progress", 0.0) or 0.0)))
-        run_volume = float(self.values.get("run_volume_ul") or 0.0)
-        oil_flow_ul_min = 250.0
-        remaining_s = ((1.0 - progress) * run_volume / oil_flow_ul_min * 60.0) if run_volume > 0 else 0.0
-        if 0.0 < remaining_s <= 5.0:
-            self._tube_switch_notice_step = step_index
-            self._notify("Switch collection tube to waste tube.", "warning", timeout_ms=0)
 
     def _clear_finished_pipeline_state(self, stage: Stage) -> None:
         """Drop the finished protocol's leftovers as the operator leaves the stage."""
         self._latest_pipeline_event = None
         self._pipeline_stage_id = ""
-        self._tube_switch_notice_step = -1
         self._clear_pipeline_confirmation()
         self._dismiss_notification()
-        if stage.completion_gate == "recording_confirmation":
-            self._runs_completion_confirmed = False
 
     def _refresh_action_box(self, stage: Stage) -> None:
         self._refresh_runtime_state()
@@ -2413,10 +2012,6 @@ class ControlWindow(QMainWindow):
             return "error"
         if stage.id == self._pipeline_stage_id and self._pipeline_active():
             return "processing"
-        if self._check_infeasible(stage.id):
-            # A setup that cannot reach its flows is worth seeing from the contents,
-            # not only from inside the stage that measured it.
-            return "error"
         if status is StageStatus.COMPLETE:
             return "done"
         if status is StageStatus.ACTIVE:
@@ -2447,9 +2042,6 @@ class ControlWindow(QMainWindow):
         if state == "error":
             return 0.0
         return min(99.0, max(0.0, (current + step_progress) / total * 100.0))
-
-    def _pipeline_progress_percent(self) -> float:
-        return self._pipeline_total_progress_percent()
 
     def _stage_progress(self, stage):
         if "json_protocol" in stage.features and stage.id != self._pipeline_stage_id:
@@ -2484,94 +2076,13 @@ class ControlWindow(QMainWindow):
                 return False
             if self.workflow_state.statuses.get(stage.id) is not StageStatus.ACTIVE:
                 return False
-            # The protocol finishing is enough. The recording-confirmation gate only
-            # existed to hold back the automatic advance; the operator's click is the
-            # confirmation now.
             return self._pipeline_event_state(self._latest_pipeline_event) == "completed"
         if name == "corrections_applied":
             return self._corrections_applied
         if name == "devices_released":
             self._refresh_runtime_state()
             return not (self.runtime_state["camera"] or self.runtime_state["fluidics"])
-        if name == "check_infeasible":
-            return self._check_infeasible(
-                self.workflow.current_stage(self.workflow_state).id
-            )
-        if name == "check_recorded":
-            return self._last_check() is not None
-        if name == "check_satisfied":
-            # Leaving a check stage means either running it now or having an
-            # earlier one to stand on. A rig with no check of this kind at all
-            # has to run one.
-            return self._guard_value("pipeline_complete") or self._last_check() is not None
-        if name == "check_due":
-            record = self._last_check()
-            return record is None or record.is_due(datetime.now(timezone.utc))
         return True
-
-    def _check_infeasible(self, stage_id: str = "") -> bool:
-        """True when the measured sweep says the target flows cannot be reached."""
-        if self._preflight is None:
-            return False
-        if stage_id and stage_id != "characterise":
-            return False
-        return self._preflight.verdict_feasible is False
-
-    def _check_kind(self, stage: Stage | None = None) -> str:
-        stage = stage if stage is not None else self.workflow.current_stage(self.workflow_state)
-        return CHECK_KINDS.get(stage.id, "")
-
-    def _check_history(self) -> tuple[CheckRecord, ...]:
-        if self._check_records is None:
-            self._check_records = discover_checks(self.discovery_root)
-        return self._check_records
-
-    def _last_check(self, stage: Stage | None = None) -> CheckRecord | None:
-        kind = self._check_kind(stage)
-        if not kind:
-            return None
-        return latest_check(self._check_history(), kind)
-
-    def _load_last_check(self, stage: Stage) -> None:
-        """Bring the last stored check back instead of running another."""
-        record = self._last_check(stage)
-        if record is None:
-            self._notify("No stored check to load", "warning")
-            return
-        self._load_check_record(record)
-
-    def _load_check_record(self, record: CheckRecord) -> None:
-        """Put a stored run back into the stage that measured it.
-
-        Only worth doing when nothing about the setup has moved since -- the
-        readings are re-shown exactly as they were taken, and the stage is left
-        for the operator to accept or re-run.
-        """
-        if self._guard_value("pipeline_running"):
-            self._notify("A protocol is running -- its readings would be replaced", "warning")
-            return
-        data = load_check(record.path)
-        if not data:
-            self._notify(f"Could not read {record.path.name}", "danger")
-            return
-        restored = self._ensure_preflight().load_snapshot(data)
-        if not restored:
-            self._notify("Stored check held nothing to restore", "warning")
-            return
-        now = datetime.now(timezone.utc)
-        age = record.age_days(now)
-        age_text = f"{age:.0f} days old" if age is not None else "undated"
-        if record.is_due(now):
-            # Loading an old check shows its numbers but does not make them current.
-            self._notify(
-                f"Loaded check from {record.project_id}, {age_text} -- past the "
-                f"{CHECK_INTERVAL_DAYS} day interval, so it is still owed a fresh run",
-                "danger",
-            )
-        else:
-            self._notify(f"Loaded check from {record.project_id}, {age_text}", "warning")
-        self._append_log(f"check loaded: {record.path.name} ({record.summary})")
-        self._render_current_stage()
 
     def _refresh_runtime_state(self) -> None:
         camera = getattr(self.api.engine, "camera", None)
@@ -2916,18 +2427,6 @@ class ControlWindow(QMainWindow):
                 break
         return {name: self.values.get(name) for name in action_params}
 
-    def _store_recording_artifact(self, recording: Any) -> None:
-        if not isinstance(recording, dict) or self.project_path is None or self.api.session is None:
-            return
-        try:
-            store = ProjectStore(self.project_path, self.api.session)
-            store.append_control_recording(recording)
-            self.project_path = store.path
-            self.api.session = store.session
-            self.api.workdir = str(store.path)
-        except Exception as exc:
-            self._append_log(f"project: acquisition metadata save failed: {exc}")
-
     def _video_rows(self) -> list[dict[str, str]]:
         rows: dict[str, dict[str, str]] = {}
         session = self.api.session
@@ -2965,24 +2464,7 @@ class ControlWindow(QMainWindow):
         if stage is None:
             stage = self.workflow.current_stage(self.workflow_state)
         text = instruction_text(stage, self._guard_value)
-        self._show_instruction_card(self._with_last_check(stage, text))
-
-    def _with_last_check(self, stage: Stage, text: str) -> str:
-        """Append what this rig's last check of this kind was, if any.
-
-        The date is given as the date, not as an age: a standing note that says
-        "12 days ago" is wrong tomorrow, while the day it was run stays true.
-        """
-        kind = self._check_kind(stage)
-        if not kind:
-            return text
-        record = self._last_check(stage)
-        if record is None:
-            # Phrased as the same fact in its empty state: "no record" on its own
-            # reads as the stage not carrying this information at all.
-            return f"{text} Last {kind} check: never run on this rig."
-        day = record.recorded_at[:10] or "an unrecorded date"
-        return f"{text} Last {kind} check: {day}, project {record.project_id}."
+        self._show_instruction_card(text)
 
     def _set_status(self, text: str, kind: str = "primary") -> None:
         self.status_kind = kind
@@ -3832,16 +3314,6 @@ def _short_control_label(label: str) -> str:
 
 def _pipeline_start_label(stage: Stage) -> str:
     return str(stage.settings_options.get("pipeline_label") or "Start")
-
-
-def _run_start_label(message: str) -> str:
-    match = re.search(r"\bStart\s+(set\d{2}_rep\d{2})\b", message)
-    return match.group(1) if match else ""
-
-
-def _run_complete_label(message: str) -> str:
-    match = re.search(r"\b(set\d{2}_rep\d{2})\s+complete\b", message)
-    return match.group(1) if match else ""
 
 
 def _status_dot(status: str, size: int) -> QLabel:

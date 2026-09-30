@@ -171,10 +171,6 @@ def spacing(value: str | int | None = "default") -> int:
     return _SPACING.get(value, Theme.GROUP_GAP)
 
 
-def css_variables() -> str:
-    return "".join(f"--{name}:{value};" for name, value in _WEB_TOKENS.items())
-
-
 def button_qss(kind: ButtonVariant = "neutral", *, size: ControlSize = "default") -> str:
     bg, hover = BUTTON_COLORS.get(kind, BUTTON_COLORS["neutral"])
     token = control_size(size)

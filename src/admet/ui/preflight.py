@@ -1,69 +1,36 @@
-"""The planning maths, as sections mounted on the stages that need them.
-
-Replaces the planning spreadsheet: the flow split and what an experiment will
-consume, what the plumbing costs, and the factor a weighed dispense implies.
-
-These used to be one page of their own, which meant reading numbers in one place
-and acting on them in another. Each section now belongs to the stage it informs
--- flows and consumption to the runs, the layout and the swept resistance to the
-flow check, the weights to the dispense check -- while a single owner keeps them
-consistent, since every section is a function of the same flows and liquids.
-"""
+"""Non-actuating preflight tools for flow ratios, layout and consumption."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QAbstractScrollArea,
     QComboBox,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QLabel,
-    QHeaderView,
     QSpinBox,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from admet.engines.acquisition.fluidics.config import GRAVIMETRIC_REPLICATES
-from admet.ui.tables import GridTable, fit_table_height
 from admet.ui.theme import Theme
 from admet.workflows.preflight import (
-    CHECK_COMPLETE,
-    CHECK_DISPENSE,
-    CHECK_FLOW,
-    CHECK_STARTED,
     REFERENCE_FLOWS,
     CheckConditions,
-    CheckSnapshot,
-    DispenseCheck,
-    FlowCheck,
     FlowSetup,
-    GravimetricRun,
     LiquidVolumes,
-    dispense_time_s,
     estimate_consumption,
-    gravimetric_factors,
     ChannelPath,
     Segment,
-    SystemResistance,
-    assess_feasibility,
-    chip_resistance,
     emulsion_viscosity,
-    fit_system_resistance,
     layout_back_pressure,
     solve_flows,
 )
 
-GRAVIMETRIC_ROWS = GRAVIMETRIC_REPLICATES
-SYSTEM_SWEEP_ROWS = 5
-SWEEP_ROW_HEIGHT = 28
 
 # Inner diameters, which is what sets the resistance. Tubing is usually quoted by
 # outer diameter -- 1/32" and 1/16" are ODs, not bores -- so the labels carry the
@@ -114,22 +81,6 @@ def _field(layout: QGridLayout, row: int, column: int, label: str, widget: QWidg
 def _value_label(text: str = "-") -> QLabel:
     label = QLabel(text)
     label.setObjectName("MutedText")
-    return label
-
-
-def _safe_at(values: list[float], index: int) -> float | None:
-    try:
-        value = float(values[index])
-        return value if math.isfinite(value) else None
-    except (IndexError, TypeError, ValueError):
-        return None
-
-
-def _node(text: str) -> QLabel:
-    """A box in the scheme: a source, a sensor, the chip or the collection tube."""
-    label = QLabel(text)
-    label.setObjectName("SchemeNode")
-    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     return label
 
 
@@ -337,20 +288,14 @@ class PreflightPanel(QWidget):
         self.setObjectName("PreflightPanel")
         self._channel_labels = channel_labels
         self._channel_units = channel_units or {}
-        # None until a sweep has been measured: unknown is not the same as passing.
-        self.verdict_feasible: bool | None = None
         self._liquids = liquids
         self._syncing = False
 
-        # This widget is never shown. It owns the sections so they stay one
-        # calculation -- a flow typed on the runs stage moves the layout on the
-        # check stage -- and hands them out to whichever stage page mounts them.
+        # The stage page mounts these sections; this widget retains their state.
         self.sections: dict[str, QWidget] = {
             "flow": self._build_flow_panel(),
             "layout": self._build_tubing_panel(),
-            "system": self._build_system_panel(),
             "consumption": self._build_consumption_panel(),
-            "gravimetric": self._build_gravimetric_panel(),
         }
         self.hide()
 
@@ -635,181 +580,8 @@ class PreflightPanel(QWidget):
             )
         self.layout_result.setText("\n".join(lines))
 
-    # ---- measured system -------------------------------------------------
-    def _build_system_panel(self) -> QWidget:
-        panel, body = _panel("Measured system resistance")
-        protocol = QLabel(
-            "Enter pressure/flow pairs from a recorded run, or load a previous check below. "
-            "Use a fixed phase ratio for the resistance fit. This calculator does not start a sweep "
-            "or automatically associate results with a protocol. Re-measure after changing the setup."
-        )
-        protocol.setObjectName("StageSummary")
-        protocol.setWordWrap(True)
-        body.addWidget(protocol)
-
-        # A real table rather than a bare grid of spin boxes: the rows of a sweep
-        # have to be told apart at a glance, and a grid draws nothing between them.
-        table = GridTable(SYSTEM_SWEEP_ROWS, 1 + 2 * len(self._channel_labels))
-        headers = ["Step"]
-        for channel in self._channel_labels:
-            headers += [f"{channel}\nmbar", f"{channel}\nuL/min"]
-        table.setHorizontalHeaderLabels(headers)
-        table.verticalHeader().hide()
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        for column in range(1, table.columnCount()):
-            table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
-        # Rows are a fixed height, so their spacing cannot drift with whatever
-        # space is left over.
-        table.verticalHeader().setDefaultSectionSize(SWEEP_ROW_HEIGHT)
-
-        self._system_rows: list[list[tuple[QDoubleSpinBox, QDoubleSpinBox]]] = []
-        for index in range(SYSTEM_SWEEP_ROWS):
-            step = QTableWidgetItem(str(index + 1))
-            step.setFlags(step.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            table.setItem(index, 0, step)
-            row: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
-            for channel_index in range(len(self._channel_labels)):
-                pressure = _spin(-1.0, 20000.0, -1.0, "", decimals=0)
-                flow = _spin(-1.0, 20000.0, -1.0, "", decimals=2)
-                pressure.setSpecialValueText("—")
-                flow.setSpecialValueText("—")
-                pressure.valueChanged.connect(self.recalculate)
-                flow.valueChanged.connect(self.recalculate)
-                table.setCellWidget(index, 1 + channel_index * 2, pressure)
-                table.setCellWidget(index, 2 + channel_index * 2, flow)
-                row.append((pressure, flow))
-            self._system_rows.append(row)
-        fit_table_height(table)
-        body.addWidget(table)
-
-        self.system_fit = _value_label("Enter at least two points.")
-        self.system_fit.setWordWrap(True)
-        body.addWidget(self.system_fit)
-
-        # The verdict itself is raised where the operator is looking -- the stage
-        # marker and the stage note -- so the section carries only its reasoning.
-        self.system_verdict_detail = _value_label("")
-        self.system_verdict_detail.setWordWrap(True)
-        body.addWidget(self.system_verdict_detail)
-
-        self.system_remedies = _value_label("")
-        self.system_remedies.setWordWrap(True)
-        body.addWidget(self.system_remedies)
-
-        body.addWidget(
-            _formula(
-                "per channel, swept at a fixed ratio:",
-                "  P_i = R_i x Q_i + P0_i     fitted from that channel's points",
-                "  R_i = tubing + fittings + chip, as seen by that inlet",
-                "  P0_i = pressure that buys no flow (junction + head)",
-                "  max flow_i = (limit - P0_i) / R_i",
-                "the channel needing the most pressure limits the setup",
-            )
-        )
-        return panel
-
     def _outlet_segment(self) -> Segment:
         return Segment(self.outlet_length.value(), float(self.outlet_bore.currentData()))
-
-    def _tubing_resistance(self, channel: str, target_ul_min: float) -> float:
-        """The share of a channel's resistance that re-plumbing could actually change."""
-        if target_ul_min <= 0:
-            return 0.0
-        drop = next(
-            (
-                load.total_mbar
-                for load in layout_back_pressure(
-                    self._channel_paths(),
-                    outlet=self._outlet_segment(),
-                    outlet_viscosity_mpa_s=self._outlet_viscosity(),
-                )
-                if load.label == channel
-            ),
-            0.0,
-        )
-        return drop / target_ul_min
-
-    def _measured_channels(
-        self,
-    ) -> list[tuple[str, tuple[tuple[float, float], ...], SystemResistance, float]]:
-        """Channels with enough swept points to fit, as (channel, samples, fit, target)."""
-        targets = (self.oil_flow.value(), self.cells_flow.value(), self.beads_flow.value())
-        measured = []
-        for index, channel in enumerate(self._channel_labels):
-            samples = tuple(
-                (row[index][0].value(), row[index][1].value())
-                for row in self._system_rows
-                if row[index][0].value() > 0 and row[index][1].value() > 0
-            )
-            if len(samples) >= 2:
-                target = targets[index] if index < len(targets) else 0.0
-                measured.append((channel, samples, fit_system_resistance(samples), target))
-        return measured
-
-    def _recalculate_system(self) -> None:
-        limit = self.pressure_limit.value()
-        measured = [
-            (channel, fit, target) for channel, _samples, fit, target in self._measured_channels()
-        ]
-
-        if not measured:
-            self.system_fit.setText(
-                "Enter at least two steps for a channel. Every channel is judged separately, "
-                "and the one needing the most pressure is what limits the setup."
-            )
-            self._set_verdict(None)
-            self.system_remedies.setText("")
-            return
-
-        tubing_lines = []
-        worst: tuple[str, object, float, object] | None = None
-        for channel, system, target in measured:
-            tubing_r = 0.0
-            if target > 0:
-                tubing_r = self._tubing_resistance(channel, target)
-            chip_r = chip_resistance(system.resistance, tubing_r)
-            share = tubing_r / system.resistance * 100 if system.resistance > 0 else 0.0
-            line = (
-                f"{channel}: R {system.resistance:.2f} mbar per uL/min "
-                f"= tubing {tubing_r:.2f} ({share:.0f}%) + chip and fittings {chip_r:.2f}; "
-                f"P0 {system.threshold_mbar:,.0f} mbar (r2 {system.r_squared:.3f}, "
-                f"n={system.samples}). The chip costs {chip_r * target:,.0f} mbar at "
-                f"{target:g} uL/min"
-            )
-            if not system.trustworthy:
-                line += " -- poor fit, suspect a leak, partial clog or bubbles"
-            tubing_lines.append(line)
-
-            result = assess_feasibility(
-                system,
-                target_flow_ul_min=target,
-                limit_mbar=limit,
-                tubing_resistance=tubing_r,
-            )
-            if worst is None or result.required_mbar > worst[3].required_mbar:
-                worst = (channel, system, target, result)
-
-        self.system_fit.setText("\n".join(tubing_lines))
-        channel, _system, target, result = worst
-        if result.feasible:
-            detail = (
-                f"Every measured channel fits. {channel} needs the most at "
-                f"{result.required_mbar:,.0f} mbar of the {limit:,.0f} mbar available."
-            )
-        else:
-            detail = (
-                f"{channel} needs {result.required_mbar:,.0f} mbar for {target:g} uL/min, "
-                f"{result.shortfall_mbar:,.0f} mbar beyond the {limit:,.0f} mbar limit. "
-                f"That channel caps out at {result.max_flow_ul_min:.0f} uL/min, and the "
-                f"ratio has to hold, so the whole setup is limited by it."
-            )
-        self._set_verdict(result.feasible, detail)
-        self.system_remedies.setText(
-            "\n".join(f"- {item}" for item in result.remedies) if result.remedies else ""
-        )
 
     # ---- snapshots -------------------------------------------------------
     def conditions(self) -> CheckConditions:
@@ -822,82 +594,8 @@ class PreflightPanel(QWidget):
             pressure_limit_mbar=self.pressure_limit.value(),
         )
 
-    def flow_checks(self) -> tuple[FlowCheck, ...]:
-        limit = self.pressure_limit.value()
-        return tuple(
-            FlowCheck(
-                channel=channel,
-                samples=samples,
-                resistance=fit,
-                feasibility=assess_feasibility(
-                    fit,
-                    target_flow_ul_min=target,
-                    limit_mbar=limit,
-                    tubing_resistance=self._tubing_resistance(channel, target),
-                ),
-                tubing_resistance=self._tubing_resistance(channel, target),
-            )
-            for channel, samples, fit, target in self._measured_channels()
-        )
-
-    def dispense_checks(self) -> tuple[DispenseCheck, ...]:
-        densities = {name: values[0] for name, values in self._liquids().items()}
-        target = self.target_volume.value()
-        runs_by_channel: dict[str, list[GravimetricRun]] = {}
-        for row in self._gravimetric_rows:
-            empty = row["empty"].value()
-            full = row["full"].value()
-            if empty < 0 or full <= empty:
-                continue
-            channel = str(row["channel"])
-            runs_by_channel.setdefault(channel, []).append(GravimetricRun(channel, empty, full))
-
-        checks = []
-        for channel, runs in runs_by_channel.items():
-            result = gravimetric_factors(runs, densities=densities, target_ul=target)[0]
-            checks.append(
-                DispenseCheck(
-                    channel=channel,
-                    target_ul=target,
-                    flow_ul_min=self.dispense_flow.value(),
-                    runs=tuple(runs),
-                    result=result,
-                )
-            )
-        return tuple(checks)
-
-    def snapshot(
-        self,
-        kind: str,
-        recorded_at: str,
-        *,
-        status: str = CHECK_COMPLETE,
-        settings: dict | None = None,
-    ) -> CheckSnapshot:
-        """One check, with everything its verdict rests on.
-
-        A snapshot taken as a run starts carries no readings yet -- only the setup
-        it is about to measure, which is the part that would otherwise be lost if
-        the run never finished.
-        """
-        measured = status != CHECK_STARTED
-        return CheckSnapshot(
-            kind=kind,
-            recorded_at=recorded_at,
-            status=status,
-            settings=dict(settings or {}),
-            conditions=self.conditions(),
-            flow_checks=self.flow_checks() if measured and kind == CHECK_FLOW else (),
-            dispense_checks=self.dispense_checks() if measured and kind == CHECK_DISPENSE else (),
-        )
-
     def load_snapshot(self, data: dict) -> bool:
-        """Put a stored check back into the panel, conditions and all.
-
-        The setup is restored first, then the readings, because the readings are
-        only meaningful against the plumbing and liquids they were taken on. What
-        is written here is exactly what was written out -- nothing is re-measured.
-        """
+        """Restore preflight settings without loading experimental results."""
         conditions = data.get("conditions") if isinstance(data.get("conditions"), dict) else {}
         restored = False
 
@@ -930,42 +628,6 @@ class PreflightPanel(QWidget):
             self.outlet_length.setValue(float(outlet.get("length_cm") or 0.0))
             self._select_bore(self.outlet_bore, float(outlet.get("bore_mm") or 0.0))
 
-        self.clear_sweep()
-        for row in self._gravimetric_rows:
-            row["empty"].setValue(-1.0)
-            row["full"].setValue(-1.0)
-        for check in data.get("flow_checks", ()) or ():
-            if not isinstance(check, dict):
-                continue
-            column = self._channel_column(str(check.get("channel") or ""))
-            if column is None:
-                continue
-            for step, sample in enumerate(check.get("samples", ()) or ()):
-                if not isinstance(sample, dict) or step >= len(self._system_rows):
-                    continue
-                pressure_box, flow_box = self._system_rows[step][column]
-                pressure_box.setValue(-1.0 if sample.get("pressure_mbar") is None else float(sample["pressure_mbar"]))
-                flow_box.setValue(-1.0 if sample.get("flow_ul_min") is None else float(sample["flow_ul_min"]))
-                restored = True
-
-        for check in data.get("dispense_checks", ()) or ():
-            if not isinstance(check, dict):
-                continue
-            channel = str(check.get("channel") or "")
-            target = check.get("target_ul")
-            if isinstance(target, int | float) and target > 0:
-                self.target_volume.setValue(float(target))
-            flow = check.get("flow_ul_min")
-            if isinstance(flow, int | float) and flow > 0:
-                self.dispense_flow.setValue(float(flow))
-            rows = [row for row in self._gravimetric_rows if str(row["channel"]) == channel]
-            for row, weights in zip(rows, check.get("weights_g", ()) or (), strict=False):
-                if not isinstance(weights, dict):
-                    continue
-                row["empty"].setValue(-1.0 if weights.get("empty") is None else float(weights["empty"]))
-                row["full"].setValue(-1.0 if weights.get("full") is None else float(weights["full"]))
-                restored = True
-
         for name in ("setups", "replicates", "run_time", "overage"):
             value = data.get("consumption", {}).get(name)
             if isinstance(value, (int, float)):
@@ -974,66 +636,17 @@ class PreflightPanel(QWidget):
         return restored
 
     def workspace_state(self):
-        def measured(box):
-            return box.value() if box.value() >= 0 else None
-
         return {
             "conditions": self.conditions().to_dict(),
-            "flow_checks": [
-                {"channel": channel, "samples": [
-                    {"pressure_mbar": measured(row[index][0]), "flow_ul_min": measured(row[index][1])}
-                    for row in self._system_rows
-                ]} for index, channel in enumerate(self._channel_labels)
-            ],
-            "dispense_checks": [
-                {"channel": channel, "target_ul": self.target_volume.value(),
-                 "flow_ul_min": self.dispense_flow.value(), "weights_g": [
-                     {"empty": measured(row["empty"]), "full": measured(row["full"])}
-                     for row in self._gravimetric_rows if row["channel"] == channel
-                 ]} for channel in self._channel_labels
-            ],
             "consumption": {name: getattr(self, name).value()
                             for name in ("setups", "replicates", "run_time", "overage")},
         }
-
-    def _channel_column(self, channel: str) -> int | None:
-        try:
-            return self._channel_labels.index(channel)
-        except ValueError:
-            return None
 
     def _select_bore(self, combo: QComboBox, bore_mm: float) -> None:
         for index in range(combo.count()):
             if abs(float(combo.itemData(index)) - bore_mm) < 1e-9:
                 combo.setCurrentIndex(index)
                 return
-
-    def record_sweep_point(self, step: int, pressures: list[float], flows: list[float]) -> None:
-        """Write one settled step of a measured sweep into the table.
-
-        Typed and measured points land in the same place, so the fit and the verdict
-        below do not care which they came from.
-        """
-        if not 0 <= step < len(self._system_rows):
-            return
-        row = self._system_rows[step]
-        for index, (pressure_box, flow_box) in enumerate(row):
-            pressure, flow = _safe_at(pressures, index), _safe_at(flows, index)
-            pressure_box.setValue(-1.0 if pressure is None else pressure)
-            flow_box.setValue(-1.0 if flow is None else flow)
-        self.recalculate()
-
-    def clear_sweep(self) -> None:
-        for row in self._system_rows:
-            for pressure_box, flow_box in row:
-                pressure_box.setValue(-1.0)
-                flow_box.setValue(-1.0)
-        self.recalculate()
-
-    def _set_verdict(self, feasible: bool | None, detail: str = "") -> None:
-        self.verdict_feasible = feasible
-        self.system_verdict_detail.setText(detail)
-        self.system_verdict_detail.setVisible(bool(detail))
 
     # ---- consumption -----------------------------------------------------
     def _build_consumption_panel(self) -> QWidget:
@@ -1130,88 +743,6 @@ class PreflightPanel(QWidget):
         return LiquidVolumes(oil.value(), water.value(), ipa.value())
 
     # ---- gravimetric -----------------------------------------------------
-    def _build_gravimetric_panel(self) -> QWidget:
-        panel, body = _panel("Gravimetric calibration")
-        hint = QLabel(
-            "Dispense the target volume, weigh the tube before and after. "
-            "The factor is the dispensed volume over the commanded volume, and is "
-            "what belongs in the liquid profile's scale."
-        )
-        hint.setObjectName("StageSummary")
-        hint.setWordWrap(True)
-        body.addWidget(hint)
-        body.addWidget(
-            _formula(
-                "net, g        = full - empty",
-                "volume, uL    = net / density x 1000",
-                "factor        = volume / target        (mean over replicates)",
-                "dispense time = target / dispense flow x 60",
-            )
-        )
-
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(10)
-        self.target_volume = _spin(0.1, 100000.0, 100.0, " uL", decimals=1)
-        self.dispense_flow = _spin(0.1, 5000.0, 250.0, " uL/min")
-        _field(grid, 0, 0, "Target volume", self.target_volume)
-        _field(grid, 0, 2, "Dispense flow", self.dispense_flow)
-        self.dispense_time_value = _value_label()
-        grid.addWidget(self.dispense_time_value, 0, 4)
-        body.addLayout(grid)
-
-        table = QGridLayout()
-        table.setContentsMargins(0, 6, 0, 0)
-        table.setHorizontalSpacing(10)
-        table.setVerticalSpacing(4)
-        for column, name in enumerate(
-            ("Channel", "Density", "Empty, g", "Full, g", "Net, g", "Volume, uL", "Factor")
-        ):
-            header = QLabel(name)
-            header.setObjectName("FieldLabel")
-            table.addWidget(header, 0, column)
-
-        self._gravimetric_rows: list[dict[str, QWidget]] = []
-        row_index = 1
-        for channel in self._channel_labels:
-            for replicate in range(GRAVIMETRIC_ROWS):
-                label = QLabel(channel if replicate == 0 else "")
-                label.setObjectName("MutedText")
-                density = _value_label()
-                empty = _spin(-1.0, 10000.0, -1.0, " g", decimals=4)
-                full = _spin(-1.0, 10000.0, -1.0, " g", decimals=4)
-                empty.setSpecialValueText("—")
-                full.setSpecialValueText("—")
-                empty.valueChanged.connect(self.recalculate)
-                full.valueChanged.connect(self.recalculate)
-                net = _value_label()
-                volume = _value_label()
-                factor = _value_label()
-                for column, widget in enumerate(
-                    (label, density, empty, full, net, volume, factor)
-                ):
-                    table.addWidget(widget, row_index, column)
-                self._gravimetric_rows.append(
-                    {
-                        "channel": channel,
-                        "density": density,
-                        "empty": empty,
-                        "full": full,
-                        "net": net,
-                        "volume": volume,
-                        "factor": factor,
-                    }
-                )
-                row_index += 1
-        body.addLayout(table)
-
-        self.gravimetric_summary = _value_label("Enter weights to derive correction factors.")
-        self.gravimetric_summary.setWordWrap(True)
-        body.addWidget(self.gravimetric_summary)
-
-        for box in (self.target_volume, self.dispense_flow):
-            box.valueChanged.connect(self.recalculate)
-        return panel
 
     # ---- recalculation ---------------------------------------------------
     def recalculate(self) -> None:
@@ -1232,40 +763,3 @@ class PreflightPanel(QWidget):
             ipa.setText(f"{volumes.ipa:,.0f}")
 
         self._recalculate_tubing()
-        self._recalculate_system()
-        self._recalculate_gravimetric()
-
-    def _recalculate_gravimetric(self) -> None:
-        densities = {name: values[0] for name, values in self._liquids().items()}
-        target = self.target_volume.value()
-        self.dispense_time_value.setText(
-            f"{dispense_time_s(target, self.dispense_flow.value()):.1f} s per dispense"
-        )
-
-        runs = []
-        for row in self._gravimetric_rows:
-            channel = str(row["channel"])
-            density = densities.get(channel, 0.0)
-            row["density"].setText(f"{density:g}" if density else "-")
-            empty = row["empty"].value()
-            full = row["full"].value()
-            if empty < 0 or full <= empty or not density:
-                row["net"].setText("-")
-                row["volume"].setText("-")
-                row["factor"].setText("-")
-                continue
-            run = GravimetricRun(channel, empty, full)
-            row["net"].setText(f"{run.net_g():.4f}")
-            row["volume"].setText(f"{run.volume_ul(density):.2f}")
-            row["factor"].setText(f"{run.relative(density, target):.3f}")
-            runs.append(run)
-
-        if not runs:
-            self.gravimetric_summary.setText("Enter weights to derive correction factors.")
-            return
-        summary = [
-            f"{result.channel}: factor {result.mean_relative:.3f} "
-            f"({result.mean_volume_ul:.1f} uL, n={result.runs})"
-            for result in gravimetric_factors(runs, densities=densities, target_ul=target)
-        ]
-        self.gravimetric_summary.setText("   ".join(summary))
