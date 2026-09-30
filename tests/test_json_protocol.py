@@ -22,6 +22,20 @@ DOCUMENT = {
 
 
 class JsonProtocolTests(unittest.TestCase):
+    def test_templates_load_outside_checkout_and_from_packaged_resources(self):
+        from contextlib import chdir
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with chdir(tmp):
+                self.assertEqual(set(template_documents()), {
+                    "density", "dropseq", "flow_stability_scout", "gravimetry", "pressure_flow_check",
+                })
+            directory = Path(tmp) / "templates"
+            directory.mkdir()
+            (directory / "example.json").write_text(json.dumps(DOCUMENT))
+            with patch("importlib.resources.files", return_value=Path(tmp)):
+                self.assertEqual(set(template_documents()), {"short_run"})
+
     def test_dropseq_template_preserves_existing_recipe_with_bounded_execution(self):
         from admet.workflows.operations import operation
         from admet.workflows.protocols import build_dropseq_protocol

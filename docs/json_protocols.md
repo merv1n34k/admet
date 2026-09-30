@@ -1,5 +1,9 @@
 # Saved protocols
 
+Bundled experiment definitions live in the repository-root `templates/` directory.
+They are included as package data when building the Python wheel. Loading templates
+does not depend on the terminal's current directory.
+
 The Qt desktop or agent saves JSON protocols in the project. A definition
 contains a name, optional parameters/pressure trips, and ordered steps. Saving and planning do
 not actuate hardware. Execution always takes the reviewed plan ID.

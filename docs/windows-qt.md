@@ -168,7 +168,7 @@ They are starting examples, not approval for a physical setup.
 
 In **Experiment 1**, select **Template · dropseq → Open**. Use **Save JSON** to
 keep it in the current project, then **Plan** to review it. Alternatively import
-[`dropseq.json`](../src/admet/workflows/templates/dropseq.json) on the Windows PC.
+[`dropseq.json`](../templates/dropseq.json) on the Windows PC.
 Priming and Wash remain separate existing stages; this template does not repeat
 them or change correction factors or camera settings.
 

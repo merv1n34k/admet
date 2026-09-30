@@ -319,7 +319,9 @@ def load(path):
 def template_documents():
     from importlib.resources import files
 
-    directory = files("admet.workflows").joinpath("templates")
+    directory = files("admet").joinpath("templates")
+    if not directory.is_dir():
+        directory = Path(__file__).resolve().parents[3] / "templates"
     documents = [loads(path.read_text(encoding="utf-8")) for path in directory.iterdir()
                  if path.name.endswith(".json")]
     return {document["name"]: document for document in documents}
