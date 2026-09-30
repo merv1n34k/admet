@@ -267,23 +267,35 @@ Historical single-rate before/after runs remain readable as single-rate checks.
 
 ### Dead volume
 
-Three marker passes at one fixed M1 flow. The parameter table sets flow and the
-observation window; lengthen the window if the marker cannot arrive in time.
+One selected channel, the same low/middle/working flow levels as gravimetry, and
+three passes (up/down/up). Each target therefore has three marker measurements.
+The parameter table sets a settling interval (default 20 seconds) followed by an
+observation volume (default 50 µL, converted to time at each target).
+Lengthen this window before planning if the marker cannot arrive in time.
+Nominal total consumption is about 573 µL at the M defaults or 847.5 µL with L
+working flow 250 µL/min, excluding priming and marker reset/flush operations.
 For each pass, the **Measurements** table has injection time, outlet breakthrough
 time and the standard uncertainty of each timestamp, all in seconds. Times are
 relative to the step's actual running start, not the confirmation gate. Record
 times manually using a synchronized time reference; there is no automatic marker
 detection or timestamp button. Introduce the marker after settling without changing
-the flow path; repeat the same first-breakthrough criterion each time.
+the flow path; repeat the same first-breakthrough criterion each time. Injection
+before the declared settling interval ends is rejected by calculation.
 
 Effective volume = integral of calibrated measured flow from injection to arrival.
 The marker must arrive inside its step. This estimates displacement volume, not
 pressure startup delay or a guarantee of complete fluid replacement. Marker
-dispersion affects the result. Three repeats are provided; ≥2 valid passes and
-repeat CV ≤10% are required. Invalid declared passes are not silently discarded.
+dispersion affects the result. Three valid repeats per flow target with CV ≤5%
+are required. Invalid declared passes are not silently discarded. Different flow
+levels are never pooled into one mean dead volume; results include per-flow SD,
+repeat CV and repeatability-only 95% Student-t intervals. Historical single-rate
+marker runs remain readable under their original two-repeat/10% checks.
 Timing-only standard uncertainty is
 `sqrt(Q_injection² + Q_arrival²) × timestamp_sigma / 60`, with calibrated Q in
 µL/min. Repeat SEM and this timing contribution are separate, not total uncertainty.
+Timing uncertainty above 10% of volume produces an explicit warning. No regression
+R² applies to this integration. This first-breakthrough protocol does not measure
+V50 or V90, which require a normalized detector signal or analyzed timed fractions.
 
 ### Viscosity
 

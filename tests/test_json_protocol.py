@@ -35,7 +35,7 @@ class JsonProtocolTests(unittest.TestCase):
                     self.assertTrue(backend.engine.hardware.state.simulated)
                     backend.call("apply_corrections")
                     for name, parameters in (("gravimetry", {"collection_ul": 0.1}),
-                                             ("dead_volume", {"window_s": 0.3}),
+                                             ("dead_volume", {"window_ul": 0.1, "settle_s": 0}),
                                              ("viscosity", {"settle_s": 0, "average_s": 5})):
                         source = template_documents()[name]
                         source["parameter_values"].update(parameters)

@@ -34,7 +34,11 @@ Preflight is a non-actuating setup page for flow/phase ratios, fluidics layout a
 consumption formulas; **Save Project** preserves the layout. Legacy check data
 remain in existing projects but are no longer shown on this page. The protocol
 selector offers density, Drop-Seq, flow stability scout, gravimetry, dead volume
-and viscosity. The measurement protocols use M1 only by default.
+and viscosity. Gravimetry, viscosity and dead volume run one selected fluidics
+channel, defaulting to M1. Their existing Parameters table selects 0 Oil-L / 1 M1 /
+2 M2, low flow (default 15 µL/min) and working flow (set 67 for M1/M2 or 250 for L).
+Channel selection does not silently change working flow. Gravimetry uses only
+before/after weights, with 100 µL nominal per collection by default.
 
 The former Python operations `run_characterisation`, `run_gravimetry`,
 `run_dropseq` and `validate_oil_capacity` are retired. Use JSON protocols for

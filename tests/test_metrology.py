@@ -69,8 +69,8 @@ def archive(root, name, *, flow=None, slope=2, multiplier=1.2, run_id=None, para
     elif name == "dead_volume":
         values["flow_multiplier"] = multiplier
         for sample in config["samples"]:
-            values[sample["injection"]] = 10
-            values[sample["arrival"]] = 30
+            values[sample["injection"]] = sample.get("settle_s", 10)
+            values[sample["arrival"]] = values[sample["injection"]] + 10 * 60 / flows[sample["step"]]
             values[sample["timing_uncertainty"]] = 0.2
     elif name == "viscosity":
         values["flow_multiplier"] = multiplier
@@ -155,12 +155,13 @@ class MetrologyTests(unittest.TestCase):
         directory = archive(self.tmp.name, "dead_volume")
         result = calculate_run(directory, "dead_volume")["result"]
         self.assertEqual(result["status"], "usable")
-        self.assertAlmostEqual(result["volume_ul"], 12, places=3)
+        self.assertIsNone(result["volume_ul"])
+        self.assertTrue(all(abs(row["volume_ul"] - 12) < 0.005 for row in result["targets"]))
         self.assertGreater(result["samples"][0]["timing_uncertainty_ul"], 0)
         self.assertIsNone(result["uncertainty"])
         path = directory / "measurements.json"
         payload = json.loads(path.read_text())
-        for arrival in (5, 100):
+        for arrival in (5, 10000):
             payload["values"]["arrival_1"] = arrival
             write_json(path, payload)
             result = calculate_run(directory, "dead_volume")["result"]
@@ -182,7 +183,7 @@ class MetrologyTests(unittest.TestCase):
             calculate_run(directory, "dead_volume")
         refs = {"calibration": reference["path"]}
         result = calculate_run(directory, "dead_volume", references=refs)
-        self.assertAlmostEqual(result["result"]["volume_ul"], 12, places=2)
+        self.assertTrue(all(abs(row["volume_ul"] - 12) < 0.005 for row in result["result"]["targets"]))
         summary_path = directory / "summary.json"
         summary = json.loads(summary_path.read_text())
         summary["rig_fingerprint"]["correction_settings"]["cells_m_scale"] = 3
@@ -201,6 +202,38 @@ class MetrologyTests(unittest.TestCase):
         self.assertEqual(volume_ul(trace({"csv": path}, 1, 1, 2)), 0.5)
         with self.assertRaisesRegex(ValueError, "Missing samples"):
             trace({"csv": path}, 1, 0.5, 2)
+
+    def test_dead_volume_per_rate_repeats_and_one_selected_channel(self):
+        invalid = template_documents()["dead_volume"]
+        invalid["calculations"][0]["samples"] = None
+        with self.assertRaisesRegex(ValueError, "list of objects"):
+            normalize(invalid)
+        for channel, working in ((0, 250), (1, 67), (2, 67)):
+            source = template_documents()["dead_volume"]
+            source["parameter_values"].update(channel=channel, working_flow=working)
+            resolved = resolve(source)
+            self.assertTrue(all(set(s["sensor_setpoints"]) == {str(channel)} for s in resolved["steps"]))
+            self.assertEqual(resolved["calculations"][0]["channel"], channel)
+        directory = archive(self.tmp.name, "dead_volume")
+        path = directory / "measurements.json"
+        data = json.loads(path.read_text())
+        doc = resolve(json.loads((directory / "protocol.json").read_text()))
+        for sample in doc["calculations"][0]["samples"]:
+            q = doc["steps"][sample["step"] - 1]["sensor_setpoints"]["1"]
+            volume = 10 if q == 15 else 20 if q == 41 else 30
+            data["values"][sample["arrival"]] = data["values"][sample["injection"]] + volume * 60 / q
+        write_json(path, data)
+        result = calculate_run(directory, "dead_volume")["result"]
+        self.assertEqual(result["status"], "usable")
+        self.assertIsNone(result["volume_ul"])
+        for row, expected in zip(result["targets"], (12, 24, 36)):
+            self.assertAlmostEqual(row["volume_ul"], expected, delta=0.005)
+            self.assertEqual(row["repeat_statistics"]["repeats"], 3)
+        data["values"]["injection_1"] = 0
+        write_json(path, data)
+        result = calculate_run(directory, "dead_volume")["result"]
+        self.assertEqual(result["status"], "inconclusive")
+        self.assertIn("settling", " ".join(result["issues"]))
 
     def test_viscosity_recovers_resistance_ratio_and_absolute_reference(self):
         reference_dir = archive(self.tmp.name, "viscosity", run_id="reference", slope=2)

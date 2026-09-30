@@ -126,7 +126,7 @@ CALCULATIONS = {
                   "check": viscosity.check, "files": ("protocol.json", "events.jsonl"),
                   "references": {"calibration": "gravimetry", "reference": "viscosity"},
                   "description": "Pressure/flow resistance; same-path reference comparison for viscosity."},
-    "dead_volume": {"label": "Dead volume", "version": 1, "calculate": dead_volume.calculate,
+    "dead_volume": {"label": "Dead volume", "version": 2, "calculate": dead_volume.calculate,
                     "check": dead_volume.check, "files": ("protocol.json", "events.jsonl"),
                     "references": {"calibration": "gravimetry"},
                     "description": "Integrate calibrated flow between observed marker injection and arrival."},
@@ -218,10 +218,19 @@ def result_text(payload):
                     if interval:
                         lines.append(f"  Repeatability 95% CI: {number(interval[0])}–{number(interval[1])} µL/min")
         elif kind == "dead_volume":
-            lines += [f"Effective displacement volume: {number(result['volume_ul'])} µL",
+            lines += [("Effective displacement volumes by flow" if result.get("targets") else
+                       f"Effective displacement volume: {number(result['volume_ul'])} µL"),
                       "STEP | TRANSIT (s) | VOLUME (µL) | TIMING UNCERTAINTY (µL)"]
             lines += [f"{s['step']} | {number(s.get('transit_s'))} | {number(s['volume_ul'])} | "
                       f"{number(s['timing_uncertainty_ul'])}" for s in result["samples"]]
+            if result.get("targets"):
+                lines += ["TARGET (µL/min) | VOLUME ± REPEAT SD (µL) | N | 95% REPEATABILITY CI (µL)"]
+                for row in result["targets"]:
+                    stats = row["repeat_statistics"]
+                    interval = row["volume_repeat_ci95_ul"]
+                    ci = f"{number(interval[0])}–{number(interval[1])}" if interval else "unavailable"
+                    lines.append(f"{number(row['target_ul_min'])} | {number(row['volume_ul'])} ± {number(stats['sd'])} | "
+                                 f"{stats['repeats']} | {ci}")
         else:
             lines += [f"Hydraulic resistance: {number(result['resistance_mbar_min_ul'])} mbar·min/µL",
                       f"Relative viscosity: {number(result['relative_viscosity'])}",
@@ -237,6 +246,7 @@ def result_text(payload):
             lines += [f"Repeat SD: {number(stats['sd'])}; SEM: {number(stats['sem'])} (repeatability only)"]
         lines += ["Total uncertainty: not established", result["note"], *result["issues"],
                   "Thresholds: " + json.dumps(result["thresholds"])]
+        lines += ["Warning: " + warning for warning in result.get("warnings", [])]
     elif kind == "oil_density":
         value = result.get("density_g_ml")
         lines = [f"Density: {value:.4f} g/mL" if value is not None else "Density: inconclusive"]

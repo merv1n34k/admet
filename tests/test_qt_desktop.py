@@ -532,7 +532,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertTrue(panel.calculate_button.isEnabled(), panel.status.text())
         panel.calculate()
         self.drain(lambda: not panel.tasks.busy)
-        self.assertIn("Effective displacement volume: 12", panel.output.toPlainText())
+        self.assertIn("Effective displacement volumes by flow", panel.output.toPlainText())
         self.assertIn("TIMING UNCERTAINTY", panel.output.toPlainText())
 
     def test_density_template_and_persistent_calculations_section(self):

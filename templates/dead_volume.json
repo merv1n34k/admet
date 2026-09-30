@@ -1,71 +1,169 @@
 {
   "name": "dead_volume",
   "parameters": {
+    "channel": {
+      "type": "choice",
+      "label": "Channel: 0 Oil-L / 1 M1 / 2 M2",
+      "default": 1,
+      "options": [
+        0,
+        1,
+        2
+      ]
+    },
     "oil_name": {
       "type": "text",
-      "label": "Oil name",
+      "label": "Liquid name",
       "default": "oil"
     },
-    "transit_flow": [
-      "M1 flow, µL/min",
-      30
+    "low_flow": [
+      "Lowest flow, µL/min",
+      15
     ],
-    "window_s": [
-      "Marker observation window, s",
-      60
-    ]
+    "working_flow": [
+      "Working flow, µL/min (M: 67; L: 250)",
+      67
+    ],
+    "settle_s": [
+      "Settling before marker injection, s",
+      20
+    ],
+    "window_ul": {
+      "type": "number",
+      "label": "Marker observation volume after settling, µL",
+      "default": 50,
+      "min": 0.1
+    }
   },
   "steps": [
     {
-      "name": "Marker pass 1",
+      "name": "Marker pass 1 / level 1",
       "sensor_setpoints": {
-        "1": "transit_flow"
+        "{channel}": "low_flow"
       },
       "trigger_type": "time",
       "trigger_params": {
-        "duration_s": "window_s"
+        "duration_s": "settle_s + window_ul * 60 / (low_flow)"
       },
-      "timeout_s": "window_s + 10",
+      "timeout_s": "settle_s + window_ul * 60 / (low_flow) + 10",
       "on_complete": "zero",
-      "confirm_message": "M1 only, marker pass 1: reset the marker and keep the same filled path. After flow settles, introduce the marker without changing the path. Record injection and first outlet breakthrough times relative to actual step start (not this confirmation). Use the same breakthrough criterion for all passes."
+      "confirm_message": "Collection 1, channel {channel} only. Reset the marker and keep the same filled path. Wait at least {settle_s} seconds and verify stable flow before injecting. Record injection and first outlet breakthrough times relative to actual step start, not this gate. Keep injection/detection positions and the breakthrough criterion unchanged. Increase the observation volume before planning if the marker needs a longer window."
     },
     {
-      "name": "Marker pass 2",
+      "name": "Marker pass 1 / level 2",
       "sensor_setpoints": {
-        "1": "transit_flow"
+        "{channel}": "(low_flow + working_flow) / 2"
       },
       "trigger_type": "time",
       "trigger_params": {
-        "duration_s": "window_s"
+        "duration_s": "settle_s + window_ul * 60 / ((low_flow + working_flow) / 2)"
       },
-      "timeout_s": "window_s + 10",
+      "timeout_s": "settle_s + window_ul * 60 / ((low_flow + working_flow) / 2) + 10",
       "on_complete": "zero",
-      "confirm_message": "M1 only, marker pass 2: reset the marker and keep the same filled path. After flow settles, introduce the marker without changing the path. Record injection and first outlet breakthrough times relative to actual step start (not this confirmation). Use the same breakthrough criterion for all passes."
+      "confirm_message": "Collection 2, channel {channel} only. Reset the marker and keep the same filled path. Wait at least {settle_s} seconds and verify stable flow before injecting. Record injection and first outlet breakthrough times relative to actual step start, not this gate. Keep injection/detection positions and the breakthrough criterion unchanged. Increase the observation volume before planning if the marker needs a longer window."
     },
     {
-      "name": "Marker pass 3",
+      "name": "Marker pass 1 / level 3",
       "sensor_setpoints": {
-        "1": "transit_flow"
+        "{channel}": "working_flow"
       },
       "trigger_type": "time",
       "trigger_params": {
-        "duration_s": "window_s"
+        "duration_s": "settle_s + window_ul * 60 / (working_flow)"
       },
-      "timeout_s": "window_s + 10",
+      "timeout_s": "settle_s + window_ul * 60 / (working_flow) + 10",
       "on_complete": "zero",
-      "confirm_message": "M1 only, marker pass 3: reset the marker and keep the same filled path. After flow settles, introduce the marker without changing the path. Record injection and first outlet breakthrough times relative to actual step start (not this confirmation). Use the same breakthrough criterion for all passes."
+      "confirm_message": "Collection 3, channel {channel} only. Reset the marker and keep the same filled path. Wait at least {settle_s} seconds and verify stable flow before injecting. Record injection and first outlet breakthrough times relative to actual step start, not this gate. Keep injection/detection positions and the breakthrough criterion unchanged. Increase the observation volume before planning if the marker needs a longer window."
+    },
+    {
+      "name": "Marker pass 2 / level 3",
+      "sensor_setpoints": {
+        "{channel}": "working_flow"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + window_ul * 60 / (working_flow)"
+      },
+      "timeout_s": "settle_s + window_ul * 60 / (working_flow) + 10",
+      "on_complete": "zero",
+      "confirm_message": "Collection 4, channel {channel} only. Reset the marker and keep the same filled path. Wait at least {settle_s} seconds and verify stable flow before injecting. Record injection and first outlet breakthrough times relative to actual step start, not this gate. Keep injection/detection positions and the breakthrough criterion unchanged. Increase the observation volume before planning if the marker needs a longer window."
+    },
+    {
+      "name": "Marker pass 2 / level 2",
+      "sensor_setpoints": {
+        "{channel}": "(low_flow + working_flow) / 2"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + window_ul * 60 / ((low_flow + working_flow) / 2)"
+      },
+      "timeout_s": "settle_s + window_ul * 60 / ((low_flow + working_flow) / 2) + 10",
+      "on_complete": "zero",
+      "confirm_message": "Collection 5, channel {channel} only. Reset the marker and keep the same filled path. Wait at least {settle_s} seconds and verify stable flow before injecting. Record injection and first outlet breakthrough times relative to actual step start, not this gate. Keep injection/detection positions and the breakthrough criterion unchanged. Increase the observation volume before planning if the marker needs a longer window."
+    },
+    {
+      "name": "Marker pass 2 / level 1",
+      "sensor_setpoints": {
+        "{channel}": "low_flow"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + window_ul * 60 / (low_flow)"
+      },
+      "timeout_s": "settle_s + window_ul * 60 / (low_flow) + 10",
+      "on_complete": "zero",
+      "confirm_message": "Collection 6, channel {channel} only. Reset the marker and keep the same filled path. Wait at least {settle_s} seconds and verify stable flow before injecting. Record injection and first outlet breakthrough times relative to actual step start, not this gate. Keep injection/detection positions and the breakthrough criterion unchanged. Increase the observation volume before planning if the marker needs a longer window."
+    },
+    {
+      "name": "Marker pass 3 / level 1",
+      "sensor_setpoints": {
+        "{channel}": "low_flow"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + window_ul * 60 / (low_flow)"
+      },
+      "timeout_s": "settle_s + window_ul * 60 / (low_flow) + 10",
+      "on_complete": "zero",
+      "confirm_message": "Collection 7, channel {channel} only. Reset the marker and keep the same filled path. Wait at least {settle_s} seconds and verify stable flow before injecting. Record injection and first outlet breakthrough times relative to actual step start, not this gate. Keep injection/detection positions and the breakthrough criterion unchanged. Increase the observation volume before planning if the marker needs a longer window."
+    },
+    {
+      "name": "Marker pass 3 / level 2",
+      "sensor_setpoints": {
+        "{channel}": "(low_flow + working_flow) / 2"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + window_ul * 60 / ((low_flow + working_flow) / 2)"
+      },
+      "timeout_s": "settle_s + window_ul * 60 / ((low_flow + working_flow) / 2) + 10",
+      "on_complete": "zero",
+      "confirm_message": "Collection 8, channel {channel} only. Reset the marker and keep the same filled path. Wait at least {settle_s} seconds and verify stable flow before injecting. Record injection and first outlet breakthrough times relative to actual step start, not this gate. Keep injection/detection positions and the breakthrough criterion unchanged. Increase the observation volume before planning if the marker needs a longer window."
+    },
+    {
+      "name": "Marker pass 3 / level 3",
+      "sensor_setpoints": {
+        "{channel}": "working_flow"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settle_s + window_ul * 60 / (working_flow)"
+      },
+      "timeout_s": "settle_s + window_ul * 60 / (working_flow) + 10",
+      "on_complete": "zero",
+      "confirm_message": "Collection 9, channel {channel} only. Reset the marker and keep the same filled path. Wait at least {settle_s} seconds and verify stable flow before injecting. Record injection and first outlet breakthrough times relative to actual step start, not this gate. Keep injection/detection positions and the breakthrough criterion unchanged. Increase the observation volume before planning if the marker needs a longer window."
     },
     {
       "name": "Record final marker times",
       "sensor_setpoints": {
-        "1": 0
+        "{channel}": 0
       },
       "trigger_type": "time",
       "trigger_params": {
         "duration_s": 0
       },
       "on_complete": "zero",
-      "confirm_message": "Enter final marker times and timing uncertainty, then confirm completion. Calculate dead volume afterwards."
+      "confirm_message": "Enter the final marker times and timing uncertainty before confirming completion. Calculate per-flow displacement volumes afterwards."
     }
   ],
   "measurements": {
@@ -75,65 +173,191 @@
       "min": 0
     },
     "injection_1": {
-      "label": "Pass 1: Marker injection time",
+      "label": "Collection 1: Marker injection time",
       "unit": "s",
       "step": 1,
       "required": true,
       "min": 0
     },
     "arrival_1": {
-      "label": "Pass 1: Outlet breakthrough time",
+      "label": "Collection 1: First outlet breakthrough time",
       "unit": "s",
       "step": 1,
       "required": true,
       "min": 0
     },
     "timing_uncertainty_1": {
-      "label": "Pass 1: Standard uncertainty of each timestamp",
+      "label": "Collection 1: Standard uncertainty of each timestamp",
       "unit": "s",
       "step": 1,
       "required": true,
       "min": 0
     },
     "injection_2": {
-      "label": "Pass 2: Marker injection time",
+      "label": "Collection 2: Marker injection time",
       "unit": "s",
       "step": 2,
       "required": true,
       "min": 0
     },
     "arrival_2": {
-      "label": "Pass 2: Outlet breakthrough time",
+      "label": "Collection 2: First outlet breakthrough time",
       "unit": "s",
       "step": 2,
       "required": true,
       "min": 0
     },
     "timing_uncertainty_2": {
-      "label": "Pass 2: Standard uncertainty of each timestamp",
+      "label": "Collection 2: Standard uncertainty of each timestamp",
       "unit": "s",
       "step": 2,
       "required": true,
       "min": 0
     },
     "injection_3": {
-      "label": "Pass 3: Marker injection time",
+      "label": "Collection 3: Marker injection time",
       "unit": "s",
       "step": 3,
       "required": true,
       "min": 0
     },
     "arrival_3": {
-      "label": "Pass 3: Outlet breakthrough time",
+      "label": "Collection 3: First outlet breakthrough time",
       "unit": "s",
       "step": 3,
       "required": true,
       "min": 0
     },
     "timing_uncertainty_3": {
-      "label": "Pass 3: Standard uncertainty of each timestamp",
+      "label": "Collection 3: Standard uncertainty of each timestamp",
       "unit": "s",
       "step": 3,
+      "required": true,
+      "min": 0
+    },
+    "injection_4": {
+      "label": "Collection 4: Marker injection time",
+      "unit": "s",
+      "step": 4,
+      "required": true,
+      "min": 0
+    },
+    "arrival_4": {
+      "label": "Collection 4: First outlet breakthrough time",
+      "unit": "s",
+      "step": 4,
+      "required": true,
+      "min": 0
+    },
+    "timing_uncertainty_4": {
+      "label": "Collection 4: Standard uncertainty of each timestamp",
+      "unit": "s",
+      "step": 4,
+      "required": true,
+      "min": 0
+    },
+    "injection_5": {
+      "label": "Collection 5: Marker injection time",
+      "unit": "s",
+      "step": 5,
+      "required": true,
+      "min": 0
+    },
+    "arrival_5": {
+      "label": "Collection 5: First outlet breakthrough time",
+      "unit": "s",
+      "step": 5,
+      "required": true,
+      "min": 0
+    },
+    "timing_uncertainty_5": {
+      "label": "Collection 5: Standard uncertainty of each timestamp",
+      "unit": "s",
+      "step": 5,
+      "required": true,
+      "min": 0
+    },
+    "injection_6": {
+      "label": "Collection 6: Marker injection time",
+      "unit": "s",
+      "step": 6,
+      "required": true,
+      "min": 0
+    },
+    "arrival_6": {
+      "label": "Collection 6: First outlet breakthrough time",
+      "unit": "s",
+      "step": 6,
+      "required": true,
+      "min": 0
+    },
+    "timing_uncertainty_6": {
+      "label": "Collection 6: Standard uncertainty of each timestamp",
+      "unit": "s",
+      "step": 6,
+      "required": true,
+      "min": 0
+    },
+    "injection_7": {
+      "label": "Collection 7: Marker injection time",
+      "unit": "s",
+      "step": 7,
+      "required": true,
+      "min": 0
+    },
+    "arrival_7": {
+      "label": "Collection 7: First outlet breakthrough time",
+      "unit": "s",
+      "step": 7,
+      "required": true,
+      "min": 0
+    },
+    "timing_uncertainty_7": {
+      "label": "Collection 7: Standard uncertainty of each timestamp",
+      "unit": "s",
+      "step": 7,
+      "required": true,
+      "min": 0
+    },
+    "injection_8": {
+      "label": "Collection 8: Marker injection time",
+      "unit": "s",
+      "step": 8,
+      "required": true,
+      "min": 0
+    },
+    "arrival_8": {
+      "label": "Collection 8: First outlet breakthrough time",
+      "unit": "s",
+      "step": 8,
+      "required": true,
+      "min": 0
+    },
+    "timing_uncertainty_8": {
+      "label": "Collection 8: Standard uncertainty of each timestamp",
+      "unit": "s",
+      "step": 8,
+      "required": true,
+      "min": 0
+    },
+    "injection_9": {
+      "label": "Collection 9: Marker injection time",
+      "unit": "s",
+      "step": 9,
+      "required": true,
+      "min": 0
+    },
+    "arrival_9": {
+      "label": "Collection 9: First outlet breakthrough time",
+      "unit": "s",
+      "step": 9,
+      "required": true,
+      "min": 0
+    },
+    "timing_uncertainty_9": {
+      "label": "Collection 9: Standard uncertainty of each timestamp",
+      "unit": "s",
+      "step": 9,
       "required": true,
       "min": 0
     }
@@ -141,27 +365,81 @@
   "calculations": [
     {
       "type": "dead_volume",
-      "channel": 1,
+      "channel": "channel",
       "liquid": "{oil_name}",
       "flow_multiplier": "flow_multiplier",
       "samples": [
         {
           "step": 1,
+          "pass": 1,
+          "settle_s": "settle_s",
           "injection": "injection_1",
           "arrival": "arrival_1",
           "timing_uncertainty": "timing_uncertainty_1"
         },
         {
           "step": 2,
+          "pass": 1,
+          "settle_s": "settle_s",
           "injection": "injection_2",
           "arrival": "arrival_2",
           "timing_uncertainty": "timing_uncertainty_2"
         },
         {
           "step": 3,
+          "pass": 1,
+          "settle_s": "settle_s",
           "injection": "injection_3",
           "arrival": "arrival_3",
           "timing_uncertainty": "timing_uncertainty_3"
+        },
+        {
+          "step": 4,
+          "pass": 2,
+          "settle_s": "settle_s",
+          "injection": "injection_4",
+          "arrival": "arrival_4",
+          "timing_uncertainty": "timing_uncertainty_4"
+        },
+        {
+          "step": 5,
+          "pass": 2,
+          "settle_s": "settle_s",
+          "injection": "injection_5",
+          "arrival": "arrival_5",
+          "timing_uncertainty": "timing_uncertainty_5"
+        },
+        {
+          "step": 6,
+          "pass": 2,
+          "settle_s": "settle_s",
+          "injection": "injection_6",
+          "arrival": "arrival_6",
+          "timing_uncertainty": "timing_uncertainty_6"
+        },
+        {
+          "step": 7,
+          "pass": 3,
+          "settle_s": "settle_s",
+          "injection": "injection_7",
+          "arrival": "arrival_7",
+          "timing_uncertainty": "timing_uncertainty_7"
+        },
+        {
+          "step": 8,
+          "pass": 3,
+          "settle_s": "settle_s",
+          "injection": "injection_8",
+          "arrival": "arrival_8",
+          "timing_uncertainty": "timing_uncertainty_8"
+        },
+        {
+          "step": 9,
+          "pass": 3,
+          "settle_s": "settle_s",
+          "injection": "injection_9",
+          "arrival": "arrival_9",
+          "timing_uncertainty": "timing_uncertainty_9"
         }
       ]
     },

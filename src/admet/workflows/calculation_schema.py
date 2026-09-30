@@ -33,6 +33,13 @@ def resolve_declarations(document, values):
             entry["liquid"] = interpolate(entry["liquid"], values)
         if "channel" in entry:
             entry["channel"] = expression(entry["channel"], values)
+        if entry["type"] == "dead_volume":
+            samples = entry.get("samples")
+            if not isinstance(samples, list) or any(not isinstance(s, dict) for s in samples):
+                raise ValueError("dead_volume samples must be a list of objects")
+            for sample in samples:
+                if "settle_s" in sample:
+                    sample["settle_s"] = expression(sample["settle_s"], values)
         if entry["type"] == "viscosity":
             entry["path_id"] = interpolate(entry.get("path_id"), values)
             samples = entry.get("samples")
@@ -111,3 +118,16 @@ def sample_steps(entry, steps, *, mode):
         if step.on_complete != "zero":
             raise ValueError("sample steps must end with zero")
     return expanded
+
+
+def three_flow_passes(entry, expanded):
+    passes = {1: [], 2: [], 3: []}
+    for sample in entry["samples"]:
+        if type(sample.get("pass")) is not int or sample["pass"] not in passes:
+            raise ValueError("flow series requires passes 1, 2 and 3")
+        passes[sample["pass"]].append(expanded[sample["step"] - 1].sensor_setpoints[entry["channel"]])
+    if (len(passes[1]) != 3 or passes[2] != passes[1][::-1] or passes[3] != passes[1]
+            or any(b <= a for a, b in zip(passes[1], passes[1][1:]))
+            or [s["step"] for s in entry["samples"]] != sorted(s["step"] for s in entry["samples"])
+            or [s["pass"] for s in entry["samples"]] != sorted(s["pass"] for s in entry["samples"])):
+        raise ValueError("flow series requires three increasing targets, reverse, then increasing again")

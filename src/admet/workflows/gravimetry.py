@@ -4,7 +4,7 @@ from copy import deepcopy
 import math
 from statistics import mean, stdev
 
-from admet.workflows.calculation_schema import measurement_binding, sample_steps
+from admet.workflows.calculation_schema import measurement_binding, sample_steps, three_flow_passes
 from admet.workflows.calculation_inputs import step_window, trace, volume_ul
 
 
@@ -23,16 +23,7 @@ def normalize_calculation(entry, steps, fields):
         if sample["before"] == sample["after"]:
             raise ValueError("before and after masses must be distinct measurements")
     if any("pass" in sample for sample in entry["samples"]):
-        passes = {1: [], 2: [], 3: []}
-        for sample in entry["samples"]:
-            if type(sample.get("pass")) is not int or sample["pass"] not in passes:
-                raise ValueError("flow calibration requires passes 1, 2 and 3")
-            passes[sample["pass"]].append(expanded[sample["step"] - 1].sensor_setpoints[entry["channel"]])
-        if (len(passes[1]) != 3 or passes[2] != passes[1][::-1] or passes[3] != passes[1]
-                or any(b <= a for a, b in zip(passes[1], passes[1][1:]))
-                or [s["step"] for s in entry["samples"]] != sorted(s["step"] for s in entry["samples"])
-                or [s["pass"] for s in entry["samples"]] != sorted(s["pass"] for s in entry["samples"])):
-            raise ValueError("flow calibration requires three increasing targets, reverse, then increasing again")
+        three_flow_passes(entry, expanded)
     return deepcopy(entry)
 
 
