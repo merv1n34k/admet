@@ -74,6 +74,11 @@ discards unexecuted previews; replan before execution. Switching is disabled whi
 a protocol or recording is active.
 
 1. Use the existing project controls to create/open an `.admetp` project.
+   The project menu shows saved protocol/analysis run counts
+   and the last time you opened each project on this computer. Projects opened
+   outside the default folder remain in the menu after restarting. At startup,
+   missing project paths (or paths without a manifest) are removed from this local
+   history only; no project data is deleted. Unknown last-opened times show **—**.
 2. Select and connect the camera if needed; enable Live for preview.
 3. Select Fluigent, connect, then set liquid profiles/correction factors and
    apply them. The device panels and live plots are restored from the Qt UI.

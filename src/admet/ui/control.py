@@ -14,7 +14,7 @@ from queue import Empty
 from typing import Any, Callable
 
 import numpy as np
-from PySide6.QtCore import QEvent, QLocale, QObject, QRect, QSize, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QLocale, QObject, QRect, QSettings, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 
 from admet.ui.backend import DesktopBackend as AdmetAPI
 from admet.ui.tasks import Tasks
-from admet.core.discovery import discover_projects, project_ref_label, projects_root
+from admet.core.discovery import discover_projects, project_ref_label, projects_root, prune_recent_projects
 from admet.core.run import RunJob, RunResult
 from admet.core.project import ProjectStore
 from admet.core.engine import Param, ParamKind
@@ -413,7 +413,12 @@ class ControlWindow(QMainWindow):
         self.status = QLabel("")
         self.project_badge: QPushButton | None = None
         self.discovery_root = projects_root()
-        self.project_refs = discover_projects(self.discovery_root)
+        self.project_settings = QSettings("ADMET", "Qt")
+        self.recent_projects = prune_recent_projects(self.project_settings.value("recent_projects", {}))
+        self._save_project_history()
+        if self.project_path and self.api.session:
+            self._remember_project()
+        self.project_refs = discover_projects(self.discovery_root, recent=self.recent_projects)
         self.preview: PreviewDisplay | None = None
         self.action_table: QTableWidget | None = None
         self.camera_selector: QComboBox | None = None
@@ -772,6 +777,7 @@ class ControlWindow(QMainWindow):
             self._notify(f"Project create failed: {exc}", "danger", timeout_ms=0)
             return
         self._control_recording_dir = None
+        self._remember_project()
         self._sync_project_badge()
         self._set_status("Project created", "success")
         self._notify("Project created", "success")
@@ -804,14 +810,26 @@ class ControlWindow(QMainWindow):
                 liquids[label] = (profile.density, profile.viscosity)
         return liquids
 
+    def _save_project_history(self):
+        self.project_settings.setValue("recent_projects", self.recent_projects)
+        self.project_settings.sync()
+        if self.project_settings.status() != QSettings.Status.NoError:
+            self._append_log("project history: could not save recent paths and last-opened times")
+
+    def _remember_project(self):
+        self.recent_projects[str(self.project_path.resolve())] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self._save_project_history()
+
     def _build_project_menu(self) -> QMenu:
         """Discovered projects, listed the way the analyze picker lists them."""
-        self.project_refs = discover_projects(self.discovery_root)
+        self.project_refs = discover_projects(self.discovery_root, recent=self.recent_projects)
         self._check_records = None
         menu = QMenu(self)
-        current = str(self.project_path) if self.project_path else ""
+        menu.setToolTipsVisible(True)
+        current = str(self.project_path.resolve()) if self.project_path else ""
         for ref in self.project_refs:
             action = menu.addAction(project_ref_label(ref))
+            action.setToolTip(str(ref.path))
             action.setCheckable(True)
             action.setChecked(str(ref.path) == current)
             action.triggered.connect(lambda _checked=False, path=ref.path: self._load_project_path(path))
@@ -849,6 +867,7 @@ class ControlWindow(QMainWindow):
             self._notify(f"Project load failed: {exc}", "danger", timeout_ms=0)
             return
         self._control_recording_dir = None
+        self._remember_project()
         self._sync_project_badge()
         self._set_status("Project selected", "success")
         self._notify("Project selected", "success")

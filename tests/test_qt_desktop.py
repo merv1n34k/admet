@@ -22,10 +22,16 @@ class DesktopWindowTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        from PySide6.QtCore import QSettings
         from admet.ui.backend import DesktopBackend
         from admet.ui.control import ControlWindow
 
         self.tmp = tempfile.TemporaryDirectory()
+        self.settings_path = str(Path(self.tmp.name) / "qt-settings.ini")
+        settings_patch = patch("admet.ui.control.QSettings", return_value=QSettings(self.settings_path, QSettings.Format.IniFormat))
+        settings_factory = settings_patch.start()
+        settings_factory.Status = QSettings.Status
+        self.addCleanup(settings_patch.stop)
         self.backend = DesktopBackend(simulated=True)
         self.backend.create_project(Path(self.tmp.name) / "gui.admetp")
         self.window = ControlWindow(self.backend)
@@ -81,6 +87,69 @@ class DesktopWindowTests(unittest.TestCase):
         self.panel.set_document(definition())
         self.assertIsNone(self.panel.parameter_table)
         self.assertEqual(self.panel.parameter_editors, {})
+
+    def test_project_menu_counts_runs_and_remembers_external_project_after_restart(self):
+        from PySide6.QtCore import QSettings
+        from admet.core.project import ProjectStore
+        from admet.ui.backend import DesktopBackend
+        from admet.ui.control import ControlWindow
+
+        root = Path(self.tmp.name).resolve()
+        default = root / "projects"
+        default.mkdir()
+        self.window.discovery_root = default
+        external = ProjectStore.create(root / "elsewhere.admetp", "external")
+        summary = external.path / "records/protocols/run_test/summary.json"
+        summary.parent.mkdir(parents=True)
+        summary.write_text('{"state":"completed"}')
+        external.upsert_file_path(summary, role="protocol_run")
+        external.upsert_file_path(external.path / "records/flow.csv", role="control_fluidics_csv")
+        external.save()
+        self.window._load_project_path(external.path)
+        menu = self.window._build_project_menu()
+        action = next(action for action in menu.actions() if action.text().startswith("external ·"))
+        self.assertIn("1 runs", action.text())
+        self.assertNotIn("files", action.text())
+        self.assertIn("last opened:", action.text())
+        self.assertNotIn("—", action.text())
+        self.assertEqual(action.toolTip(), str(external.path))
+        self.assertTrue(action.isChecked())
+        settings = QSettings(self.settings_path, QSettings.Format.IniFormat)
+        recent = settings.value("recent_projects")
+        self.assertEqual(recent[str(external.path)], self.window.recent_projects[str(external.path)])
+        missing = str(root / "removed.admetp")
+        recent[missing] = "2026-01-01T12:00:00+00:00"
+        recent[str(default)] = "2026-01-01T12:00:00+00:00"
+        settings.setValue("recent_projects", recent)
+        settings.sync()
+        other_backend = DesktopBackend(simulated=True)
+        with patch("admet.ui.control.projects_root", return_value=default):
+            reopened = ControlWindow(other_backend)
+        reopened.timer.stop()
+        try:
+            self.assertIn(external.path, [ref.path for ref in reopened.project_refs])
+            self.assertNotIn(missing, reopened.recent_projects)
+            self.assertNotIn(str(default), reopened.recent_projects)
+            settings.sync()
+            self.assertNotIn(missing, settings.value("recent_projects"))
+            self.assertTrue(external.path.is_dir())
+        finally:
+            other_backend.shutdown()
+            reopened._shutdown_complete = True
+            reopened.close()
+            reopened.deleteLater()
+            self.app.processEvents()
+
+    def test_failed_project_open_does_not_change_history(self):
+        before = dict(self.window.recent_projects)
+        self.window._load_project_path(Path(self.tmp.name) / "missing.admetp")
+        self.assertEqual(self.window.recent_projects, before)
+
+    def test_new_project_is_added_to_recent_projects(self):
+        path = Path(self.tmp.name).resolve() / "new.admetp"
+        with patch("admet.ui.control.QFileDialog.getSaveFileName", return_value=(str(path), "")):
+            self.window._new_project()
+        self.assertIn(str(path), self.window.recent_projects)
 
     def test_typed_parameters_use_native_editors_and_lock_with_execution(self):
         from PySide6.QtWidgets import QCheckBox, QComboBox, QLineEdit
