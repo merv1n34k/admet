@@ -281,11 +281,11 @@ class DesktopBackendTests(unittest.TestCase):
         plan = self.plan(document)
         service = self.backend.service
         stored = service._protocol_plans[plan["plan_id"]]
-        store = service._plan_stores[plan["plan_id"]]
+        store = service._plan_store(plan["plan_id"])
         directory = store.begin(stored)
         (directory / "events.jsonl").write_text(events_path.read_text())
         service._run_artifacts[plan["plan_id"]] = {
-            "store": store, "directory": directory, "recording": True,
+            "directory": directory, "recording": True,
             "artifacts": {"fluidics_csv": str(csv_path), "polling_origin_monotonic": origin},
         }
         stored["state"] = "completed"
