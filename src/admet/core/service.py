@@ -770,6 +770,10 @@ class Admet:
         }
 
     # -- what an operation needs from core -----------------------------------
+    def corrections_applied(self) -> bool:
+        """Whether correction factors are on the hardware for this connection."""
+        return bool(self._marks.get("corrections", False))
+
     def state(self) -> dict[str, Any]:
         """What is true right now, as the guards understand it."""
         engine = self._engines.get("acquisition")

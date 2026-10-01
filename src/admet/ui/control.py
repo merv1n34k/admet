@@ -364,9 +364,11 @@ class ControlWindow(QMainWindow):
         self._instruction_text = ""
         self._notification_text = ""
         self._notification_kind = "primary"
-        # Corrections have to reach the hardware before the stage can be left, and
-        # editing any correction value makes the applied set stale again.
-        self._corrections_applied = False
+        # Corrections have to reach the hardware before the stage can be left.
+        # The service knows what is applied; this only records an edit that has
+        # not reached the hardware yet, cleared by a successful apply.
+        self._correction_edits = 0
+        self._correction_edits_applied = 0
         self._preflight: PreflightPanel | None = None
         self._calculations = None
 
@@ -1628,10 +1630,13 @@ class ControlWindow(QMainWindow):
         if payload is None:
             return None
         job = self._build_run_job(action, payload)
+        # An apply only covers the edits made before it was sent; a newer edit
+        # stays unapplied until its own apply succeeds.
+        edits_sent = self._correction_edits
 
         def finished(result):
             if action == "apply_corrections":
-                self._corrections_applied = True
+                self._correction_edits_applied = max(self._correction_edits_applied, edits_sent)
             self._handle_action_result(
                 action, result, refresh=refresh, notify_success=notify_success,
             )
@@ -2069,7 +2074,8 @@ class ControlWindow(QMainWindow):
                 return False
             return self._pipeline_event_state(self._latest_pipeline_event) == "completed"
         if name == "corrections_applied":
-            return self._corrections_applied
+            return (self.api.service.corrections_applied()
+                    and self._correction_edits_applied == self._correction_edits)
         if name == "devices_released":
             self._refresh_runtime_state()
             return not (self.runtime_state["camera"] or self.runtime_state["fluidics"])
@@ -2175,6 +2181,7 @@ class ControlWindow(QMainWindow):
     def _schedule_correction_apply(self) -> None:
         if self._syncing_table or not self._fluigent_ready():
             return
+        self._correction_edits += 1
         self._correction_apply_timer.start(180)
 
     def _apply_stage_liquids(self, stage: Stage) -> None:

@@ -820,6 +820,32 @@ class DesktopWindowTests(unittest.TestCase):
                             for i in range(1, self.panel.library.count())))
         self.assertFalse((Path(self.backend.workdir) / "protocols").exists())
 
+    def test_corrections_read_as_applied_only_while_true(self):
+        def applied():
+            return self.window._guard_value("corrections_applied")
+
+        self.backend.call("connect_fluidics")
+        self.window._run("apply_corrections")
+        self.drain()
+        self.assertTrue(applied())
+
+        self.window._schedule_correction_apply()
+        self.window._correction_apply_timer.stop()
+        self.assertFalse(applied(), "an edit not yet on the hardware")
+
+        with patch.object(self.backend, "run", side_effect=RuntimeError("apply refused")):
+            self.window._run("apply_corrections", raise_errors=False)
+            self.drain()
+        self.assertFalse(applied(), "a failed apply")
+
+        self.window._run("apply_corrections")
+        self.drain()
+        self.assertTrue(applied())
+
+        self.backend.call("disconnect_fluidics")
+        self.backend.call("connect_fluidics")
+        self.assertFalse(applied(), "a fresh connection has no corrections")
+
     def _failing_command(self, **kwargs):
         self.backend.call("connect_fluidics")
         with patch.object(self.window, "_notify") as notify, \
