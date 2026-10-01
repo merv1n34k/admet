@@ -155,7 +155,7 @@ class StepTests(unittest.TestCase):
         op = operation("run_steps")
 
         self.assertEqual(op.kind, START)
-        self.assertEqual(set(op.requires), {"fluidics", "corrections", "idle", "safe"})
+        self.assertEqual(set(op.requires), {"fluidics", "corrections", "idle"})
         self.assertIn("steps", op.raw)
 
     def test_describe_says_what_each_trigger_takes(self):
@@ -236,7 +236,6 @@ class GuardTests(unittest.TestCase):
         "camera": False,
         "corrections": False,
         "running": False,
-        "tripped": False,
     }
 
     def test_a_guard_refuses_and_says_what_to_do(self):

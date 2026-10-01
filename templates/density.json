@@ -60,6 +60,5 @@
     "height_mid_cm": ["Middle outlet height, cm",15],
     "height_high_cm": ["High outlet height, cm",25]
   },
-  "parameter_values": {"oil_base_flow":15,"settling_s":10,"averaging_s":20,"height_low_cm":5,"height_mid_cm":15,"height_high_cm":25},
-  "pressure_limits_mbar": {}
+  "parameter_values": {"oil_base_flow":15,"settling_s":10,"averaging_s":20,"height_low_cm":5,"height_mid_cm":15,"height_high_cm":25}
 }

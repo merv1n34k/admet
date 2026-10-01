@@ -165,9 +165,6 @@ class NumericParamEdit(QLineEdit):
             self.hint += f" Minimum: {param.minimum:g}."
         if param.maximum is not None:
             self.hint += f" Maximum: {param.maximum:g}."
-        if param.name == "desktop_pressure_limit_mbar":
-            self.setPlaceholderText("Off")
-            self.hint += " Leave blank to disable the software pressure trip. Hardware ranges still apply."
         self.setToolTip(self.hint)
         self.textEdited.connect(self._edited)
         self.editingFinished.connect(self.commit)
@@ -180,9 +177,8 @@ class NumericParamEdit(QLineEdit):
             return True
         try:
             text = self.text().strip()
-            optional_trip = self.param.name == "desktop_pressure_limit_mbar"
-            value = None if optional_trip and not text else float(text)
-            if value is not None and not math.isfinite(value):
+            value = float(text)
+            if not math.isfinite(value):
                 raise ValueError("Enter a finite number.")
             value = self.param.validate(value)
         except (ValueError, TypeError) as exc:
@@ -1624,15 +1620,7 @@ class ControlWindow(QMainWindow):
         raise_errors: bool = True,
         refresh: bool = True,
         notify_success: bool = True,
-        _confirmed: bool = False,
     ):
-        if action == "reset_safety" and not _confirmed:
-            self._confirm(
-                "Reset safety? Confirm the trip cause has been resolved and the physical rig is safe.",
-                lambda: self._run(action, settings, refresh=refresh,
-                                  notify_success=notify_success, _confirmed=True),
-            )
-            return None
         payload = self._prepare_action_payload(action, settings)
         if payload is None:
             return None

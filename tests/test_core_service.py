@@ -42,9 +42,6 @@ class RecordingEngine:
         """Part of the engine contract core reads when it records context."""
         return {"connection": {"fluidics": True, "simulated": True}, "channels": []}
 
-    def safety_state(self) -> dict:
-        return {"armed": False, "tripped": False, "reason": "", "at": None, "limits": {}}
-
     def run(self, job: RunJob) -> RunResult:
         self.jobs.append(job)
         if job.action == "start_recording":
@@ -153,7 +150,6 @@ class FluidicsOnlyRecordingTests(unittest.TestCase):
         admet.create_project(Path(tmp) / "rig.admetp")
         admet.do("connect_fluidics", {"simulated": True})
         admet.do("apply_corrections", {"oil_l_scale": 1.07})
-        admet.arm_pressure_limits({0: 1900.0})
         started = admet.do("start_recording", {"recording_label": "oilcap"})
         time.sleep(0.5)
         admet.do("stop_recording")
@@ -208,7 +204,6 @@ class FluidicsOnlyRecordingTests(unittest.TestCase):
             self.assertEqual(context["corrections"]["oil_l_scale"], 1.07)
             self.assertEqual(context["channels"][0]["label"], "Oil L")
             self.assertIsNotNone(context["channels"][0]["pressure_max_mbar"])
-            self.assertEqual(context["safety"]["limits"], {"0": 1900.0})
             self.assertTrue(context["software_version"])
             self.assertTrue(context["connection"]["simulated"])
 

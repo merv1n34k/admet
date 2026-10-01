@@ -431,22 +431,9 @@ class Admet:
             json.dumps(executable, sort_keys=True, separators=(",", ":"), default=str).encode()
         ).hexdigest()
         plan_id = f"plan_{uuid.uuid4().hex}"
-        pressure_limits = {}
-        if operation_id == "run_json_protocol":
-            from admet.workflows.json_protocol import resolve
-
-            pressure_limits = resolve(normalized["protocol"])["pressure_limits_mbar"]
         warnings = ([] if all(g["met"] for g in guards.values()) else [
             "one or more execution guards are currently unmet"
         ])
-        controlled_channels = {
-            str(channel) for step in described_steps
-            for key in ("flow_setpoints_ul_min", "pressure_setpoints_mbar")
-            for channel in step[key]
-        }
-        unprotected = sorted(controlled_channels - set(pressure_limits))
-        if unprotected:
-            warnings.append("Software pressure trips off for channels " + ", ".join(unprotected))
         plan = {
             "plan_id": plan_id,
             "operation_id": operation_id,
@@ -464,10 +451,7 @@ class Admet:
                 "include_video": bool(normalized.get("include_video", False)),
             },
             "camera_required": bool(normalized.get("include_video", False)),
-            "armed_safety_limits": {"pressure_mbar": pressure_limits},
             "abort_conditions": [
-                "armed pressure limit reached",
-                "safety latch trips",
                 "fluidics disconnects or required telemetry becomes unavailable",
                 "protocol reports an error",
             ],
@@ -647,7 +631,6 @@ class Admet:
             "simulated": bool(hardware and hardware.simulated),
             "channel_mapping": mapping,
             "correction_settings": deepcopy(self._marks.get("correction_settings")),
-            "safety": self.safety_state(),
             "hardware_identity": {
                 "controller_serials": sorted({
                     getattr(item, "controller_sn", None)
@@ -786,7 +769,6 @@ class Admet:
                 "camera": False,
                 "corrections": False,
                 "running": False,
-                "tripped": False,
                 "sources": len(self.analysis_sources()),
             }
         return {
@@ -795,27 +777,9 @@ class Admet:
             "camera": bool(getattr(engine.camera, "connected", False)),
             "corrections": self._marks.get("corrections", False),
             "running": engine.pipeline_state in {"running", "paused", "stopping"},
-            "tripped": bool(engine.safety_state()["tripped"]),
             "sources": len(self.analysis_sources()),
         }
 
-
-    def safety_state(self) -> dict[str, Any]:
-        """Whether a limit is armed, and whether anything has tripped it.
-
-        Read from the engine's latch rather than mirrored here. A trip stays
-        reported until explicitly reset, because a safety event that clears
-        itself is one nobody finds out about, and two copies of it would be one
-        copy too many.
-        """
-        engine = self._engines.get("acquisition")
-        if engine is None:
-            # The latch's own idea of "nothing has happened", rather than a
-            # second copy of its shape here that would drift from it.
-            from admet.engines.acquisition.safety import SafetyState
-
-            return SafetyState().describe()
-        return engine.safety_state()
 
     def polling_started_monotonic(self) -> float:
         engine = self._engines.get("acquisition")
@@ -823,15 +787,8 @@ class Admet:
 
 
     def emergency_stop(self, reason: str = "") -> dict[str, Any]:
-        """Zero everything now. Works whatever else is or is not true."""
+        """Zero every channel, stop the protocol, close the recording."""
         return self.engine("acquisition").emergency_stop(reason)
-
-    def arm_pressure_limits(self, limits: dict[int, float]) -> dict[str, Any]:
-        """Arm a measured-pressure ceiling per channel, for one run."""
-        return self.engine("acquisition").arm_pressure_limits(limits)
-
-    def reset_safety(self) -> dict[str, Any]:
-        return self.engine("acquisition").reset_safety()
 
     def protocol_events(self, *, after_sequence: int = 0, limit: int = 100) -> list[dict[str, Any]]:
         """Protocol events newer than one already seen, as plain data."""
@@ -1002,7 +959,6 @@ class Admet:
                 {"index": channel["index"], "label": channel["label"], **channel["detected"]}
                 for channel in observation.get("channels", [])
             ],
-            "safety": self.safety_state(),
         }
 
     def _job_metadata(self) -> dict[str, Any]:

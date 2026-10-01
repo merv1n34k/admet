@@ -67,7 +67,7 @@ class RecordedDensityTests(unittest.TestCase):
             self.assertEqual(declarations(resolve(document))[0]["oil_id"], oil)
             self.assertEqual(normalize(document), document)
             self.assertNotIn("temperature", json.dumps(document))
-            self.assertEqual(document["pressure_limits_mbar"], {})
+            self.assertNotIn("pressure_limits_mbar", document)
             with patch.object(admet, "engine_action", side_effect=AssertionError("actuation")):
                 plan = admet.plan_protocol(operation_id="run_json_protocol", settings={"protocol": document})
             self.assertEqual(plan["expected_duration_s"], 540)

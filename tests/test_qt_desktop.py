@@ -246,13 +246,13 @@ class DesktopWindowTests(unittest.TestCase):
         index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "priming")
         self.window._select_stage(index)
         panel = self.window._protocol_editor(self.window.workflow.stages[index])
-        editor = self.window._param_editors["desktop_pressure_limit_mbar"]
+        editor = self.window._param_editors["prime_oil_volume_ul"]
         panel.dirty = False
         editor.setFocus()
         editor.selectAll()
         with patch.object(self.window, "_set_value", wraps=self.window._set_value) as commit:
             QTest.keyClicks(editor, "1850.5")
-            self.assertIsNone(self.window.values[editor.param.name])
+            self.assertEqual(self.window.values[editor.param.name], 40.0)
             self.assertTrue(panel.dirty)
             commit.assert_not_called()
             self.window._sync_param_editor(editor.param.name, editor)
@@ -263,14 +263,14 @@ class DesktopWindowTests(unittest.TestCase):
             editor.clearFocus()
             self.assertEqual(commit.call_count, 1)
 
-    def test_invalid_pressure_entry_is_retained_and_blocks_planning(self):
+    def test_invalid_numeric_entry_is_retained_and_blocks_planning(self):
         from PySide6.QtCore import Qt
         from PySide6.QtTest import QTest
 
         index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "priming")
         self.window._select_stage(index)
         panel = self.window._protocol_editor(self.window.workflow.stages[index])
-        editor = self.window._param_editors["desktop_pressure_limit_mbar"]
+        editor = self.window._param_editors["prime_oil_volume_ul"]
         with patch.object(self.backend, "call", side_effect=AssertionError("invalid draft used")):
             for text in ("0", "nan", "inf", "-1", "abc"):
                 with self.subTest(text=text):
@@ -280,7 +280,7 @@ class DesktopWindowTests(unittest.TestCase):
                     QTest.keyClicks(editor, text)
                     QTest.keyClick(editor, Qt.Key.Key_Return)
                     self.assertTrue(editor.pending)
-                    self.assertIsNone(self.window.values[editor.param.name])
+                    self.assertEqual(self.window.values[editor.param.name], 40.0)
                     self.window._sync_param_editor(editor.param.name, editor)
                     self.assertEqual(editor.text(), text)
                     panel.build_plan()
@@ -326,7 +326,7 @@ class DesktopWindowTests(unittest.TestCase):
 
         index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "priming")
         self.window._select_stage(index)
-        name = "desktop_pressure_limit_mbar"
+        name = "prime_oil_volume_ul"
         editor = self.window._param_editors[name]
         editor.selectAll()
         QTest.keyClicks(editor, "nan")
@@ -334,31 +334,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.window._render_current_stage()
         self.assertEqual(self.window._param_editors[name].text(), "nan")
         self.assertTrue(self.window._param_editors[name].pending)
-        self.assertIsNone(self.window.values[name])
-
-    def test_optional_pressure_trip_accepts_controller_ceiling_and_clears_to_off(self):
-        from PySide6.QtCore import Qt
-        from PySide6.QtTest import QTest
-
-        index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "priming")
-        self.window._select_stage(index)
-        panel = self.window._protocol_editor(self.window.workflow.stages[index])
-        editor = self.window._param_editors["desktop_pressure_limit_mbar"]
-        self.assertEqual(editor.placeholderText(), "Off")
-        QTest.keyClicks(editor, "2000")
-        QTest.keyClick(editor, Qt.Key.Key_Return)
-        self.assertEqual(self.window.values[editor.param.name], 2000)
-        panel.build_plan()
-        self.drain()
-        self.assertEqual(set(panel.plan["armed_safety_limits"]["pressure_mbar"].values()), {2000})
-        editor.selectAll()
-        QTest.keyClick(editor, Qt.Key.Key_Backspace)
-        QTest.keyClick(editor, Qt.Key.Key_Return)
-        self.assertIsNone(self.window.values[editor.param.name])
-        panel.build_plan()
-        self.drain()
-        self.assertEqual(panel.plan["armed_safety_limits"]["pressure_mbar"], {})
-        self.assertNotIn("pressure trips", self.window._protocol_status_label.text())
+        self.assertEqual(self.window.values[name], 40.0)
 
     def test_plan_commits_valid_numeric_draft_without_actuation(self):
         from PySide6.QtTest import QTest
@@ -366,14 +342,14 @@ class DesktopWindowTests(unittest.TestCase):
         index = next(i for i, stage in enumerate(self.window.workflow.stages) if stage.id == "priming")
         self.window._select_stage(index)
         panel = self.window._protocol_editor(self.window.workflow.stages[index])
-        editor = self.window._param_editors["desktop_pressure_limit_mbar"]
+        editor = self.window._param_editors["prime_oil_volume_ul"]
         editor.selectAll()
         QTest.keyClicks(editor, "1750")
         with patch.object(self.backend.engine, "run", side_effect=AssertionError("planning actuated")):
             panel.build_plan()
             self.drain()
         self.assertEqual(self.window.values[editor.param.name], 1750)
-        self.assertEqual(set(panel.plan["armed_safety_limits"]["pressure_mbar"].values()), {1750})
+        self.assertIsNotNone(panel.plan)
         self.assertFalse(editor.pending)
 
     def test_correction_auto_apply_waits_for_numeric_draft(self):
@@ -863,7 +839,7 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertTrue(entered.wait(1))
         self.window._emergency_stop()
         self.drain(lambda: not self.window.emergency_tasks.busy)
-        self.assertTrue(self.backend.engine.safety_state()["tripped"])
+        self.assertTrue(all(c.mode == "off" for c in self.backend.engine.channel_manager.channels))
         self.drain(lambda: len(ticks) >= 3)
         release.set()
         self.drain()
@@ -927,7 +903,6 @@ class DesktopWindowTests(unittest.TestCase):
         self.window._confirmation_dialog.button(QMessageBox.StandardButton.Ok).click()
         self.drain(lambda: self.window._shutdown_complete)
         self.assertFalse(self.backend.service.state()["fluidics"])
-        self.assertTrue(self.backend.engine.safety_state()["tripped"])
 
     def test_escape_clears_plan_selection_and_details_without_changing_plan(self):
         from PySide6.QtCore import Qt
@@ -987,19 +962,6 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 0)
         self.assertNotIn("--simulated", output.getvalue())
         self.assertNotIn("--live", output.getvalue())
-
-    def test_reset_uses_popup_confirmation(self):
-        from PySide6.QtWidgets import QMessageBox
-
-        self.backend.emergency_stop()
-        self.window._run("reset_safety")
-        self.assertTrue(self.backend.engine.safety_state()["tripped"])
-        self.window._confirmation_dialog.close()
-        self.assertTrue(self.backend.engine.safety_state()["tripped"])
-        self.window._run("reset_safety")
-        self.window._confirmation_dialog.button(QMessageBox.StandardButton.Ok).click()
-        self.drain()
-        self.assertFalse(self.backend.engine.safety_state()["tripped"])
 
     def test_json_remains_visible_but_draft_and_preview_are_discarded_on_reopen(self):
         from PySide6.QtWidgets import QPushButton

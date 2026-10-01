@@ -178,9 +178,6 @@ class DesktopBackend:
             raise RuntimeError(f"Channel {index} is controlled by the protocol; pause or finish it first")
         if action == "stop_channel":
             return
-        safety = self.engine.safety_state()
-        if safety["tripped"]:
-            raise RuntimeError(f"Safety latch is set: {safety['reason']}")
         flow = action == "set_channel_flow"
         if flow and not self.service.state()["corrections"]:
             raise RuntimeError("Apply fluidics corrections before setting flow")
@@ -190,9 +187,6 @@ class DesktopBackend:
             "trigger_type": "time", "trigger_params": {"duration_s": 0},
         }]})
         validate_channels(document, self.service._cached_channel_mapping())
-        limit = safety["limits"].get(str(channels[index].pressure_index)) if safety["armed"] else None
-        if not flow and limit is not None and value >= limit:
-            raise ValueError(f"Channel {index}: pressure must stay below armed limit {limit:g} mbar")
 
     def emergency_stop(self):
         # Deliberately independent of the normal command lock.

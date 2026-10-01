@@ -168,14 +168,6 @@ def resolve(document):
             for key in ("name", "confirm_message", "group", "trigger_type", "on_complete"):
                 if isinstance(step.get(key), str):
                     step[key] = interpolate(step[key], values)
-        if isinstance(result.get("pressure_limits_mbar"), dict):
-            limits = {}
-            for k, v in result["pressure_limits_mbar"].items():
-                target_key = interpolate(k, values)
-                if target_key in limits:
-                    raise ValueError("channel parameters resolve to duplicate limits")
-                limits[target_key] = expression(v, values)
-            result["pressure_limits_mbar"] = limits
     resolve_declarations(result, values)
     return _normalize_resolved(result)
 
@@ -185,7 +177,6 @@ def normalize(document):
     if "parameters" not in document and "parameter_values" not in document:
         return resolved
     result = deepcopy(document)
-    result.setdefault("pressure_limits_mbar", {})
     result["parameter_values"] = parameter_values(document)
     return result
 
@@ -246,7 +237,7 @@ def _normalize_resolved(document):
 
     if not isinstance(document, dict):
         raise ValueError("protocol must be a JSON object")
-    unknown = set(document) - {"name", "steps", "pressure_limits_mbar", "analysis", "calculations", "measurements"}
+    unknown = set(document) - {"name", "steps", "analysis", "calculations", "measurements"}
     if unknown:
         raise ValueError(f"unknown protocol fields: {', '.join(sorted(unknown))}")
     name = document.get("name")
@@ -255,9 +246,6 @@ def _normalize_resolved(document):
     steps = document.get("steps")
     if not isinstance(steps, list) or not 1 <= len(steps) <= 1000:
         raise ValueError("steps must contain 1–1000 steps")
-    limits = channel_map(document.get("pressure_limits_mbar", {}), "pressure_limits_mbar")
-    if any(value <= 0 for value in limits.values()):
-        raise ValueError("pressure limits must be positive")
     normalized = []
     for index, original in enumerate(steps):
         if not isinstance(original, dict):
@@ -273,9 +261,6 @@ def _normalize_resolved(document):
             step[key] = channel_map(step.get(key, {}), key)
         if set(step["sensor_setpoints"]) & set(step["pressure_setpoints"]):
             raise ValueError("a channel cannot have flow and pressure control in the same step")
-        for key, value in step["pressure_setpoints"].items():
-            if key in limits and value >= limits[key]:
-                raise ValueError("pressure target must be below its pressure limit")
         params = step.get("trigger_params", {})
         if not isinstance(params, dict):
             raise ValueError("trigger_params must be an object")
@@ -307,7 +292,7 @@ def _normalize_resolved(document):
     expanded = expand_protocol_steps([_step_from(step, i) for i, step in enumerate(normalized)])
     if len(expanded) > 1000:
         raise ValueError("expanded protocol exceeds 1000 steps")
-    result = {"name": name, "pressure_limits_mbar": limits, "steps": normalized}
+    result = {"name": name, "steps": normalized}
     if "measurements" in document:
         result["measurements"] = measurement_fields(document["measurements"], len(expanded))
     calculations = normalize_calculations(document, normalized, result.get("measurements", {}))
@@ -349,13 +334,6 @@ def validate_channels(document, channels):
     by_index = {str(channel["index"]): channel["detected"] for channel in channels}
     if not by_index:
         return
-    for key, limit in document["pressure_limits_mbar"].items():
-        detected = by_index.get(key)
-        if detected is None:
-            raise ValueError(f"channel {key} is not connected")
-        maximum = detected.get("pressure_max_mbar")
-        if maximum is None or not math.isfinite(maximum) or limit > maximum:
-            raise ValueError(f"channel {key}: pressure limit exceeds or lacks detected maximum")
     for step_number, step in enumerate(document["steps"], 1):
         for targets, range_key, label in (
             ("sensor_setpoints", "sensor_max_ul_min", "flow"),

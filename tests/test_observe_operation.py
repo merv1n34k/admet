@@ -18,8 +18,7 @@ class DisconnectedTests(unittest.TestCase):
         self.assertTrue(self.observed["observed_at"])
         self.assertEqual(self.observed["channels"], [])
         self.assertNotIn("validation", self.observed)
-        self.assertFalse(self.observed["safety"]["armed"])
-        self.assertFalse(self.observed["safety"]["tripped"])
+        self.assertNotIn("safety", self.observed)
         guards = self.observed["guards"]
         self.assertFalse(guards["fluidics"]["met"])
         self.assertIn("run connect_fluidics first", guards["fluidics"]["why_not"])

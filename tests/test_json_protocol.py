@@ -12,7 +12,6 @@ from admet.workflows.json_protocol import normalize, template_documents, validat
 
 DOCUMENT = {
     "name": "short_run",
-    "pressure_limits_mbar": {"0": 1000},
     "steps": [{
         "sensor_setpoints": {"0": 10},
         "trigger_type": "time", "trigger_params": {"duration_s": 0.1},
@@ -104,7 +103,6 @@ class JsonProtocolTests(unittest.TestCase):
 
     def test_dropseq_template_preserves_existing_recipe_with_bounded_execution(self):
         document = template_documents()["dropseq"]
-        self.assertEqual(document["pressure_limits_mbar"], {})
         self.assertEqual(len(document["steps"]), 2)
         self.assertEqual(document["steps"][0]["trigger_type"], "volume")
         self.assertEqual(document["steps"][0]["trigger_params"], {"sensor_index": 0, "target_volume_ul": 150})
@@ -120,7 +118,6 @@ class JsonProtocolTests(unittest.TestCase):
             plan = admet.plan_protocol(operation_id="run_json_protocol", settings={"protocol": document})
         self.assertEqual(plan["expected_duration_s"], 30)
         self.assertEqual(plan["steps"][0]["flow_setpoints_ul_min"], {"0": 300, "1": 40, "2": 40})
-        self.assertEqual(plan["armed_safety_limits"]["pressure_mbar"], {})
 
     def test_normalization_is_detached_and_rejects_unknown_fields(self):
         document = deepcopy(DOCUMENT)
@@ -156,27 +153,19 @@ class JsonProtocolTests(unittest.TestCase):
                 with self.assertRaises((ValueError, RuntimeError)):
                     normalize(document)
 
-    def test_limits_are_optional_and_explicit_limits_still_apply(self):
+    def test_pressure_limits_are_not_a_protocol_field(self):
         document = deepcopy(DOCUMENT)
-        document.pop("pressure_limits_mbar")
-        self.assertEqual(normalize(document)["pressure_limits_mbar"], {})
+        self.assertNotIn("pressure_limits_mbar", normalize(document))
         document["pressure_limits_mbar"] = {"1": 500}
-        self.assertEqual(normalize(document)["pressure_limits_mbar"], {"1": 500})
-        document["steps"][0].update(sensor_setpoints={}, pressure_setpoints={"1": 500})
-        with self.assertRaisesRegex(ValueError, "below its pressure limit"):
+        with self.assertRaisesRegex(ValueError, "unknown protocol fields"):
             normalize(document)
 
-    def test_detected_ranges_apply_without_software_trips(self):
+    def test_detected_ranges_apply(self):
         channels = [{"index": 0, "detected": {"pressure_max_mbar": 2000, "sensor_max_ul_min": 1000}}]
         document = deepcopy(DOCUMENT)
-        document.pop("pressure_limits_mbar")
         step = document["steps"][0]
         step.update(sensor_setpoints={}, pressure_setpoints={"0": 2000})
         validate_channels(normalize(document), channels)
-        document["pressure_limits_mbar"] = {"0": 2000}
-        step["pressure_setpoints"] = {"0": 1999}
-        validate_channels(normalize(document), channels)
-        document["pressure_limits_mbar"] = {}
         for mode, target in (("pressure_setpoints", 2001), ("sensor_setpoints", 1001)):
             step.update(sensor_setpoints={}, pressure_setpoints={})
             step[mode] = {"0": target}
@@ -253,7 +242,7 @@ class JsonProtocolTests(unittest.TestCase):
         with patch.object(admet, "engine_action", side_effect=AssertionError("hardware")):
             plan = admet.plan_protocol(operation_id="run_json_protocol", settings={"protocol": DOCUMENT})
         self.assertEqual(plan["steps"][0]["flow_setpoints_ul_min"], {"0": 10})
-        self.assertEqual(plan["armed_safety_limits"]["pressure_mbar"], {"0": 1000})
+        self.assertNotIn("armed_safety_limits", plan)
 
     def test_simulated_plan_executes_and_zeros(self):
         with tempfile.TemporaryDirectory() as tmp:

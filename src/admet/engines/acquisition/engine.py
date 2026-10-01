@@ -28,7 +28,6 @@ from admet.engines.acquisition.fluidics.config import (
     STABILITY_TOLERANCE_UL_MIN,
     STABILITY_WINDOW_SAMPLES,
 )
-from admet.engines.acquisition.safety import PressureWatchdog
 from admet.engines.acquisition.recording import (
     RecordingCoordinator,
     WriterFactory,
@@ -79,8 +78,7 @@ ACQUISITION_ACTIONS = (
     ActionSpec("stop_camera_live", "Stop Camera Live", "diagnostics"),
     ActionSpec("read_status", "Read Status", "diagnostics", kind=READ),
     ActionSpec("read_observation", "Read Observation", "diagnostics", kind=READ),
-    ActionSpec("emergency_stop", "Emergency Stop", "safety"),
-    ActionSpec("reset_safety", "Reset Safety", "safety"),
+    ActionSpec("emergency_stop", "Emergency Stop", "control"),
     ActionSpec("start_polling", "Start Polling", "diagnostics"),
     ActionSpec("stop_polling", "Stop Polling", "diagnostics"),
     ActionSpec("apply_corrections", "Apply Corrections", "fluidics", params=CORRECTION_PARAM_NAMES),
@@ -146,7 +144,6 @@ class AcquisitionEngine:
         self.sdk = sdk or FluigentSDK()
         self.hardware = HardwareManager(self.sdk)
         self.channel_manager = ChannelManager(self.sdk)
-        self.watchdog = PressureWatchdog(on_trip=self._tripped)
         # Event numbering and history belong to the session, not to one
         # protocol. A client's cursor has to keep meaning what it meant after
         # the next protocol starts.
@@ -211,7 +208,6 @@ class AcquisitionEngine:
             "emergency_stop": lambda settings: self.emergency_stop(
                 str(settings.get("stop_reason") or "asked for by the operator")
             ),
-            "reset_safety": lambda _settings: self.reset_safety(),
             "start_polling": lambda _settings: self._status_after("start_polling", self.start_polling),
             "stop_polling": lambda _settings: self._status_after("stop_polling", self.stop_polling),
             "apply_corrections": lambda settings: self._status_after(
@@ -365,9 +361,6 @@ class AcquisitionEngine:
             sensor_count=len(state.sensor_channels),
             data_queue=self.data_queue,
             csv_logger=self.csv_logger if self.recording_active else None,
-            # The watchdog sees each reading where it is taken, so a breach is
-            # acted on in the same tick rather than whenever somebody asks.
-            on_snapshot=lambda snapshot: self.watchdog.check(snapshot.pressures),
         )
         self._acquisition.start()
 
@@ -705,11 +698,10 @@ class AcquisitionEngine:
         )
 
     def emergency_stop(self, reason: str = "") -> dict[str, Any]:
-        """Take every channel to zero, now, and say why afterwards.
+        """Take every channel to zero, stop the protocol, close the recording.
 
-        Idempotent, and safe to call when nothing is connected or running: this
-        is the call whose job is to work when other things have not. Each step
-        is attempted independently, so one failing does not skip the rest.
+        A manual stop that leaves nothing set afterwards. Each step is attempted
+        independently, so one failing does not skip the rest.
         """
         stopped: dict[str, Any] = {"channels_zeroed": False, "protocol": None, "recording": None}
         errors: list[str] = []
@@ -738,48 +730,7 @@ class AcquisitionEngine:
         except Exception as exc:
             errors.append(f"closing the recording: {exc}")
 
-        latched = self.watchdog.trip(reason or "emergency stop", self._pressures())
-        return {**stopped, "errors": errors, "safety": latched}
-
-    def _tripped(self, reason: str) -> None:
-        """What the watchdog calls, from inside the polling loop.
-
-        Only what must happen now happens here: the channels go to zero. The
-        rest of the cleanup stops a thread and closes a file, either of which
-        can block for seconds -- and blocking here stops the polling that the
-        watchdog itself reads from, leaving the rig unwatched at exactly the
-        moment something has gone wrong.
-        """
-        try:
-            self.channel_manager.emergency_stop_all()
-        except Exception:
-            log.exception("Emergency zeroing failed")
-        pipeline = self._pipeline
-        if pipeline is not None:
-            pipeline.stop()  # signalled, not joined: the join belongs elsewhere
-        threading.Thread(
-            target=self._finish_trip, args=(reason,), name="TripCleanup", daemon=True
-        ).start()
-
-    def _finish_trip(self, reason: str) -> None:
-        """The part of a trip that is allowed to take its time."""
-        try:
-            self.emergency_stop(reason)
-        except Exception:
-            log.exception("Trip cleanup failed")
-
-    def reset_safety(self) -> dict[str, Any]:
-        return self.watchdog.reset(self._pressures())
-
-    def arm_pressure_limits(self, limits: dict[int, float]) -> dict[str, Any]:
-        return self.watchdog.arm(limits)
-
-    def safety_state(self) -> dict[str, Any]:
-        return self.watchdog.describe()
-
-    def _pressures(self) -> list[float]:
-        snapshot = self._acquisition.latest_snapshot() if self._acquisition else None
-        return list(snapshot.pressures) if snapshot else []
+        return {**stopped, "errors": errors, "reason": reason}
 
     def observation(self) -> dict[str, Any]:
         """What the instrument is doing, measured rather than assumed.
@@ -805,7 +756,6 @@ class AcquisitionEngine:
             "channels": self._channel_observations(snapshot, recent),
             "camera": camera,
             "protocol": self._protocol_observation(),
-            "safety": self.watchdog.describe(),
         }
 
     def _recording_observation(self) -> dict[str, Any]:

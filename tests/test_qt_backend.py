@@ -15,7 +15,6 @@ from admet.workflows.json_protocol import loads, template_documents
 def definition(duration=0.15):
     return {
         "name": "desktop_test",
-        "pressure_limits_mbar": {"0": 500, "1": 400, "2": 400},
         "steps": [{
             "sensor_setpoints": {"0": 10, "1": 5, "2": 5},
             "trigger_type": "time", "trigger_params": {"duration_s": duration},
@@ -165,7 +164,6 @@ class DesktopBackendTests(unittest.TestCase):
             "action": "execute", "plan_id": plan["plan_id"], "timeout_s": 1,
         })
         self.assertEqual(started["yield"]["reason"], "confirmation_required")
-        self.assertFalse(self.backend.call("observe")["safety"]["armed"])
         self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 0.1})
         deadline = time.monotonic() + 10
         running_targets_seen = False
@@ -394,39 +392,28 @@ class DesktopBackendTests(unittest.TestCase):
             worker.start()
             self.assertTrue(done.wait(2))
         worker.join()
-        self.assertTrue(self.backend.call("observe")["safety"]["tripped"])
+        self.assertEqual({c["mode"] for c in self.backend.call("observe")["channels"]}, {"off"})
 
-    def test_unrestricted_plan_disarms_old_limits_and_finishes_zeroed(self):
+    def test_pressure_plan_runs_and_finishes_zeroed(self):
         self.connect()
-        self.backend.service.arm_pressure_limits({0: 100})
         document = definition()
-        document.pop("pressure_limits_mbar")
         document["steps"][0].update(sensor_setpoints={}, pressure_setpoints={"0": 2000})
         plan = self.plan(document)
-        self.assertEqual(plan["armed_safety_limits"]["pressure_mbar"], {})
-        self.assertIn("Software pressure trips off for channels 0", plan["warnings"])
         self.backend.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"], "timeout_s": 1})
-        observed = self.backend.call("observe")
-        self.assertFalse(observed["safety"]["armed"])
-        self.assertEqual(observed["safety"]["limits"], {})
         self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 1})
         self.wait_completed(plan["plan_id"])
         observed = self.backend.call("observe")
-        self.assertFalse(observed["safety"]["tripped"])
         self.assertFalse(observed["recording"]["active"])
         self.assertTrue(all(c["requested_pressure_mbar"] in (None, 0) for c in observed["channels"]))
 
-    def test_emergency_still_stops_a_protocol_without_pressure_trips(self):
+    def test_emergency_stops_a_protocol_and_leaves_nothing_set(self):
         self.connect()
-        document = definition(10)
-        document.pop("pressure_limits_mbar")
-        plan = self.plan(document)
+        plan = self.plan(definition(10))
         self.backend.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"], "timeout_s": 1})
         self.backend.call("control_protocol", {"action": "confirm", "timeout_s": 0.1})
         stopped = self.backend.emergency_stop()
         self.assertTrue(stopped["channels_zeroed"])
         observed = self.backend.call("observe")
-        self.assertTrue(observed["safety"]["tripped"])
         self.assertEqual({c["mode"] for c in observed["channels"]}, {"off"})
         self.assertFalse(observed["recording"]["active"])
 
@@ -509,7 +496,7 @@ class DesktopBackendTests(unittest.TestCase):
         self.assertTrue(all(c.mode == "off" and c.active_setpoint == 0
                             for c in self.backend.engine.channel_manager.channels))
 
-    def test_manual_controls_reject_invalid_targets_and_latched_safety(self):
+    def test_manual_controls_reject_invalid_targets_and_work_after_emergency_stop(self):
         with self.assertRaisesRegex(RuntimeError, "not connected"):
             self.backend.call("set_channel_flow", {"channel_index": 0, "channel_flow_ul_min": 5})
         self.backend.call("connect_fluidics")
@@ -521,17 +508,12 @@ class DesktopBackendTests(unittest.TestCase):
             for index, target in ((-1, 1), (True, 1), (100, 1), (0, -1), (0, float("nan")), (0, 1e9)):
                 with self.subTest(index=index, target=target), self.assertRaises(ValueError):
                     self.backend.call("set_channel_flow", {"channel_index": index, "channel_flow_ul_min": target})
-            self.backend.engine.watchdog.arm({0: 100})
-            with self.assertRaisesRegex(ValueError, "armed limit"):
-                self.backend.call("set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 101})
-            with self.assertRaisesRegex(ValueError, "armed limit"):
-                self.backend.call("set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 100})
             self.backend.engine.hardware.state.sensor_channels[0].smax = None
             with self.assertRaisesRegex(ValueError, "range unavailable"):
                 self.backend.call("set_channel_flow", {"channel_index": 0, "channel_flow_ul_min": 5})
         self.backend.emergency_stop()
-        with self.assertRaisesRegex(RuntimeError, "Safety latch"):
-            self.backend.call("set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 10})
+        # Nothing is latched: the operator can drive the rig again straight away.
+        self.backend.call("set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 10})
         self.backend.run(RunJob("stop", "acquisition", "stop_channel", {"channel_index": 0}))
 
     def test_desktop_imports_no_transport_or_terminal(self):
