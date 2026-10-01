@@ -714,7 +714,7 @@ OPERATIONS: tuple[Operation, ...] = (
     Operation("pause_protocol", "Pause protocol", "Hold the protocol and zero the channels.",
               requires=("running",), uses=("pause_protocol",), run=_pipeline_control("pause_protocol")),
     Operation("resume_protocol", "Resume protocol", "Carry on from a pause.",
-              requires=("running"), uses=("resume_protocol",),
+              requires=("running",), uses=("resume_protocol",),
               run=_pipeline_control("resume_protocol")),
     Operation("stop_protocol", "Stop protocol", "End the protocol and release the channels.",
               requires=("running",), uses=("stop_protocol",), run=_pipeline_control("stop_protocol")),
