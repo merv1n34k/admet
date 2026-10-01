@@ -820,6 +820,22 @@ class DesktopWindowTests(unittest.TestCase):
                             for i in range(1, self.panel.library.count())))
         self.assertFalse((Path(self.backend.workdir) / "protocols").exists())
 
+    def _failing_command(self, **kwargs):
+        self.backend.call("connect_fluidics")
+        with patch.object(self.window, "_notify") as notify, \
+                patch.object(self.backend, "run", side_effect=RuntimeError("controller refused")):
+            self.window._run("stop_channel", {"channel_index": 0}, **kwargs)
+            self.drain()
+        return [call.args[0] for call in notify.call_args_list]
+
+    def test_a_failed_command_tells_the_operator(self):
+        messages = self._failing_command()
+        self.assertTrue(any("controller refused" in m for m in messages), messages)
+
+    def test_a_failed_background_apply_stays_quiet(self):
+        messages = self._failing_command(raise_errors=False)
+        self.assertFalse(any("controller refused" in m for m in messages), messages)
+
     def test_a_status_refresh_in_flight_does_not_refuse_a_command(self):
         # The refresh used to share the command slot, so a click landing during
         # it was refused with "Another command is in progress".

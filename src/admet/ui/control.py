@@ -1639,7 +1639,7 @@ class ControlWindow(QMainWindow):
         self.tasks.submit(
             lambda: self.api.run(job), finished,
             lambda exc: self._handle_action_error(
-                action, exc, refresh=refresh, raise_errors=False,
+                action, exc, refresh=refresh, raise_errors=raise_errors,
             ),
         )
 
