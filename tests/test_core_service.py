@@ -79,6 +79,25 @@ def _admet(tmp: str) -> tuple[Admet, RecordingEngine]:
 
 
 class SessionTests(unittest.TestCase):
+    def test_creating_an_existing_project_opens_it_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "exp.admetp"
+            admet = Admet()
+            admet.create_project(path)
+            admet.do("connect_fluidics", {"simulated": True})
+            self.addCleanup(admet.do, "disconnect_fluidics")
+            admet.do("start_recording", {"recording_label": "kept"})
+            time.sleep(0.3)
+            admet.do("stop_recording")
+            before = json.loads((path / "manifest.json").read_text())
+
+            reopened = Admet().create_project(path, "other")
+
+            after = json.loads((path / "manifest.json").read_text())
+            self.assertEqual(after, before)
+            self.assertEqual(reopened.session.project_id, before["project_id"])
+            self.assertEqual(len(after["files"]), 1)
+
     def test_a_project_is_created_and_becomes_the_one_in_use(self):
         with tempfile.TemporaryDirectory() as tmp:
             admet = Admet()

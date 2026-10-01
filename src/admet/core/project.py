@@ -49,6 +49,10 @@ class ProjectStore:
         project_path: str | Path,
         project_id: str,
     ) -> ProjectStore:
+        # Like touch: an existing project is opened as it is, never replaced.
+        existing = session_path(project_path)
+        if (existing / "manifest.json").is_file():
+            return cls(existing)
         path = save_session(project_path, new_session(project_id))
         return cls(path)
 
