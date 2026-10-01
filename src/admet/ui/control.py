@@ -322,6 +322,9 @@ class ControlWindow(QMainWindow):
         self.api = api
         self.tasks = Tasks(self)
         self.emergency_tasks = Tasks(self)
+        # The background refresh has its own slot, so it never occupies the one
+        # operator commands use and a click is never refused because of it.
+        self.status_tasks = Tasks(self)
         self._shutdown_complete = False
         self.workflow = create_control_workflow()
         self.workflow_state = self.workflow.initial_state()
@@ -1827,9 +1830,9 @@ class ControlWindow(QMainWindow):
         self._poll_fluidics_plots()
         self._poll_pipeline_events()
         now = time.monotonic()
-        if now - self._last_status_poll >= 0.5 and not self.tasks.busy:
+        if now - self._last_status_poll >= 0.5 and not self.status_tasks.busy:
             self._last_status_poll = now
-            self.tasks.submit(
+            self.status_tasks.submit(
                 lambda: (self.api.run(RunJob(
                     id="qt_status", engine="acquisition", action="camera_status",
                 )), self.api.call("planned_protocols")["plans"]),

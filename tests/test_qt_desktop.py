@@ -820,6 +820,29 @@ class DesktopWindowTests(unittest.TestCase):
                             for i in range(1, self.panel.library.count())))
         self.assertFalse((Path(self.backend.workdir) / "protocols").exists())
 
+    def test_a_status_refresh_in_flight_does_not_refuse_a_command(self):
+        # The refresh used to share the command slot, so a click landing during
+        # it was refused with "Another command is in progress".
+        release = threading.Event()
+        entered = threading.Event()
+        original = self.backend.call
+
+        def slow_call(name, *args, **kwargs):
+            if name == "planned_protocols":
+                entered.set()
+                release.wait(3)
+            return original(name, *args, **kwargs)
+
+        with patch.object(self.backend, "call", side_effect=slow_call):
+            self.window._last_status_poll = 0.0
+            self.window._poll()
+            self.assertTrue(entered.wait(2))
+            self.assertFalse(self.window.tasks.busy)
+            self.assertTrue(self.window.tasks.submit(lambda: "done", lambda _: None, self.fail))
+            release.set()
+            self.drain(lambda: not self.window.status_tasks.busy and not self.window.tasks.busy)
+        self.assertFalse(any("Another command is in progress" in e for e in self.window.log_entries))
+
     def test_event_loop_and_emergency_remain_responsive_during_command(self):
         from PySide6.QtCore import QTimer
 
