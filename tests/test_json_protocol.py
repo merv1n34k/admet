@@ -277,6 +277,32 @@ class JsonProtocolTests(unittest.TestCase):
             finally:
                 admet.do("disconnect_fluidics", {})
 
+    def test_reopening_the_project_after_planning_keeps_the_run_listed(self):
+        # The plan used to hold a copy of the project made at plan time, which
+        # wrote its outdated file list back over the newer one.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "test.admetp"
+            admet = Admet()
+            admet.create_project(path)
+            try:
+                admet.do("connect_fluidics", {"simulated": True})
+                admet.do("apply_corrections", {})
+                plan = admet.plan_protocol(operation_id="run_json_protocol", settings={"protocol": DOCUMENT})
+                admet.open_project(path)
+                admet.protocol_store().save(DOCUMENT)
+                admet.control_protocol(action="execute", plan_id=plan["plan_id"], timeout_s=1)
+                admet.control_protocol(action="confirm", timeout_s=1)
+                deadline = time.monotonic() + 5
+                while admet.planned_protocols()["plans"][0]["state"] == "executing":
+                    if time.monotonic() >= deadline:
+                        self.fail("plan did not complete")
+                    time.sleep(0.01)
+                run_id = admet.planned_protocols()["plans"][0]["run_id"]
+                listed = [f["path"] for f in json.loads((path / "manifest.json").read_text())["files"]]
+                self.assertTrue(any(run_id in p and p.endswith("summary.json") for p in listed), listed)
+            finally:
+                admet.do("disconnect_fluidics", {})
+
     def test_save_open_plan_file_survives_new_session(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = f"{tmp}/test.admetp"

@@ -166,7 +166,9 @@ class Admet:
         self.project: ProjectStore | None = None
         self._protocol_plans: dict[str, dict[str, Any]] = {}
         self._executing_plan_id: str | None = None
-        self._plan_stores: dict[str, Any] = {}
+        # Each plan remembers which project it belongs to, never a copy of it:
+        # a copy held across a reopen writes its outdated file list back.
+        self._plan_projects: dict[str, Path] = {}
         self._run_artifacts: dict[str, Any] = {}
         self._execution_lock = threading.Lock()
         # Observation and commands may arrive from different desktop threads.
@@ -467,8 +469,7 @@ class Admet:
         }
         self._protocol_plans[plan_id] = deepcopy(plan)
         if self.project is not None:
-            store = self.protocol_store()
-            self._plan_stores[plan_id] = store
+            self._plan_projects[plan_id] = self.project.path
         return deepcopy(plan)
 
     def discard_protocol_preview(self, plan_id):
@@ -476,7 +477,7 @@ class Admet:
             plan = self._protocol_plans.get(plan_id)
             if plan is not None and not plan.get("run_id"):
                 self._protocol_plans.pop(plan_id, None)
-                self._plan_stores.pop(plan_id, None)
+                self._plan_projects.pop(plan_id, None)
 
     def planned_protocols(self, plan_id: str = "") -> dict[str, Any]:
         self._refresh_plan_lifecycle()
@@ -515,11 +516,11 @@ class Admet:
         plan["executed_at"] = _now_iso()
         self._executing_plan_id = plan_id
         try:
-            store = self._plan_stores.get(plan_id)
+            store = self._plan_store(plan_id)
             if store is not None:
                 directory = store.begin(plan)
                 self._run_artifacts[plan_id] = {
-                    "store": store, "directory": directory, "artifacts": {},
+                    "directory": directory, "artifacts": {},
                     "recording": False,
                 }
             self._save_plan(plan)
@@ -561,8 +562,17 @@ class Admet:
         self._save_plan(plan)
         return deepcopy(plan)
 
+    def _plan_store(self, plan_id):
+        """The store for a plan's project, built from the project as it is now."""
+        from admet.core.protocol_store import ProtocolStore
+
+        path = self._plan_projects.get(plan_id)
+        if path is None or self.project is None or self.project.path != path:
+            return None
+        return ProtocolStore(self.project)
+
     def _save_plan(self, plan):
-        store = self._plan_stores.get(plan["plan_id"])
+        store = self._plan_store(plan["plan_id"])
         if store is not None and plan.get("run_id"):
             store.plan(plan)
 
@@ -577,8 +587,9 @@ class Admet:
                 artifact["artifacts"]["recording_closed"] = True
         finally:
             self._save_plan(plan)
-            if artifact:
-                artifact["store"].finish(plan, artifact["directory"], artifact["artifacts"])
+            store = self._plan_store(plan["plan_id"])
+            if artifact and store is not None:
+                store.finish(plan, artifact["directory"], artifact["artifacts"])
             self._run_artifacts.pop(plan["plan_id"], None)
 
     def _archive_protocol_event(self, plan_id, event):
