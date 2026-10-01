@@ -1,28 +1,15 @@
 """Protocol definitions and run artifacts within an ADMET project."""
 
 import json
-import os
-from pathlib import Path
 import re
-import tempfile
 
 from admet.workflows.json_protocol import load, normalize, validate_measurement
 from admet.core.compat import protocol_run_id, valid_recorded_run_id
+from admet.core.session import write_atomic
 
 
 def write_json(path, payload):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, allow_nan=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_atomic(path, json.dumps(payload, indent=2, allow_nan=False) + "\n")
 
 
 class ProtocolStore:

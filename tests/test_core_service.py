@@ -79,6 +79,20 @@ def _admet(tmp: str) -> tuple[Admet, RecordingEngine]:
 
 
 class SessionTests(unittest.TestCase):
+    def test_a_failed_save_leaves_the_project_readable(self):
+        from admet.core.project import ProjectStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Admet().create_project(Path(tmp) / "safe.admetp")
+            before = (store.path / "manifest.json").read_text()
+
+            with self.assertRaises(TypeError):
+                store.update_metadata(unwritable=object())
+
+            self.assertEqual((store.path / "manifest.json").read_text(), before)
+            ProjectStore(store.path)
+            self.assertEqual(list(store.path.glob(".manifest.json.*")), [])
+
     def test_a_recording_closed_by_emergency_stop_is_listed(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "estop.admetp"

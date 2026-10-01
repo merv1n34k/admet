@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,14 +92,28 @@ def save_session(path: str | Path, session: AdmetSession) -> Path:
     session = session.touch()
     session = _relativize_session_paths(session, target)
     validate_session(session)
-    with _manifest_path(target).open("w", encoding="utf-8") as handle:
-        json.dump(session.to_dict(), handle, indent=2, sort_keys=True)
+    write_atomic(_manifest_path(target), json.dumps(session.to_dict(), indent=2, sort_keys=True))
     return target
 
 
 def load_session(path: str | Path) -> AdmetSession:
     with _manifest_path(path).open("r", encoding="utf-8") as handle:
         return AdmetSession.from_dict(json.load(handle))
+
+
+def write_atomic(path: str | Path, text: str) -> None:
+    """Replace a file whole: the old one survives any failure part-way."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def session_path(path: str | Path) -> Path:

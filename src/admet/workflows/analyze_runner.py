@@ -11,7 +11,7 @@ from typing import Any
 from admet.core.engine import EngineRegistry, action_spec
 from admet.core.project import ProjectStore
 from admet.core.run import JsonlRunSink, RunJob, RunResult
-from admet.core.session import content_cache_key, session_path
+from admet.core.session import content_cache_key, session_path, write_atomic
 
 
 VIDEO_SUFFIXES = {".avi", ".mp4", ".mov", ".mkv"}
@@ -358,8 +358,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, default=str) + "\n", encoding="utf-8")
+    write_atomic(path, json.dumps(data, default=str) + "\n")
 
 
 class _RowBuffer:
@@ -395,10 +394,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, default=str) + "\n")
+    write_atomic(path, "".join(json.dumps(row, default=str) + "\n" for row in rows))
 
 
 def _replay_rows(rows_path: Path, sink: Any, *, job_id: str, item_id: str, file_id: str) -> None:
