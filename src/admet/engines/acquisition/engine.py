@@ -723,8 +723,9 @@ class AcquisitionEngine:
 
         try:
             if self.recording_active:
-                self.stop_recording()
+                closed = self.stop_recording()
                 stopped["recording"] = "closed"
+                stopped["closed_recording"] = closed.get("recording")
             else:
                 stopped["recording"] = "not recording"
         except Exception as exc:

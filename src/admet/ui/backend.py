@@ -190,7 +190,7 @@ class DesktopBackend:
 
     def emergency_stop(self):
         # Deliberately independent of the normal command lock.
-        return self.engine.emergency_stop("Qt operator emergency stop")
+        return self.service.emergency_stop("Qt operator emergency stop")
 
     def shutdown(self):
         # Zero first, even if another command is blocked.

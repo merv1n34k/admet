@@ -787,8 +787,14 @@ class Admet:
 
 
     def emergency_stop(self, reason: str = "") -> dict[str, Any]:
-        """Zero every channel, stop the protocol, close the recording."""
-        return self.engine("acquisition").emergency_stop(reason)
+        """Zero every channel, stop the protocol, close the recording.
+
+        A recording closed here is added to the project like any other, so it
+        is not left on disk where the project cannot see it.
+        """
+        stopped = self.engine("acquisition").emergency_stop(reason)
+        self._keep_recording(stopped.get("closed_recording"))
+        return stopped
 
     def protocol_events(self, *, after_sequence: int = 0, limit: int = 100) -> list[dict[str, Any]]:
         """Protocol events newer than one already seen, as plain data."""
@@ -993,13 +999,15 @@ class Admet:
         outputs = {name: target.outputs[name] for name in spec.outputs}
         return replace(job, outputs=outputs, metadata=metadata)
 
+    def _keep_recording(self, recording: dict[str, Any] | None) -> None:
+        if recording and self.project is not None:
+            self.project.append_control_recording({**recording, "context": self.run_context()})
+
     def _register(self, spec: ActionSpec, result: RunResult) -> None:
         """Put what the action produced into the manifest, so it can be found."""
         if not spec.artifact or self.project is None:
             return
         if spec.artifact == "control_recording":
-            recording = result.metadata.get("recording")
-            if recording:
-                self.project.append_control_recording({**recording, "context": self.run_context()})
+            self._keep_recording(result.metadata.get("recording"))
             return
         raise LookupError(f"{spec.id} declares an artifact core cannot store: {spec.artifact!r}")

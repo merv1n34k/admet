@@ -79,6 +79,23 @@ def _admet(tmp: str) -> tuple[Admet, RecordingEngine]:
 
 
 class SessionTests(unittest.TestCase):
+    def test_a_recording_closed_by_emergency_stop_is_listed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "estop.admetp"
+            admet = Admet()
+            admet.create_project(path)
+            admet.do("connect_fluidics", {"simulated": True})
+            self.addCleanup(admet.do, "disconnect_fluidics")
+            admet.do("start_recording", {"recording_label": "estop"})
+            time.sleep(0.3)
+
+            admet.do("emergency_stop")
+
+            listed = json.loads((path / "manifest.json").read_text())["files"]
+            on_disk = list(path.rglob("*.csv"))
+            self.assertEqual(len(on_disk), 1)
+            self.assertEqual([f["role"] for f in listed], ["control_fluidics_csv"])
+
     def test_creating_an_existing_project_opens_it_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "exp.admetp"
