@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import math
+import statistics
 import threading
 import time
 from collections import deque
@@ -21,6 +23,73 @@ from .csv_logger import CsvLogger
 from .sdk import FluigentSDK
 
 log = logging.getLogger(__name__)
+
+
+class FlowIntegral:
+    """One sensor's dispensed volume, with bad readings rejected and bridged.
+
+    Each reading is judged against the median of its neighbours: the last
+    RADIUS kept readings, itself, and the RADIUS after it. Far from that median
+    is a spike (5 -> -1530 -> 5.2). A median ignores a burst of up to RADIUS bad
+    readings, follows a real ramp or step, and needs no trusted reference that
+    one bad reading could poison. Rejected readings never become context.
+
+    Volume is the trapezoid over kept readings and real timestamps, signed, so
+    a rejected reading is bridged by the line between its neighbours: liquid
+    kept flowing while the sensor misread.
+
+    Deciding a reading needs RADIUS later ones, so decisions lag. The volume
+    reported now adds the undecided readings provisionally, holding the last
+    kept flow through any that disagree with it, so a volume step does not stop
+    late while the filter waits.
+    """
+
+    def __init__(self, *, radius: int = 2, jump_abs: float = 20.0, jump_rel: float = 0.5,
+                 limit: float = float("inf"), keep_rejected: int = 500):
+        self.radius = radius
+        self.jump_abs = jump_abs
+        self.jump_rel = jump_rel
+        self.limit = limit
+        self.decided = 0.0
+        self.rejected: deque[tuple[float, float]] = deque(maxlen=keep_rejected)
+        self._left: list[float] = []
+        self._pending: list[tuple[float, float]] = []
+        self._last_kept: tuple[float, float] | None = None
+
+    def jump(self, around: float) -> float:
+        return max(self.jump_abs, self.jump_rel * abs(around))
+
+    def add(self, t: float, q: float) -> None:
+        if not math.isfinite(q) or abs(q) > self.limit:
+            self.rejected.append((t, q))
+            return
+        self._pending.append((t, q))
+        while len(self._pending) > self.radius:
+            t_i, q_i = self._pending.pop(0)
+            around = statistics.median(self._left + [q_i] + [value for _, value in self._pending])
+            if abs(q_i - around) > self.jump(around):
+                self.rejected.append((t_i, q_i))
+                continue
+            self._keep(t_i, q_i)
+
+    def _keep(self, t: float, q: float) -> None:
+        if self._last_kept is not None:
+            t_prev, q_prev = self._last_kept
+            self.decided += (q_prev + q) / 2 * (t - t_prev) / 60.0
+        self._last_kept = (t, q)
+        self._left = (self._left + [q])[-self.radius:]
+
+    @property
+    def volume(self) -> float:
+        if self._last_kept is None:
+            return self.decided
+        volume = self.decided
+        t_prev, q_prev = self._last_kept
+        for t, q in self._pending:
+            q_use = q if abs(q - q_prev) <= self.jump(q_prev) else q_prev
+            volume += (q_prev + q_use) / 2 * (t - t_prev) / 60.0
+            t_prev, q_prev = t, q_use
+        return volume
 
 
 @dataclass(frozen=True)
@@ -79,10 +148,7 @@ class AcquisitionThread(threading.Thread):
         self._stability_history: list[deque] = [
             deque(maxlen=stability_window_samples) for _ in range(sensor_count)
         ]
-        self._volumes_ul: list[float] = [0.0] * sensor_count
-        # The previous reading, so each interval is integrated over the time
-        # that actually passed rather than the nominal polling interval.
-        self._previous_reading: tuple[float, list[float]] | None = None
+        self._integrals = [FlowIntegral() for _ in range(sensor_count)]
         self._lock = threading.Lock()
 
         # Observation, kept apart from the queue. The queue is bounded and has
@@ -98,9 +164,16 @@ class AcquisitionThread(threading.Thread):
 
     def get_volume(self, sensor_index: int) -> float:
         with self._lock:
-            if 0 <= sensor_index < len(self._volumes_ul):
-                return self._volumes_ul[sensor_index]
+            if 0 <= sensor_index < len(self._integrals):
+                return self._integrals[sensor_index].volume
             return 0.0
+
+    def rejected_readings(self, sensor_index: int) -> list[tuple[float, float]]:
+        """Recent readings left out of the volume, as (elapsed_s, flow)."""
+        with self._lock:
+            if 0 <= sensor_index < len(self._integrals):
+                return list(self._integrals[sensor_index].rejected)
+            return []
 
     def get_flow(self, sensor_index: int) -> float:
         return float(self._sdk.get_sensor_value(sensor_index))
@@ -139,14 +212,9 @@ class AcquisitionThread(threading.Thread):
             self._stability_history[index].append(flow)
 
         with self._lock:
-            if self._previous_reading is not None:
-                previous_s, previous_flows = self._previous_reading
-                dt_min = (elapsed_s - previous_s) / 60.0
-                for index, flow in enumerate(flows):
-                    # Trapezoid over the real interval; backflow subtracts.
-                    self._volumes_ul[index] += (previous_flows[index] + flow) / 2 * dt_min
-            self._previous_reading = (elapsed_s, list(flows))
-            volumes_snapshot = list(self._volumes_ul)
+            for integral, flow in zip(self._integrals, flows):
+                integral.add(elapsed_s, flow)
+            volumes_snapshot = [integral.volume for integral in self._integrals]
 
         stability = [self._is_stable(history) for history in self._stability_history]
         pressure_stats = [self._compute_stats(history) for history in self._pressure_history]

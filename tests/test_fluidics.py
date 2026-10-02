@@ -6,6 +6,7 @@ from queue import Queue
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from admet.engines.acquisition.fluidics.acquisition import FlowIntegral
 from admet.engines.acquisition.fluidics import (
     AcquisitionThread,
     ChannelManager,
@@ -215,6 +216,63 @@ class ChannelManagerTests(unittest.TestCase):
         self.assertEqual(channel.active_setpoint, 0.0)
         self.assertEqual(channel.mode, "off")
         self.assertIn(("pressure", 0, 0.0), sdk.calls)
+
+
+class FlowIntegralTests(unittest.TestCase):
+    """Bad readings are left out of the volume, and bridged, not lost."""
+
+    def _volume(self, flows, dt=0.11):
+        integral = FlowIntegral()
+        for index, flow in enumerate(flows):
+            integral.add(index * dt, flow)
+        return integral
+
+    def test_a_spike_like_the_rig_produces_does_not_change_the_volume(self):
+        clean = self._volume([5.0] * 50 + [5.2] * 50).volume
+        spiked = self._volume([5.0] * 50 + [-1530.0] + [5.2] * 49)
+
+        self.assertAlmostEqual(spiked.volume, clean, delta=abs(clean) * 0.001)
+        self.assertEqual([q for _, q in spiked.rejected], [-1530.0])
+
+    def test_a_spike_within_the_sensor_range_is_rejected(self):
+        integral = self._volume([67.0] * 20 + [217.0] + [67.0] * 20)
+
+        self.assertEqual([q for _, q in integral.rejected], [217.0])
+
+    def test_a_two_reading_burst_is_rejected(self):
+        integral = self._volume([5.0] * 20 + [300.0, -1539.0] + [5.0] * 20)
+
+        self.assertEqual(sorted(q for _, q in integral.rejected), [-1539.0, 300.0])
+
+    def test_a_spike_as_the_very_first_reading_is_rejected(self):
+        # A filter that trusts its first reading would judge everything after
+        # against the spike, and count the spike as flow.
+        integral = self._volume([300.0] + [20.0] * 40)
+
+        self.assertEqual([q for _, q in integral.rejected], [300.0])
+        self.assertAlmostEqual(integral.volume, 20.0 * 39 * 0.11 / 60, places=6)
+
+    def test_a_real_step_is_kept(self):
+        integral = self._volume([0.0] * 20 + [60.0] * 20)
+
+        self.assertEqual(list(integral.rejected), [])
+
+    def test_the_volume_does_not_wait_for_the_filter(self):
+        # The last RADIUS readings are still undecided; counting them
+        # provisionally keeps a volume step from stopping late.
+        integral = self._volume([60.0] * 11)
+
+        self.assertAlmostEqual(integral.volume, 60.0 * 10 * 0.11 / 60, places=6)
+
+    def test_rejected_readings_are_reported_by_the_acquisition(self):
+        sdk = FakeFluidicsSDK()
+        acquisition = AcquisitionThread(sdk, pressure_count=2, sensor_count=2, data_queue=Queue(),
+                                        interval_ms=100, stability_window_samples=2)
+        for flow in [60.0] * 5 + [-1530.0] + [60.0] * 5:
+            sdk.flows = [flow, -30.0]
+            acquisition.poll_once()
+
+        self.assertEqual([q for _, q in acquisition.rejected_readings(0)], [-1530.0])
 
 
 class AcquisitionTests(unittest.TestCase):
