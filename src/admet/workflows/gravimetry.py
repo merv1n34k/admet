@@ -5,7 +5,7 @@ import math
 from statistics import mean, stdev
 
 from admet.workflows.calculation_schema import measurement_binding, sample_steps, three_flow_passes
-from admet.workflows.calculation_inputs import step_window, trace, volume_ul
+from admet.workflows.calculation_inputs import settled_after, step_window, trace, volume_ul
 
 
 def normalize_calculation(entry, steps, fields):
@@ -151,14 +151,19 @@ def calculate(context):
                       for key in ("before", "after")]
             true_volume = (masses[1] - masses[0]) / rho
             window = step_window(context, sample["step"])
-            recorded = volume_ul(trace(context, config["channel"], *window))
-            if not all(math.isfinite(v) and v > 0 for v in (true_volume, recorded)):
+            # The vessel also catches what flows after the stop, so the recorded
+            # volume runs on until that tail has settled.
+            settled = settled_after(context, config["channel"], sample["step"], window[1], result["target_ul_min"])
+            during = volume_ul(trace(context, config["channel"], *window))
+            recorded = volume_ul(trace(context, config["channel"], window[0], settled))
+            if not all(math.isfinite(v) and v > 0 for v in (true_volume, recorded, during)):
                 raise ValueError("Collection mass and recorded volume must be positive")
             factor = true_volume / recorded
             factors.append(factor)
+            recorded_flow = during * 60 / (window[1] - window[0])
             result.update(true_volume_ul=true_volume, recorded_volume_ul=recorded, multiplier=factor,
-                          window_elapsed_s=window, true_flow_ul_min=true_volume * 60 / (window[1] - window[0]),
-                          recorded_flow_ul_min=recorded * 60 / (window[1] - window[0]))
+                          tail_volume_ul=recorded - during, window_elapsed_s=window, settled_elapsed_s=settled,
+                          true_flow_ul_min=recorded_flow * factor, recorded_flow_ul_min=recorded_flow)
             if abs(result["recorded_flow_ul_min"] - result["target_ul_min"]) > 0.2 * result["target_ul_min"]:
                 raise ValueError("Recorded mean flow differs from target by more than 20%; investigate capacity/settling")
         except ValueError as exc:
@@ -180,7 +185,8 @@ def calculate(context):
             "correction_settings": calibration_context(context),
             "calibration_identity": calibration_identity(context),
             "note": "Multiplier applies to recorded flow, not raw sensor readings. No hardware changes. "
-                    "Before/after weights characterize complete dispenses, including startup. R² describes the "
+                    "Before/after weights characterize complete dispenses, including startup and the flow that "
+                    "settles after the stop. R² describes the "
                     "recorded-versus-true flow curve, not mass versus time. Per-target 95% intervals use three "
                     "independent normally distributed collections, not sensor sample count. Direction differences "
                     "are exploratory (two ascending passes, one descending). Density, balance, evaporation and "

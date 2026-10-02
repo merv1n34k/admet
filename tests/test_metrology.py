@@ -2,6 +2,7 @@
 
 import csv
 import json
+import math
 from pathlib import Path
 import tempfile
 import unittest
@@ -20,7 +21,7 @@ def collection_s(step, channel):
     return params["duration_s"]
 
 
-def archive(root, name, *, flow=None, slope=2, multiplier=1.2, run_id=None, parameters=None):
+def archive(root, name, *, flow=None, slope=2, multiplier=1.2, run_id=None, parameters=None, tail_s=0.0):
     source = template_documents()[name]
     source["parameter_values"] = parameters or {}
     document = resolve(source)
@@ -33,6 +34,7 @@ def archive(root, name, *, flow=None, slope=2, multiplier=1.2, run_id=None, para
     config = next(c for c in document["calculations"] if c["type"] == name)
     channel = config["channel"]
     flows = {}
+    tail = (clock, 0.0)
     for sample in config["samples"]:
         step = document["steps"][sample["step"] - 1]
         duration = collection_s(step, channel)
@@ -43,10 +45,17 @@ def archive(root, name, *, flow=None, slope=2, multiplier=1.2, run_id=None, para
         q = ((flow if flow is not None else step["sensor_setpoints"][str(channel)])
              if target_pressure is None else (target_pressure - 5) / slope)
         flows[sample["step"]] = q
-        for tick in range(int((duration + 2) * 10) + 1):
-            t = clock - 1 + tick / 10
+        # Nothing before the start, the setpoint until the stop, then a tail
+        # that dies away (an exponential with time constant tail_s).
+        end = clock + duration
+        times = sorted({clock - 1 + tick / 10 for tick in range(int((duration + 4) * 10))} | {end, end + 1e-3})
+        for tick, t in enumerate(times):
+            stop, stopped_q = tail if t < clock else (end, q)
+            value = (q if clock <= t <= end else stopped_q * math.exp(-(t - stop) / tail_s)
+                     if tail_s > 0 and t > stop else 0.0)
             noise = 0.002 * ((tick % 5) - 2)
-            rows.append((t, q * (1 + noise), (5 + slope * q) * (1 + noise / 10)))
+            rows.append((t, value * (1 + noise), (5 + slope * value) * (1 + noise / 10)))
+        tail = (end, q)
         clock += duration + 4
     csv_path = directory / "fluidics.csv"
     with csv_path.open("w", newline="") as handle:
@@ -72,7 +81,7 @@ def archive(root, name, *, flow=None, slope=2, multiplier=1.2, run_id=None, para
         for sample in config["samples"]:
             duration = collection_s(document["steps"][sample["step"] - 1], channel)
             values[sample["before"]] = 1000
-            values[sample["after"]] = 1000 + flows[sample["step"]] * duration / 60 * multiplier * 1.6
+            values[sample["after"]] = 1000 + flows[sample["step"]] * (duration + tail_s) / 60 * multiplier * 1.6
     elif name == "dead_volume":
         values["flow_multiplier"] = multiplier
         for sample in config["samples"]:
@@ -103,6 +112,25 @@ class MetrologyTests(unittest.TestCase):
         self.assertTrue(all(row["true_flow"]["repeats"] == 3 for row in result["targets"]))
         self.assertIsNone(result["uncertainty"])
         self.assertTrue(all(row["true_volume_ul"] > 0 for row in result["samples"]))
+
+    def test_gravimetry_counts_the_flow_that_arrives_after_the_stop(self):
+        # 0.68 s is the tail measured on Cells M; the vessel catches it too.
+        directory = archive(self.tmp.name, "gravimetry", tail_s=0.68)
+        result = calculate_run(directory, "gravimetry")["result"]
+
+        self.assertEqual(result["status"], "usable")
+        self.assertAlmostEqual(result["multiplier"], 1.2, delta=0.0012)   # step-only window: ~1.209
+        for row in result["samples"]:
+            self.assertAlmostEqual(row["tail_volume_ul"], row["target_ul_min"] * 0.68 / 60, delta=0.1 * row["target_ul_min"] * 0.68 / 60)
+            self.assertGreater(row["settled_elapsed_s"], row["window_elapsed_s"][1])
+
+    def test_gravimetry_flags_a_tail_that_never_settles(self):
+        directory = archive(self.tmp.name, "gravimetry", tail_s=5)    # still flowing when the next step starts
+        result = calculate_run(directory, "gravimetry")["result"]
+
+        self.assertEqual(result["status"], "inconclusive")
+        self.assertIsNone(result["multiplier"])
+        self.assertIn("did not settle", result["samples"][0]["issues"][0])
 
     def test_gravimetry_missing_and_invalid_collection_never_produces_a_correction(self):
         directory = archive(self.tmp.name, "gravimetry")

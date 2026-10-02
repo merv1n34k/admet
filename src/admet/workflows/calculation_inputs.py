@@ -121,16 +121,29 @@ def verify_execution(document, summary):
         raise ValueError("Calculation declarations disagree with executed protocol")
 
 
-def step_window(context, step, settle_s=0):
-    if context["summary"]["state"] != "completed":
-        raise ValueError("Protocol did not complete")
+def _origin(context):
     origin = context["summary"].get("artifacts", {}).get("polling_origin_monotonic")
     if not isinstance(origin, (int, float)) or not math.isfinite(origin) or origin <= 0:
         raise ValueError("Missing recording clock origin")
+    return origin
+
+
+def _step_events(context, step):
     events = [json.loads(line) for line in (context["directory"] / "events.jsonl").read_text().splitlines() if line]
-    events = [e for e in events if e.get("step_name") and e.get("step_index") == step - 1]
-    starts = [e for e in events if e.get("outcome") == "running" and e.get("state") == "running"
-              and not e.get("confirmation_message")]
+    return [e for e in events if e.get("step_name") and e.get("step_index") == step - 1]
+
+
+def _flow_starts(events):
+    return [e for e in events if e.get("outcome") == "running" and e.get("state") == "running"
+            and not e.get("confirmation_message")]
+
+
+def step_window(context, step, settle_s=0):
+    if context["summary"]["state"] != "completed":
+        raise ValueError("Protocol did not complete")
+    origin = _origin(context)
+    events = _step_events(context, step)
+    starts = _flow_starts(events)
     ends = [e for e in events if e.get("outcome") == "completed"]
     if (not starts or len(ends) != 1 or any(e.get("state") == "paused"
             or e.get("outcome") in {"skipped", "cancelled", "error"} for e in events)):
@@ -141,8 +154,33 @@ def step_window(context, step, settle_s=0):
     return start - origin + settle_s, end - origin
 
 
-def trace(context, channel, lower, upper, *, pressure=False):
-    columns = [f"flow_{channel}_ul_min"] + ([f"pressure_{channel}_mbar"] if pressure else [])
+def settled_after(context, channel, step, end, setpoint, *, hold_s=0.5, limit_s=10.0):
+    """When the flow still arriving after a step's stop has died down, in recording seconds.
+
+    Settled uses the live tail rule: within max(0.5, 5 % of the setpoint) of zero
+    for hold_s. Never later than limit_s after the stop or the next step's flow start.
+    """
+    upper = end + limit_s
+    following = [e.get("monotonic") for e in _flow_starts(_step_events(context, step + 1))]
+    if following and type(following[0]) in (int, float) and math.isfinite(following[0]):
+        upper = min(upper, following[0] - _origin(context))
+    band = max(0.5, 0.05 * abs(setpoint))
+    quiet = None
+    for t, q in _read_rows(context, [f"flow_{channel}_ul_min"]):
+        if t <= end:
+            continue
+        if t > upper:
+            raise ValueError(f"Flow did not settle within {upper - end:.3g} s after the stop")
+        if math.isfinite(q) and abs(q) <= band:
+            quiet = t if quiet is None else quiet
+            if t - quiet >= hold_s:
+                return quiet
+        else:
+            quiet = None
+    raise ValueError("Recording ends before the flow settled after the stop")
+
+
+def _read_rows(context, columns):
     rows = []
     with context["csv"].open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
@@ -158,6 +196,12 @@ def trace(context, channel, lower, upper, *, pressure=False):
             rows.append((t, *values))
     if any(not math.isfinite(row[0]) for row in rows) or any(b[0] <= a[0] for a, b in zip(rows, rows[1:])):
         raise ValueError("Recording timestamps are not strictly increasing")
+    return rows
+
+
+def trace(context, channel, lower, upper, *, pressure=False):
+    columns = [f"flow_{channel}_ul_min"] + ([f"pressure_{channel}_mbar"] if pressure else [])
+    rows = _read_rows(context, columns)
     inside = [i for i, row in enumerate(rows) if lower <= row[0] <= upper]
     if not inside:
         raise ValueError("No recorded samples in measurement window")
