@@ -1,11 +1,10 @@
-.PHONY: setup dev describe build test test-all test-core test-analyze test-control test-integration test-desktop lint fmt clean
+.PHONY: setup dev describe build test test-all test-core test-analyze test-control test-integration lint fmt clean
 .DEFAULT_GOAL := setup
 
 ANALYZE_TESTS := $(wildcard tests/test_analyze_*.py tests/test_cellpose_helpers.py tests/test_opencv_engine.py)
-DESKTOP_TESTS := $(wildcard tests/test_qt_desktop.py tests/test_qt_theme.py)
 CONTROL_TESTS := $(wildcard tests/test_control_*.py tests/test_camera_backend.py tests/test_fluidics.py tests/test_observation.py tests/test_recording_limits.py)
 INTEGRATION_TESTS := tests/test_core_service.py tests/test_json_protocol.py tests/test_operations.py tests/test_observe_operation.py tests/test_protocol_planning.py tests/test_flow_scout.py tests/test_qt_backend.py
-CORE_TESTS := $(filter-out $(ANALYZE_TESTS) $(DESKTOP_TESTS) $(CONTROL_TESTS) $(INTEGRATION_TESTS),$(wildcard tests/test_*.py))
+CORE_TESTS := $(filter-out $(ANALYZE_TESTS) $(CONTROL_TESTS) $(INTEGRATION_TESTS),$(wildcard tests/test_*.py))
 modules = $(patsubst tests/%.py,tests.%,$(1))
 
 setup:
@@ -22,7 +21,7 @@ build:
 
 test: test-core test-control
 
-test-all: test test-integration test-analyze test-desktop
+test-all: test test-integration test-analyze
 
 test-core:
 	uv run -m unittest $(call modules,$(CORE_TESTS))
@@ -35,9 +34,6 @@ test-integration:
 
 test-analyze:
 	uv run -m unittest $(call modules,$(ANALYZE_TESTS))
-
-test-desktop:
-	uv run --extra control -m unittest $(call modules,$(DESKTOP_TESTS))
 
 lint:
 	uv run ruff check .
