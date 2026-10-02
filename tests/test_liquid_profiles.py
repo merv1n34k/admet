@@ -5,7 +5,11 @@ from admet.engines.acquisition.fluidics.liquids import (
     load_profiles,
     profile_by_id,
     profiles_for_unit,
+    dead_volume,
+    new_liquid,
+    parse_profiles,
     remember_corrections,
+    remember_dead_volume,
     rig_corrections,
 )
 from admet.engines.acquisition.settings import (
@@ -86,3 +90,26 @@ class RigCorrectionTests(unittest.TestCase):
                          ({**water.corrections("cells_m"), "cells_m_scale": 1.07}, "2026-10-02T20:00:00"))
         self.assertEqual(rig_corrections(saved, "cells_m", oil), (oil.corrections("cells_m"), ""))
         self.assertEqual(rig_corrections(saved, "beads_m", water), (water.corrections("beads_m"), ""))
+
+    def test_dead_volume_belongs_to_the_channel_not_the_liquid(self):
+        saved = remember_corrections({}, "cells_m", "water_m")
+        saved = remember_dead_volume(saved, "cells_m", 85.0)
+        saved = remember_corrections(saved, "cells_m", "oil_m")            # liquid changes, tubing does not
+
+        self.assertEqual(dead_volume(saved, "cells_m"), 85.0)
+        self.assertEqual(dead_volume(saved, "beads_m"), 0.0)
+
+
+class ProjectLiquidTests(unittest.TestCase):
+    def test_a_new_liquid_is_an_uncorrected_profile_for_its_unit(self):
+        entry = new_liquid("dSurf", "m", "H2O", 1.0, 1.1, taken={"water_m"})
+        profile = parse_profiles([entry])[0]
+
+        self.assertEqual((profile.id, profile.name, profile.unit), ("dsurf_m", "dSurf", "M"))
+        self.assertEqual((profile.calibration, profile.scale, profile.density), ("H2O", 1.0, 1.0))
+        self.assertEqual(new_liquid("dSurf", "M", "H2O", 1.0, 1.1, taken={"dsurf_m"})["id"], "dsurf_m_2")
+
+    def test_a_new_liquid_is_checked(self):
+        for args in (("", "M", "H2O", 1.0), ("x", "S", "H2O", 1.0), ("x", "M", "Honey", 1.0), ("x", "M", "H2O", 0)):
+            with self.assertRaises(ValueError):
+                new_liquid(*args, 0.0, taken=set())

@@ -91,21 +91,6 @@ CAMERA_MAIN_SETTINGS = (
 FLUIDICS_MAIN_SETTINGS = ("simulated",)
 
 
-# A channel is set by picking a liquid; the raw correction terms the profile writes
-# stay visible underneath so the values are never hidden from the operator.
-CORRECTION_PRIMARY_PARAMS = tuple(f"{prefix}_profile" for prefix, *_rest in FLUIDIC_CHANNELS)
-CORRECTION_SECONDARY_PARAMS = tuple(
-    name
-    for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
-    for name in (
-        f"{prefix}_calibration",
-        f"{prefix}_scale",
-        f"{prefix}_offset",
-        f"{prefix}_quadratic",
-    )
-)
-
-
 def protocol_stage(stage_id, label, *, builtin=""):
     from admet.workflows.operations import operation
 
@@ -275,14 +260,7 @@ def create_control_workflow() -> Workflow:
                         variant="warning",
                     ),
                 ),
-                editor=CONTROL_LIVE_EDITOR,
-                results=CONTROL_RESULTS,
-                features=("fluidics",),
-                settings_options={
-                    "primary": CORRECTION_PRIMARY_PARAMS,
-                    "secondary": CORRECTION_SECONDARY_PARAMS,
-                    "collapsed_count": 6,
-                },
+                features=("calibration",),
             ),
             protocol_stage("priming", "4. Priming", builtin="priming"),
             Stage(

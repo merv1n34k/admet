@@ -60,6 +60,47 @@ class DesktopBackend:
                                                                  "calibration": calibration})
             project.save()
 
+    @property
+    def liquids(self):
+        """Liquids added in this project, as profile entries."""
+        entries = self.session.metadata.get("liquids") if self.session else None
+        return list(entries) if isinstance(entries, list) else []
+
+    def add_liquid(self, name, unit, calibration, density, viscosity=0.0):
+        from admet.engines.acquisition.fluidics.liquids import load_profiles, new_liquid
+
+        with self.lock:
+            if not self.session:
+                raise RuntimeError("Open a project before adding a liquid")
+            taken = {profile.id for profile in load_profiles()} | {entry.get("id") for entry in self.liquids}
+            entry = new_liquid(name, unit, calibration, density, viscosity, taken)
+            project = self.service.project
+            project.session = replace(project.session, metadata={**project.session.metadata,
+                                                                 "liquids": [*self.liquids, entry]})
+            project.save()
+            return entry
+
+    def update_liquid(self, liquid_id, **changes):
+        from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_UNITS
+        from admet.engines.acquisition.fluidics.liquids import check_liquid
+
+        with self.lock:
+            liquids = self.liquids
+            index = next((i for i, entry in enumerate(liquids) if entry.get("id") == liquid_id), None)
+            if index is None:
+                raise ValueError(f"{liquid_id} is not a liquid of this project")
+            entry = check_liquid({**liquids[index], **changes})
+            in_use = [prefix for prefix, channel in self.calibration.items()
+                      if isinstance(channel, dict) and channel.get("profile") == liquid_id
+                      and FLUIDIC_CHANNEL_UNITS.get(prefix) != entry["unit"]]
+            if in_use:
+                raise ValueError(f"{entry['name']} is in use on a {FLUIDIC_CHANNEL_UNITS[in_use[0]]} channel")
+            liquids[index] = entry
+            project = self.service.project
+            project.session = replace(project.session, metadata={**project.session.metadata, "liquids": liquids})
+            project.save()
+            return entry
+
     def set_acquisition_mode(self, mode):
         if mode not in {"fluidics_only", "camera_fluidics"}:
             raise ValueError("Unknown acquisition mode")

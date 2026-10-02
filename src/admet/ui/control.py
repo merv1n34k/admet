@@ -51,16 +51,24 @@ from admet.ui.tasks import Tasks
 from admet.core.discovery import discover_projects, project_ref_label, projects_root, prune_recent_projects
 from admet.core.run import RunJob, RunResult
 from admet.core.project import ProjectStore
-from admet.core.engine import Param, ParamKind
+from admet.core.engine import Param, ParamKind, ParamOption
 from admet.core.session import session_path
 from admet.workflows import Stage, StageControl, StageStatus
 from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNEL_LABELS,
     FLUIDIC_CHANNEL_UNITS,
     FLUIDIC_CHANNELS,
+    SENSOR_CALIBRATIONS,
 )
-from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES, LIQUID_PROFILE_PARAM_NAMES
-from admet.engines.acquisition.fluidics.liquids import profile_by_id, remember_corrections, rig_corrections
+from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES, DEAD_VOLUME_PARAM_NAMES, LIQUID_PROFILE_PARAM_NAMES
+from admet.engines.acquisition.fluidics.liquids import (
+    dead_volume,
+    load_profiles,
+    parse_profiles,
+    remember_corrections,
+    remember_dead_volume,
+    rig_corrections,
+)
 from admet.ui.preflight import PreflightPanel
 from admet.ui.tables import GridTable, SummaryLabel, fit_table_height
 from admet.ui import theme as ui
@@ -333,6 +341,7 @@ class ControlWindow(QMainWindow):
         for stage in self.workflow.stages:
             self.values.update(stage.settings.defaults())
         self.values["simulated"] = api.simulated
+        self._calibration_sources: dict[str, QTableWidgetItem] = {}
         self._load_rig_calibration(apply=False)
         self.protocol_editors = {}
         self._last_protocol_log = None
@@ -774,7 +783,7 @@ class ControlWindow(QMainWindow):
         """(density, viscosity) per channel label, from each channel's selected liquid."""
         liquids: dict[str, tuple[float, float]] = {}
         for (prefix, label, *_rest) in FLUIDIC_CHANNELS:
-            profile = profile_by_id(str(self.values.get(f"{prefix}_profile", "")))
+            profile = self._profile(self.values.get(f"{prefix}_profile", ""))
             if profile is not None:
                 liquids[label] = (profile.density, profile.viscosity)
         return liquids
@@ -962,6 +971,7 @@ class ControlWindow(QMainWindow):
         self._protocol_confirm_label = None
         self._param_editors = {}
         self.current_stage_page.liquid_summary = None
+        self._calibration_sources = {}
         self.log_label = None
 
         self._render_action_box(stage)
@@ -1087,7 +1097,7 @@ class ControlWindow(QMainWindow):
         return controls
 
     def _render_main(self, stage: Stage) -> None:
-        offline = bool({"preflight", "calculations"}.intersection(stage.features))
+        offline = bool({"preflight", "calculations", "calibration"}.intersection(stage.features))
         self.main_panel.setVisible(not offline)
         if offline:
             return
@@ -1407,7 +1417,7 @@ class ControlWindow(QMainWindow):
         return table
 
     def _render_results(self, stage: Stage) -> None:
-        offline = bool({"preflight", "calculations"}.intersection(stage.features))
+        offline = bool({"preflight", "calculations", "calibration"}.intersection(stage.features))
         self.results_panel.setVisible(not offline)
         if offline:
             return
@@ -1468,6 +1478,10 @@ class ControlWindow(QMainWindow):
             self.action_layout.addWidget(self._calculations)
             self._calculations.show()
             return
+        if "calibration" in stage.features:
+            self.action_panel.layout().itemAt(0).widget().setText("Calibration")
+            self._render_calibration()
+            return
         self.action_panel.layout().itemAt(0).widget().setText(
             "Protocol" if "json_protocol" in stage.features else "Action Panel"
         )
@@ -1510,6 +1524,84 @@ class ControlWindow(QMainWindow):
             self.action_layout.addWidget(editor)
             editor.show()
 
+    def _render_calibration(self) -> None:
+        """The rig, one row per channel, and the liquids its channels can carry."""
+        rig, body = _panel_box("Rig")
+        table = _calibration_table(len(FLUIDIC_CHANNELS),
+                                   ("Channel", *(label for _field, label in RIG_COLUMNS), "Values"))
+        self._syncing_table = True
+        self._calibration_sources = {}
+        for row, (prefix, label, *_rest) in enumerate(FLUIDIC_CHANNELS):
+            table.setItem(row, 0, _fixed_item(label))
+            for column, (field, _label) in enumerate(RIG_COLUMNS, start=1):
+                table.setCellWidget(row, column, self._param_editor(self._param_by_name(f"{prefix}_{field}")))
+            source = _fixed_item("")
+            table.setItem(row, len(RIG_COLUMNS) + 1, source)
+            self._calibration_sources[prefix] = source
+        self._syncing_table = False
+        table.resizeRowsToContents()
+        fit_table_height(table)
+        body.addWidget(table)
+        rig.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.action_layout.addWidget(rig)
+
+        liquids, body = _panel_box("Liquids")
+        builtin, added = load_profiles(), parse_profiles(self.api.liquids)
+        table = _calibration_table(len(builtin) + len(added), LIQUID_COLUMNS)
+        for row, profile in enumerate(builtin):
+            for column, text in enumerate((profile.name, profile.unit, profile.calibration,
+                                           f"{profile.density:g}", f"{profile.viscosity:g}", "built-in")):
+                table.setItem(row, column, _fixed_item(text))
+        for row, profile in enumerate(added, start=len(builtin)):
+            name = QLineEdit(profile.name)
+            name.editingFinished.connect(
+                lambda widget=name, liquid=profile.id: self._edit_liquid(liquid, "name", widget.text().strip()))
+            table.setCellWidget(row, 0, name)
+            for column, (field, options, current) in enumerate(
+                    (("unit", ("M", "L"), profile.unit), ("calibration", tuple(SENSOR_CALIBRATIONS), profile.calibration)),
+                    start=1):
+                box = QComboBox()
+                box.addItems(options)
+                box.setCurrentText(current)
+                box.currentTextChanged.connect(
+                    lambda text, field=field, liquid=profile.id: self._edit_liquid(liquid, field, text))
+                table.setCellWidget(row, column, box)
+            for column, (field, current) in enumerate((("density", profile.density),
+                                                       ("viscosity", profile.viscosity)), start=3):
+                edit = QLineEdit(f"{current:g}")
+                edit.editingFinished.connect(
+                    lambda widget=edit, field=field, liquid=profile.id: self._edit_liquid_number(liquid, field, widget))
+                table.setCellWidget(row, column, edit)
+            table.setItem(row, 5, _fixed_item("this project"))
+        table.resizeRowsToContents()
+        fit_table_height(table)
+        body.addWidget(table)
+        add = ui.button("Add liquid")
+        add.setToolTip("Adds a row here to name and describe. It starts uncorrected (scale 1) "
+                       "until calibrated on a channel above.")
+        add.setEnabled(self.api.session is not None)
+        add.clicked.connect(self._add_liquid)
+        body.addWidget(add, alignment=Qt.AlignmentFlag.AlignLeft)
+        liquids.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.action_layout.addWidget(liquids)
+        self.action_layout.addStretch(1)
+        self._sync_calibration_sources()
+
+    def _edit_liquid_number(self, liquid_id: str, field: str, widget: QLineEdit) -> None:
+        try:
+            value = float(widget.text())
+        except ValueError:
+            self._notify(f"{field.capitalize()} must be a number", "danger")
+            self._remount_current_stage()
+            return
+        self._edit_liquid(liquid_id, field, value)
+
+    def _sync_calibration_sources(self) -> None:
+        for prefix, item in self._calibration_sources.items():
+            profile = self._profile(self.values.get(f"{prefix}_profile", ""))
+            updated_at = rig_corrections(self.api.calibration, prefix, profile)[1] if profile else ""
+            item.setText(f"set {updated_at.replace('T', ' ')[:16]}" if updated_at else "profile default")
+
     def _render_liquid_profile_summary(self, params: list[Param]) -> None:
         if not any(param.name in LIQUID_PROFILE_PARAM_NAMES for param in params):
             return
@@ -1519,6 +1611,7 @@ class ControlWindow(QMainWindow):
         self._sync_liquid_profile_summary()
 
     def _sync_liquid_profile_summary(self) -> None:
+        self._sync_calibration_sources()
         page = self.current_stage_page
         if page is None or page.liquid_summary is None:
             return
@@ -1526,7 +1619,7 @@ class ControlWindow(QMainWindow):
         for name in self._param_editors:
             if name not in LIQUID_PROFILE_PARAM_NAMES:
                 continue
-            profile = profile_by_id(str(self.values.get(name, "")))
+            profile = self._profile(self.values.get(name, ""))
             if profile is not None:
                 prefix = name.removesuffix("_profile")
                 configured = replace(profile, **{
@@ -1537,7 +1630,9 @@ class ControlWindow(QMainWindow):
                 updated_at = rig_corrections(self.api.calibration, prefix, profile)[1]
                 source = (f"set on this rig {updated_at.replace('T', ' ')[:16]}" if updated_at
                           else "profile default")
-                lines.append(f"{channel} - {profile.name}: {configured.summary()} ({source})")
+                volume = self.values.get(f"{prefix}_dead_volume_ul") or 0
+                dead = f"; dead volume {volume:g} µL" if volume else ""
+                lines.append(f"{channel} - {profile.name}: {configured.summary()} ({source}){dead}")
         text = "\n".join(lines)
         if page.liquid_summary.text() != text:
             page.liquid_summary.setText(text)
@@ -2245,7 +2340,7 @@ class ControlWindow(QMainWindow):
             param = f"{prefix}_profile"
             if self.values.get(param) == profile_id:
                 continue
-            profile = profile_by_id(str(profile_id))
+            profile = self._profile(profile_id)
             if profile is None:
                 self._append_log(f"liquid: {stage.id} declares unknown profile {profile_id!r}")
                 continue
@@ -2259,7 +2354,7 @@ class ControlWindow(QMainWindow):
 
     def _apply_liquid_profile(self, name: str, profile_id: Any) -> None:
         """Write a liquid profile's correction terms onto its channel."""
-        profile = profile_by_id(str(profile_id))
+        profile = self._profile(profile_id)
         if profile is None:
             self._notify(f"Unknown liquid profile: {profile_id}", "danger")
             return
@@ -2278,14 +2373,49 @@ class ControlWindow(QMainWindow):
         saved = self.api.calibration
         for prefix, *_rest in FLUIDIC_CHANNELS:
             channel = saved.get(prefix) if isinstance(saved.get(prefix), dict) else {}
-            profile = (profile_by_id(str(channel.get("profile") or ""))
-                       or profile_by_id(str(self.values.get(f"{prefix}_profile", ""))))
+            self.values[f"{prefix}_dead_volume_ul"] = dead_volume(saved, prefix)
+            profile = (self._profile(channel.get("profile") or "")
+                       or self._profile(self.values.get(f"{prefix}_profile", "")))
             if profile is None:
                 continue
             self.values[f"{prefix}_profile"] = profile.id
             self._use_rig_corrections(prefix, profile, saved)
         if apply:
             self._schedule_correction_apply()
+
+    def _profiles(self) -> tuple:
+        """The packaged liquids, then the ones added in this project."""
+        return load_profiles() + parse_profiles(self.api.liquids)
+
+    def _profile(self, profile_id: Any):
+        return next((profile for profile in self._profiles() if profile.id == str(profile_id)), None)
+
+    def _add_liquid(self) -> None:
+        try:
+            entry = self.api.add_liquid("New liquid", "M", "H2O", 1.0, 1.0)
+        except Exception as exc:
+            self._notify(f"Liquid not added: {exc}", "danger", timeout_ms=0)
+            return
+        self._append_log(f"liquid: added {entry['id']} to this project; name and describe it in the table")
+        self._remount_current_stage()
+
+    def _edit_liquid(self, liquid_id: str, field: str, value: Any) -> None:
+        entry = next((entry for entry in self.api.liquids if entry.get("id") == liquid_id), None)
+        if entry is None or entry.get(field) == value:
+            return
+        try:
+            self.api.update_liquid(liquid_id, **{field: value})
+        except Exception as exc:
+            self._notify(f"{entry.get('name')}: {exc}", "danger", timeout_ms=0)
+        self._remount_current_stage()
+
+    def _remount_current_stage(self) -> None:
+        # Deferred: the edit that asked for it may come from a widget the remount deletes.
+        def remount():
+            if self.current_stage_page is not None:
+                self.current_stage_page.mounted_signature = None
+            self._render_current_stage()
+        QTimer.singleShot(0, remount)
 
     def _use_rig_corrections(self, prefix: str, profile, saved: dict | None = None) -> None:
         values, _updated_at = rig_corrections(self.api.calibration if saved is None else saved, prefix, profile)
@@ -2373,6 +2503,13 @@ class ControlWindow(QMainWindow):
         for stage in self.workflow.stages:
             for param in stage.settings.params:
                 if param.name == name:
+                    if name in LIQUID_PROFILE_PARAM_NAMES:
+                        # A channel is offered every liquid for its unit, the
+                        # project's own included.
+                        unit = FLUIDIC_CHANNEL_UNITS[name.removesuffix("_profile")]
+                        return replace(param, options=tuple(
+                            ParamOption(profile.id, profile.name)
+                            for profile in self._profiles() if profile.unit == unit))
                     return param
         for param in self.api.settings.params:
             if param.name == name:
@@ -2495,6 +2632,12 @@ class ControlWindow(QMainWindow):
             self._schedule_camera_apply()
         if name in LIQUID_PROFILE_PARAM_NAMES:
             self._apply_liquid_profile(name, value)
+        if name in DEAD_VOLUME_PARAM_NAMES and self.api.session is not None:
+            try:
+                self.api.save_calibration(remember_dead_volume(
+                    self.api.calibration, name.removesuffix("_dead_volume_ul"), self.values[name]))
+            except Exception as exc:
+                self._notify(f"Calibration save failed: {exc}", "danger")
         if name in CORRECTION_PARAM_NAMES:
             self._save_rig_calibration(name.rsplit("_", 1)[0], edited=True)
             self._sync_liquid_profile_summary()
@@ -3001,6 +3144,30 @@ class FluidicsMonitorTable(QFrame):
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, column, item)
         item.setText(text)
+
+
+RIG_COLUMNS = (("profile", "Liquid"), ("calibration", "Sensor table"), ("scale", "Scale"),
+               ("offset", "Offset"), ("quadratic", "Quadratic"), ("dead_volume_ul", "Dead volume, µL"))
+LIQUID_COLUMNS = ("Name", "Unit", "Sensor table", "Density, g/mL", "Viscosity, mPa.s", "From")
+
+
+def _calibration_table(rows: int, headers: tuple[str, ...]) -> QTableWidget:
+    table = GridTable(rows, len(headers))
+    table.setObjectName("RawConfigTable")
+    table.setHorizontalHeaderLabels(headers)
+    table.verticalHeader().hide()
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+    table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    table.setAlternatingRowColors(False)
+    return table
+
+
+def _fixed_item(text: str) -> QTableWidgetItem:
+    item = QTableWidgetItem(text)
+    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+    return item
 
 
 def _small_double_box(minimum: float, maximum: float, suffix: str) -> QDoubleSpinBox:

@@ -46,6 +46,27 @@ class DesktopBackendTests(unittest.TestCase):
         reopened.open_project(Path(self.tmp.name) / "desktop.admetp")
         self.assertEqual(reopened.calibration, saved)
 
+    def test_added_liquids_are_kept_in_the_project(self):
+        entry = self.backend.add_liquid("dSurf", "M", "H2O", 1.0, 1.1)
+
+        reopened = DesktopBackend(simulated=True)
+        self.addCleanup(reopened.shutdown)
+        reopened.open_project(Path(self.tmp.name) / "desktop.admetp")
+        self.assertEqual(reopened.liquids, [entry])
+        self.assertEqual(self.backend.add_liquid("dSurf", "M", "H2O", 1.0)["id"], "dsurf_m_2")
+
+    def test_a_project_liquid_is_edited_in_place(self):
+        entry = self.backend.add_liquid("New liquid", "M", "H2O", 1.0, 1.0)
+        edited = self.backend.update_liquid(entry["id"], name="dSurf", density=1.02)
+
+        self.assertEqual((edited["id"], edited["name"], edited["density"]), (entry["id"], "dSurf", 1.02))
+        self.assertEqual(self.backend.liquids, [edited])
+        with self.assertRaises(ValueError):
+            self.backend.update_liquid(entry["id"], density=0)
+        self.backend.save_calibration({"cells_m": {"profile": entry["id"], "liquids": {}}})
+        with self.assertRaisesRegex(ValueError, "in use"):
+            self.backend.update_liquid(entry["id"], unit="L")    # Cells M is an M channel
+
     def test_preflight_save_preserves_historical_check_entries(self):
         from copy import deepcopy
         from dataclasses import replace

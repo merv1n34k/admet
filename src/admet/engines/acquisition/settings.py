@@ -23,6 +23,11 @@ LIQUID_PROFILE_PARAM_NAMES = tuple(
     f"{prefix}_profile" for prefix, *_rest in FLUIDIC_CHANNELS
 )
 
+# Rig values kept with the calibration but never sent to the flow units.
+DEAD_VOLUME_PARAM_NAMES = tuple(
+    f"{prefix}_dead_volume_ul" for prefix, *_rest in FLUIDIC_CHANNELS
+)
+
 
 def merge_schemas(*schemas: ParamSchema) -> ParamSchema:
     params: dict[str, Param] = {}
@@ -128,6 +133,9 @@ CORRECTION_SETTINGS = ParamSchema(
             Param(f"{prefix}_scale", f"{label} Scale", ParamKind.FLOAT, default=scale),
             Param(f"{prefix}_offset", f"{label} Offset", ParamKind.FLOAT, default=offset),
             Param(f"{prefix}_quadratic", f"{label} Quadratic", ParamKind.FLOAT, default=quadratic),
+            Param(f"{prefix}_dead_volume_ul", f"{label} Dead volume, µL", ParamKind.FLOAT,
+                  default=0.0, minimum=0.0,
+                  description="Tubing volume from the source to the chip on this rig; 0 = not measured."),
         )
     )
 )

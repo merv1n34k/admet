@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -63,8 +64,12 @@ def load_profiles() -> tuple[LiquidProfile, ...]:
         log.error("Could not read liquid profiles from %s: %s", LIQUIDS_FILE, exc)
         return ()
 
+    return parse_profiles(data.get("profiles", ()))
+
+
+def parse_profiles(entries) -> tuple[LiquidProfile, ...]:
     profiles = []
-    for entry in data.get("profiles", ()):
+    for entry in entries if isinstance(entries, (list, tuple)) else ():
         if not isinstance(entry, dict):
             continue
         try:
@@ -141,4 +146,47 @@ def remember_corrections(saved: dict, prefix: str, profile_id: str,
         liquids[profile_id] = {**{field: values[f"{prefix}_{field}"] for field in CORRECTION_FIELDS},
                                "updated_at": updated_at}
     saved[prefix] = {**channel, "profile": profile_id, "liquids": liquids}
+    return saved
+
+
+def check_liquid(entry: dict[str, object]) -> dict[str, object]:
+    """A project liquid entry with a usable name, unit, sensor table and properties."""
+    from admet.engines.acquisition.fluidics.config import SENSOR_CALIBRATIONS
+
+    entry = {**entry, "name": str(entry.get("name", "")).strip(), "unit": str(entry.get("unit", "")).upper()}
+    if not entry["name"]:
+        raise ValueError("Name the liquid")
+    if entry["unit"] not in ("L", "M"):
+        raise ValueError("Flow unit must be L or M")
+    if entry.get("calibration") not in SENSOR_CALIBRATIONS:
+        raise ValueError(f"Unknown sensor table: {entry.get('calibration')}")
+    density, viscosity = float(entry.get("density", 0)), float(entry.get("viscosity", 0))
+    if not density > 0 or viscosity < 0:
+        raise ValueError("Density must be positive and viscosity not negative")
+    return {**entry, "density": density, "viscosity": viscosity}
+
+
+def new_liquid(name: str, unit: str, calibration: str, density: float, viscosity: float,
+               taken: set[str]) -> dict[str, object]:
+    """A project liquid: starts uncorrected (scale 1) until calibrated on the rig."""
+    entry = check_liquid({"name": name, "unit": unit, "calibration": calibration,
+                          "density": density, "viscosity": viscosity})
+    base = re.sub(r"[^a-z0-9]+", "_", entry["name"].lower()).strip("_") or "liquid"
+    unit = entry["unit"].lower()
+    liquid_id, suffix = f"{base}_{unit}", 2
+    while liquid_id in taken:
+        liquid_id, suffix = f"{base}_{unit}_{suffix}", suffix + 1
+    return {"id": liquid_id, **entry, "scale": 1.0, "offset": 0.0, "quadratic": 0.0}
+
+
+def dead_volume(saved: dict, prefix: str) -> float:
+    channel = saved.get(prefix) if isinstance(saved, dict) else None
+    value = channel.get("dead_volume_ul") if isinstance(channel, dict) else None
+    return float(value) if isinstance(value, (int, float)) and value >= 0 else 0.0
+
+
+def remember_dead_volume(saved: dict, prefix: str, value: float) -> dict:
+    """The project calibration with this channel's dead volume, whatever liquid it carries."""
+    saved = dict(saved) if isinstance(saved, dict) else {}
+    saved[prefix] = {**(saved.get(prefix) or {}), "dead_volume_ul": float(value)}
     return saved
