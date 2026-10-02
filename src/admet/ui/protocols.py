@@ -2,6 +2,7 @@
 
 import json
 import math
+import statistics
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -57,6 +58,72 @@ def plan_summary(plan, label):
     return f"{label}: {count} {'step' if count == 1 else 'steps'} · ETA {eta} · {targets}"
 
 
+# Two-sided 95 % Student t quantiles by degrees of freedom; beyond the table the
+# normal value is close enough for the batch counts used here.
+_T975 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
+         8: 2.306, 9: 2.262, 10: 2.228, 11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145}
+
+
+def flow_integral(points, t0, t1):
+    """uL between t0 and t1 under kept (t s, uL/min) readings, cut at the exact edges."""
+    volume = 0.0
+    for (ta, qa), (tb, qb) in zip(points, points[1:]):
+        lo, hi = max(ta, t0), min(tb, t1)
+        if hi <= lo or tb <= ta:
+            continue
+        slope = (qb - qa) / (tb - ta)
+        volume += (qa + slope * (lo - ta) + qa + slope * (hi - ta)) / 2 * (hi - lo) / 60
+    return volume
+
+
+def step_flow_summary(points, t0, t1, setpoint, *, hold_s=0.5, batches=10):
+    """One channel's result for one step.
+
+    Volume covers the whole step. Mean flow covers only its settled part -- once
+    the flow has held within max(0.5, 5 %) of the setpoint for HOLD_S -- so the
+    ramp up does not drag the average down. Readings ~0.1 s apart are not
+    independent, so the 95 % interval comes from batch means: the settled
+    readings are split into up to BATCHES consecutive batches and the interval
+    is taken from the spread of the batch averages.
+    """
+    inside = [(t, q) for t, q in points if t0 <= t <= t1]
+    band = max(0.5, 0.05 * abs(setpoint))
+    settled_at = run_start = None
+    for t, q in inside:
+        if abs(q - setpoint) <= band:
+            run_start = t if run_start is None else run_start
+            if t - run_start >= hold_s:
+                settled_at = run_start
+                break
+        else:
+            run_start = None
+    # Counted from the end of the hold, not its start: the readings that first
+    # entered the band are still the tail of the approach and bias the mean.
+    values = [q for t, q in inside if settled_at is not None and t >= settled_at + hold_s]
+    mean = ci = None
+    if len(values) >= 6:
+        count = min(batches, len(values) // 3)
+        size = len(values) // count
+        means = [statistics.fmean(values[i * size:(i + 1) * size]) for i in range(count)]
+        mean = statistics.fmean(values)
+        ci = _T975.get(count - 1, 2.0) * statistics.stdev(means) / math.sqrt(count)
+    return {"volume_ul": flow_integral(points, t0, t1) if len(points) > 1 else None,
+            "mean_ul_min": mean, "ci95_ul_min": ci, "settled": settled_at is not None,
+            "samples": len(values)}
+
+
+def summary_text(results):
+    """Cell text for the run table, one line per flow-controlled channel."""
+    flow, volume = [], []
+    for sensor, result in results:
+        if result["mean_ul_min"] is None:
+            flow.append(f"{sensor}: not settled")
+        else:
+            flow.append(f"{sensor}: {result['mean_ul_min']:.2f} ± {result['ci95_ul_min']:.2f}")
+        volume.append(f"{sensor}: —" if result["volume_ul"] is None else f"{sensor}: {result['volume_ul']:.2f} µL")
+    return "\n".join(flow) or "—", "\n".join(volume) or "—"
+
+
 def step_rows(plan):
     rows = []
     for step in plan["steps"]:
@@ -91,7 +158,7 @@ def step_rows(plan):
             "\n".join(str(index) for index, _, _ in controls),
             "\n".join(mode for _, mode, _ in controls),
             "\n".join(target for _, _, target in controls),
-            condition, step["on_complete"], "Before" if step["confirmation"] else "—",
+            condition, step["on_complete"], "Before" if step["confirmation"] else "—", "—", "—",
         ])
     return rows
 
@@ -109,7 +176,7 @@ def step_details(step):
 
 class PlanTable(GridTable):
     def __init__(self):
-        super().__init__(0, 8)
+        super().__init__(0, 10)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.verticalHeader().hide()
@@ -257,6 +324,7 @@ class ProtocolEditor(QWidget):
         self._edit_generation = 0
         self._executing = False
         self._last_sequence = 0
+        self._step_started: dict[int, float] = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         self.editor = QPlainTextEdit()
@@ -278,7 +346,10 @@ class ProtocolEditor(QWidget):
             self.editor.hide()
         self.table = PlanTable()
         self.table.setObjectName("RawConfigTable")
-        self.table.setHorizontalHeaderLabels(["STEP", "STATUS", "UNIT ID", "TYPE", "TARGET", "TRIGGER / ETA", "END", "CONFIRM"])
+        self.table.setHorizontalHeaderLabels([
+            "STEP", "STATUS", "UNIT ID", "TYPE", "TARGET", "TRIGGER / ETA", "END", "CONFIRM",
+            "FLOW ± 95% CI", "VOLUME",
+        ])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         root.addWidget(self.table)
         self.table.hide()
@@ -488,6 +559,7 @@ class ProtocolEditor(QWidget):
         if not self.executable:
             return
         plan_id = self.plan["plan_id"]
+        self._step_started.clear()
         self.window._poll_pipeline_events()
         self.window._pipeline_stage_id = self.stage.id
         self.lock_definition(True)
@@ -528,6 +600,10 @@ class ProtocolEditor(QWidget):
         row = event.current_step
         if not event.step_name or not 0 <= row < self.table.rowCount():
             return
+        if outcome == "running" and not event.confirmation_message:
+            self._step_started.setdefault(row, event.monotonic)
+        elif outcome != "running":
+            self.show_step_result(row, event.monotonic)
         if outcome != "running":
             status = outcome.replace("_", " ")
         elif state == "paused":
@@ -548,6 +624,24 @@ class ProtocolEditor(QWidget):
             item = self.table.item(row, column)
             item.setBackground(QColor(color))
             item.setForeground(QColor("#16212b"))
+
+    def show_step_result(self, row, ended):
+        """Fill a finished step's flow and volume from the readings the plot holds."""
+        started = self._step_started.get(row)
+        flows = self.plan["steps"][row].get("flow_setpoints_ul_min") or {}
+        if started is None or not flows:
+            return
+        to_plot = self.window.plot_time
+        results = [
+            (sensor, step_flow_summary(self.window.kept_flow_points(int(sensor)),
+                                       to_plot(started), to_plot(ended), float(setpoint)))
+            for sensor, setpoint in flows.items()
+        ]
+        flow_text, volume_text = summary_text(results)
+        self.table.item(row, 8).setText(flow_text)
+        self.table.item(row, 9).setText(volume_text)
+        self.table.resizeRowToContents(row)
+        fit_table_height(self.table)
 
     def control(self, action):
         def finished(result):

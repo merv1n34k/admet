@@ -859,6 +859,10 @@ class AcquisitionEngine:
                     return None, cursor
                 self._event_condition.wait(remaining)
 
+    def rejected_readings(self, sensor_index: int) -> list[tuple[float, float]]:
+        """Readings left out of the volume, as (elapsed_s, flow)."""
+        return self._acquisition.rejected_readings(sensor_index) if self._acquisition else []
+
     def polling_started_monotonic(self) -> float:
         return self._acquisition.started_monotonic if self._acquisition else 0.0
 

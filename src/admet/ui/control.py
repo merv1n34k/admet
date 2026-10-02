@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
     QAbstractSpinBox,
+    QCheckBox,
     QApplication,
     QGraphicsView,
     QFrame,
@@ -351,6 +352,8 @@ class ControlWindow(QMainWindow):
         self.project_path = Path(api.workdir) if api.workdir else None
         self._last_frame_id = 0
         self._last_status_poll = 0.0
+        self._marker_sequence = 0
+        self._marker_step: int | None = None
         self._last_poll_error = ""
         self._camera_ack_pending = False
         self._camera_frame_unsubscribe: Callable[[], None] | None = None
@@ -1094,6 +1097,7 @@ class ControlWindow(QMainWindow):
         plot_was_new = self.plot_panel is None
         if self.plot_panel is None:
             self.plot_panel = PlotPanel()
+            self.plot_panel.set_rejected_source(self._rejected_readings)
             self.plot_panel.setMinimumWidth(360)
             self.plot_panel.setMaximumHeight(PREVIEW_MAX_HEIGHT)
             self.plot_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
@@ -1833,6 +1837,7 @@ class ControlWindow(QMainWindow):
 
     def _poll(self) -> None:
         self._poll_fluidics_plots()
+        self._poll_step_markers()
         self._poll_pipeline_events()
         now = time.monotonic()
         if now - self._last_status_poll >= 0.5 and not self.status_tasks.busy:
@@ -1919,22 +1924,61 @@ class ControlWindow(QMainWindow):
         queue = getattr(self.api.engine, "data_queue", None)
         if queue is None:
             return
-        latest = None
+        drained = []
         while not queue.empty():
             try:
-                latest = queue.get_nowait()
+                drained.append(queue.get_nowait())
             except Empty:
                 break
+        latest = drained[-1] if drained else None
         if latest is not None:
             self._latest_snapshot = latest
             if self.plot_panel is not None:
-                self.plot_panel.update_from_snapshot(latest)
+                # Every reading, not just the newest: a one-reading spike
+                # between two refreshes must still reach the graph.
+                self.plot_panel.update_from_snapshots(drained)
             if self.channel_panel is not None:
                 self.channel_panel.update_modes(self._channel_states(), pipeline_paused=self._pipeline_paused())
                 self.channel_panel.update_from_snapshot(latest)
             if self.monitor_table is not None:
                 self.monitor_table.update_from_snapshot(latest)
         self._update_csv_status()
+
+    def _rejected_readings(self, sensor: int) -> list[tuple[float, float]]:
+        engine = getattr(self.api, "engine", None)
+        return engine.rejected_readings(sensor) if engine is not None else []
+
+    def plot_time(self, monotonic: float) -> float:
+        """A protocol event's clock, in the plot's seconds since polling began."""
+        return monotonic - self.api.engine.polling_started_monotonic()
+
+    def kept_flow_points(self, sensor: int) -> list[tuple[float, float]]:
+        return self.plot_panel.kept_flow_points(sensor) if self.plot_panel is not None else []
+
+    def _poll_step_markers(self) -> None:
+        """Mark each step's start and end on the plots, from the event history.
+
+        Reads by sequence rather than draining the queue the run table uses.
+        """
+        engine = getattr(self.api, "engine", None)
+        if engine is None or self.plot_panel is None or not engine.polling_started_monotonic():
+            return
+        for event in engine.events_after(self._marker_sequence, 500):
+            self._marker_sequence = event.sequence
+            outcome = str(event.outcome)
+            if not event.step_name:
+                self._marker_step = None
+                continue
+            at = self.plot_time(event.monotonic)
+            number = event.current_step + 1
+            if outcome == "running" and not event.confirmation_message:
+                if self._marker_step != event.current_step:
+                    self._marker_step = event.current_step
+                    self.plot_panel.add_marker(at, f"▶ {number}", Theme.SUCCESS_HOVER)
+            elif outcome != "running":
+                self._marker_step = None
+                color = Theme.TEXT_MUTED if outcome == "completed" else Theme.DANGER_HOVER
+                self.plot_panel.add_marker(at, f"■ {number}", color)
 
     def _update_csv_status(self) -> None:
         if self.monitor_table is None:
@@ -2945,7 +2989,14 @@ _PLOT_LABELS = FLUIDIC_CHANNEL_LABELS
 
 
 class LivePlot(QWidget):
-    def __init__(self, title: str, y_unit: str, parent: QWidget | None = None):
+    """Every reading as received; for flow, also the area that was counted.
+
+    The line is the raw reading, spikes included. The shaded area under it is
+    the flow counted as dispensed volume: readings the filter rejected are left
+    out of it, so a spike shows as a line reaching outside the shading.
+    """
+
+    def __init__(self, title: str, y_unit: str, parent: QWidget | None = None, *, shade: bool = False):
         super().__init__(parent)
         import pyqtgraph as pg
 
@@ -2956,6 +3007,10 @@ class LivePlot(QWidget):
             deque(maxlen=_MAX_PLOT_SAMPLES) for _ in range(3)
         ]
         self._curves = []
+        self._fills = []
+        self._markers: list[tuple[float, Any]] = []
+        self._shade = shade
+        self._rejected_source = None
         self._auto_scroll = True
 
         layout = QVBoxLayout(self)
@@ -2971,8 +3026,9 @@ class LivePlot(QWidget):
         self._plot.setXRange(0, _VISIBLE_PLOT_WINDOW_S, padding=0)
         self._plot.scene().sigMouseClicked.connect(self._on_click)
         # No wheel override: _WheelGuard routes the wheel to the page scroll, so the
-        # plot never zooms. Dragging still pans and pauses auto-scroll.
-        self._plot.mouseDragEvent = self._mouse_drag_event  # type: ignore[method-assign]
+        # plot never zooms. Panning by hand stops following the newest data.
+        self.on_follow_change = None
+        self._plot.getViewBox().sigRangeChangedManually.connect(self._moved_by_user)
 
         for index, label in enumerate(_PLOT_LABELS):
             curve = self._plot.plot(
@@ -2985,7 +3041,33 @@ class LivePlot(QWidget):
                 clipToView=True,
             )
             self._curves.append(curve)
+            if shade:
+                color = QColor(_PLOT_COLORS[index])
+                color.setAlpha(45)
+                self._fills.append(self._plot.plot([], [], pen=None, fillLevel=0, brush=color))
         layout.addWidget(self._plot)
+
+    def set_rejected_source(self, source) -> None:
+        """source(channel) -> rejected (t, value) readings to leave out of the shading."""
+        self._rejected_source = source
+
+    def kept_points(self, index: int) -> list[tuple[float, float]]:
+        """The readings counted as flow on one channel, oldest first."""
+        rejected = {t for t, _ in self._rejected_source(index)} if self._rejected_source else set()
+        return [(t, y) for t, y in zip(self._times, self._series[index]) if t not in rejected]
+
+    def add_marker(self, t: float, label: str, color: str) -> None:
+        line = self._pg.InfiniteLine(
+            t, pen=self._pg.mkPen(color, width=1, style=Qt.PenStyle.DashLine),
+            label=label, labelOpts={"position": 0.92, "color": color},
+        )
+        self._plot.addItem(line)
+        self._markers.append((t, line))
+
+    def _prune_markers(self) -> None:
+        oldest = self._times[0] if self._times else None
+        while self._markers and oldest is not None and self._markers[0][0] < oldest:
+            self._plot.removeItem(self._markers.pop(0)[1])
 
     def ingest(self, t: float, values: list[float]) -> None:
         self._times.append(t)
@@ -3002,6 +3084,14 @@ class LivePlot(QWidget):
             t_out, y_out = _bin_arrays(t_arr, y_arr, bin_size)
             t_out, y_out = _limit_plot_points(t_out, y_out, _MAX_RENDERED_PLOT_POINTS)
             curve.setData(t_out, y_out)
+            if self._fills:
+                rejected = ({t for t, _ in self._rejected_source(index)}
+                            if self._rejected_source else set())
+                kept = ~np.isin(t_arr, list(rejected)) if rejected else np.ones(len(t_arr), bool)
+                t_fill, y_fill = _bin_arrays(t_arr[kept], y_arr[kept], bin_size)
+                t_fill, y_fill = _limit_plot_points(t_fill, y_fill, _MAX_RENDERED_PLOT_POINTS)
+                self._fills[index].setData(t_fill, y_fill)
+        self._prune_markers()
         if self._auto_scroll:
             self._update_x_range()
 
@@ -3009,14 +3099,29 @@ class LivePlot(QWidget):
         self._times.clear()
         for series in self._series:
             series.clear()
-        for curve in self._curves:
+        for curve in (*self._curves, *self._fills):
             curve.setData([], [])
+        while self._markers:
+            self._plot.removeItem(self._markers.pop()[1])
         self._auto_scroll = True
         self._plot.setXRange(0, _VISIBLE_PLOT_WINDOW_S, padding=0)
 
     def _on_click(self, event) -> None:
         if event.double():
-            self._auto_scroll = True
+            self._set_follow_everywhere(True)
+
+    def _moved_by_user(self, *_args) -> None:
+        self._set_follow_everywhere(False)
+
+    def _set_follow_everywhere(self, follow: bool) -> None:
+        if self.on_follow_change is not None:
+            self.on_follow_change(follow)
+        else:
+            self.set_follow(follow)
+
+    def set_follow(self, follow: bool) -> None:
+        self._auto_scroll = follow
+        if follow:
             self._update_x_range()
 
     def _update_x_range(self) -> None:
@@ -3041,10 +3146,6 @@ class LivePlot(QWidget):
             return t_arr[-_MAX_RENDERED_PLOT_POINTS:], slice(-_MAX_RENDERED_PLOT_POINTS, None)
         return t_arr[start:stop], slice(start, stop)
 
-    def _mouse_drag_event(self, event) -> None:
-        self._auto_scroll = False
-        self._pg.PlotWidget.mouseDragEvent(self._plot, event)
-
 
 class PlotPanel(QWidget):
     def __init__(self, parent: QWidget | None = None):
@@ -3066,6 +3167,12 @@ class PlotPanel(QWidget):
         self._bin_spin.setSpecialValueText("off")
         self._bin_spin.valueChanged.connect(lambda _value: self.refresh())
         toolbar.addWidget(self._bin_spin)
+        # Following keeps the newest data in view. Panning either graph turns it
+        # off so older data stays put; tick it (or double-click) to return.
+        self._follow = QCheckBox("Follow live")
+        self._follow.setChecked(True)
+        self._follow.toggled.connect(self._set_follow)
+        toolbar.addWidget(self._follow)
         toolbar.addStretch()
         root.addLayout(toolbar)
 
@@ -3074,13 +3181,37 @@ class PlotPanel(QWidget):
         plots.setSpacing(ui.spacing("control"))
         self._pressure = LivePlot("Pressure", "mbar")
         plots.addWidget(self._pressure)
-        self._flow = LivePlot("Flow", "uL/min")
+        self._flow = LivePlot("Flow", "uL/min", shade=True)
+        self._flow._plot.setXLink(self._pressure._plot)
+        for plot in (self._pressure, self._flow):
+            plot.on_follow_change = self._follow.setChecked
         plots.addWidget(self._flow)
         root.addLayout(plots, stretch=1)
 
     def ingest_from_snapshot(self, snapshot) -> None:
         self._pressure.ingest(snapshot.elapsed_s, snapshot.pressures)
         self._flow.ingest(snapshot.elapsed_s, snapshot.flows)
+
+    def _set_follow(self, follow: bool) -> None:
+        for plot in (self._pressure, self._flow):
+            plot.set_follow(follow)
+
+    def set_rejected_source(self, source) -> None:
+        self._flow.set_rejected_source(source)
+
+    def kept_flow_points(self, index: int) -> list[tuple[float, float]]:
+        return self._flow.kept_points(index)
+
+    def add_marker(self, t: float, label: str, color: str) -> None:
+        for plot in (self._pressure, self._flow):
+            plot.add_marker(t, label, color)
+
+    def update_from_snapshots(self, snapshots) -> None:
+        """Every reading since the last refresh, not only the newest one."""
+        for snapshot in snapshots:
+            self.ingest_from_snapshot(snapshot)
+        if snapshots and time.monotonic() - self._last_refresh_at >= _PLOT_REFRESH_INTERVAL_S:
+            self.refresh()
 
     def update_from_snapshot(self, snapshot) -> None:
         self.ingest_from_snapshot(snapshot)
