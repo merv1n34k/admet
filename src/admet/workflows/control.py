@@ -257,9 +257,10 @@ def create_control_workflow() -> Workflow:
             ),
             Stage(
                 "corrections",
-                "3. Correction factors",
-                description="Flow sensor calibration table and polynomial correction factors.",
-                instructions=("Apply all correction factors after editing the calibration values.",),
+                "3. Calibration",
+                description="Each channel's liquid, sensor calibration table and correction factors for this rig.",
+                instructions=("Values are saved in the project for each channel and liquid, "
+                              "so a reopened project starts calibrated. Apply sends them to the flow units.",),
                 settings=CORRECTION_SETTINGS,
                 actions=(
                     StageAction(

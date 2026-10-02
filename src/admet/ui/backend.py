@@ -46,6 +46,20 @@ class DesktopBackend:
     def acquisition_mode(self):
         return self.session.metadata.get("acquisition_mode", "fluidics_only") if self.session else "fluidics_only"
 
+    @property
+    def calibration(self):
+        """Each channel's corrections per liquid, as calibrated on this rig."""
+        return dict(self.session.metadata.get("calibration") or {}) if self.session else {}
+
+    def save_calibration(self, calibration):
+        with self.lock:
+            if not self.session:
+                return
+            project = self.service.project
+            project.session = replace(project.session, metadata={**project.session.metadata,
+                                                                 "calibration": calibration})
+            project.save()
+
     def set_acquisition_mode(self, mode):
         if mode not in {"fluidics_only", "camera_fluidics"}:
             raise ValueError("Unknown acquisition mode")

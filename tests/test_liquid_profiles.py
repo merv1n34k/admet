@@ -5,6 +5,8 @@ from admet.engines.acquisition.fluidics.liquids import (
     load_profiles,
     profile_by_id,
     profiles_for_unit,
+    remember_corrections,
+    rig_corrections,
 )
 from admet.engines.acquisition.settings import (
     CORRECTION_SETTINGS,
@@ -70,3 +72,17 @@ class LiquidProfileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RigCorrectionTests(unittest.TestCase):
+    def test_each_liquid_keeps_its_own_values_on_a_channel(self):
+        water, oil = profile_by_id("water_m"), profile_by_id("oil_m")
+        edited = {**water.corrections("cells_m"), "cells_m_scale": 1.07}
+        saved = remember_corrections({}, "cells_m", "water_m", edited, "2026-10-02T20:00:00")
+        saved = remember_corrections(saved, "cells_m", "oil_m")            # switch liquid, no edit
+
+        self.assertEqual(saved["cells_m"]["profile"], "oil_m")
+        self.assertEqual(rig_corrections(saved, "cells_m", water),
+                         ({**water.corrections("cells_m"), "cells_m_scale": 1.07}, "2026-10-02T20:00:00"))
+        self.assertEqual(rig_corrections(saved, "cells_m", oil), (oil.corrections("cells_m"), ""))
+        self.assertEqual(rig_corrections(saved, "beads_m", water), (water.corrections("beads_m"), ""))

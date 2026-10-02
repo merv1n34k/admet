@@ -60,7 +60,7 @@ from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNELS,
 )
 from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES, LIQUID_PROFILE_PARAM_NAMES
-from admet.engines.acquisition.fluidics.liquids import profile_by_id
+from admet.engines.acquisition.fluidics.liquids import profile_by_id, remember_corrections, rig_corrections
 from admet.ui.preflight import PreflightPanel
 from admet.ui.tables import GridTable, SummaryLabel, fit_table_height
 from admet.ui import theme as ui
@@ -333,6 +333,7 @@ class ControlWindow(QMainWindow):
         for stage in self.workflow.stages:
             self.values.update(stage.settings.defaults())
         self.values["simulated"] = api.simulated
+        self._load_rig_calibration(apply=False)
         self.protocol_editors = {}
         self._last_protocol_log = None
         self.last_result: RunResult | None = None
@@ -750,6 +751,7 @@ class ControlWindow(QMainWindow):
         self._notify("Project created", "success")
         self._append_log(f"project: created {self.project_path}")
         self._reset_project_workflow()
+        self._load_rig_calibration()
         self._render_current_stage()
 
     def _ensure_preflight(self) -> PreflightPanel:
@@ -838,6 +840,7 @@ class ControlWindow(QMainWindow):
         self._notify("Project selected", "success")
         self._append_log(f"project: selected {path}")
         self._reset_project_workflow()
+        self._load_rig_calibration()
         self._render_current_stage()
 
     def _save_project(self) -> None:
@@ -1531,7 +1534,10 @@ class ControlWindow(QMainWindow):
                     for field in ("calibration", "scale", "offset", "quadratic")
                 })
                 channel = self._param_by_name(name).label.removesuffix(" Liquid")
-                lines.append(f"{channel} - {profile.name}: {configured.summary()}")
+                updated_at = rig_corrections(self.api.calibration, prefix, profile)[1]
+                source = (f"set on this rig {updated_at.replace('T', ' ')[:16]}" if updated_at
+                          else "profile default")
+                lines.append(f"{channel} - {profile.name}: {configured.summary()} ({source})")
         text = "\n".join(lines)
         if page.liquid_summary.text() != text:
             page.liquid_summary.setText(text)
@@ -2244,7 +2250,8 @@ class ControlWindow(QMainWindow):
                 self._append_log(f"liquid: {stage.id} declares unknown profile {profile_id!r}")
                 continue
             self.values[param] = profile_id
-            self.values.update(profile.corrections(prefix))
+            self._use_rig_corrections(prefix, profile)
+            self._save_rig_calibration(prefix)
             self._append_log(f"liquid: {prefix} -> {profile.name} (for {stage.id})")
             changed = True
         if changed and self._fluigent_ready():
@@ -2257,11 +2264,49 @@ class ControlWindow(QMainWindow):
             self._notify(f"Unknown liquid profile: {profile_id}", "danger")
             return
         prefix = name.removesuffix("_profile")
-        self.values.update(profile.corrections(prefix))
+        self._use_rig_corrections(prefix, profile)
+        self._save_rig_calibration(prefix)
         self._sync_liquid_profile_summary()
         self._schedule_correction_apply()
-        self._append_log(f"liquid: {prefix} -> {profile.name} ({profile.summary()})")
+        configured = replace(profile, **{field: self.values[f"{prefix}_{field}"]
+                                         for field in ("calibration", "scale", "offset", "quadratic")})
+        self._append_log(f"liquid: {prefix} -> {profile.name} ({configured.summary()})")
         QTimer.singleShot(0, self._render_current_stage)
+
+    def _load_rig_calibration(self, *, apply: bool = True) -> None:
+        """Start each channel on the liquid and values this project last used."""
+        saved = self.api.calibration
+        for prefix, *_rest in FLUIDIC_CHANNELS:
+            channel = saved.get(prefix) if isinstance(saved.get(prefix), dict) else {}
+            profile = (profile_by_id(str(channel.get("profile") or ""))
+                       or profile_by_id(str(self.values.get(f"{prefix}_profile", ""))))
+            if profile is None:
+                continue
+            self.values[f"{prefix}_profile"] = profile.id
+            self._use_rig_corrections(prefix, profile, saved)
+        if apply:
+            self._schedule_correction_apply()
+
+    def _use_rig_corrections(self, prefix: str, profile, saved: dict | None = None) -> None:
+        values, _updated_at = rig_corrections(self.api.calibration if saved is None else saved, prefix, profile)
+        for name, value in values.items():
+            try:
+                self.values[name] = self._param_by_name(name).validate(value)
+            except Exception as exc:
+                self._append_log(f"calibration: ignored saved {name}={value!r}: {exc}")
+                self.values[name] = profile.corrections(prefix)[name]
+
+    def _save_rig_calibration(self, prefix: str, *, edited: bool = False) -> None:
+        """Keep the channel's liquid, and its values once edited, in the project."""
+        if self.api.session is None:
+            return
+        profile_id = str(self.values.get(f"{prefix}_profile", ""))
+        updated_at = datetime.now().isoformat(timespec="seconds") if edited else ""
+        try:
+            self.api.save_calibration(remember_corrections(
+                self.api.calibration, prefix, profile_id, self.values if edited else None, updated_at))
+        except Exception as exc:
+            self._notify(f"Calibration save failed: {exc}", "danger")
 
     def _apply_correction_values(self) -> None:
         self._run("apply_corrections", raise_errors=False, refresh=False)
@@ -2451,6 +2496,7 @@ class ControlWindow(QMainWindow):
         if name in LIQUID_PROFILE_PARAM_NAMES:
             self._apply_liquid_profile(name, value)
         if name in CORRECTION_PARAM_NAMES:
+            self._save_rig_calibration(name.rsplit("_", 1)[0], edited=True)
             self._sync_liquid_profile_summary()
             self._schedule_correction_apply()
         if name == "simulated":

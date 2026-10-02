@@ -36,6 +36,16 @@ class DesktopBackendTests(unittest.TestCase):
         self.backend.call("connect_fluidics")
         self.backend.call("apply_corrections")
 
+    def test_calibration_is_kept_in_the_project(self):
+        saved = {"cells_m": {"profile": "water_m", "liquids": {"water_m": {
+            "calibration": "H2O", "scale": 1.07, "offset": 0.0, "quadratic": 0.0, "updated_at": "2026-10-02T20:00:00"}}}}
+        self.backend.save_calibration(saved)
+
+        reopened = DesktopBackend(simulated=True)
+        self.addCleanup(reopened.shutdown)
+        reopened.open_project(Path(self.tmp.name) / "desktop.admetp")
+        self.assertEqual(reopened.calibration, saved)
+
     def test_preflight_save_preserves_historical_check_entries(self):
         from copy import deepcopy
         from dataclasses import replace

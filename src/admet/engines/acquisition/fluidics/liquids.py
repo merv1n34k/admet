@@ -111,3 +111,34 @@ def default_profile_id(prefix: str, unit: str, calibration: str, scale: float) -
     if named is not None:
         return named.id
     return candidates[0].id if candidates else ""
+
+
+CORRECTION_FIELDS = ("calibration", "scale", "offset", "quadratic")
+
+
+def rig_corrections(saved: dict, prefix: str, profile: LiquidProfile) -> tuple[dict[str, object], str]:
+    """A channel's corrections for this liquid on this rig, and when they were set.
+
+    The project keeps each channel's own values per liquid; a liquid never
+    calibrated on this channel falls back to its profile, with no date.
+    """
+    channel = saved.get(prefix) if isinstance(saved, dict) else None
+    liquids = channel.get("liquids") if isinstance(channel, dict) else None
+    entry = liquids.get(profile.id) if isinstance(liquids, dict) else None
+    if isinstance(entry, dict) and all(field in entry for field in CORRECTION_FIELDS):
+        return ({f"{prefix}_{field}": entry[field] for field in CORRECTION_FIELDS},
+                str(entry.get("updated_at") or ""))
+    return profile.corrections(prefix), ""
+
+
+def remember_corrections(saved: dict, prefix: str, profile_id: str,
+                         values: dict[str, object] | None = None, updated_at: str = "") -> dict:
+    """The project calibration with this channel on this liquid, and its values if given."""
+    saved = dict(saved) if isinstance(saved, dict) else {}
+    channel = dict(saved.get(prefix) or {})
+    liquids = dict(channel.get("liquids") or {})
+    if values is not None:
+        liquids[profile_id] = {**{field: values[f"{prefix}_{field}"] for field in CORRECTION_FIELDS},
+                               "updated_at": updated_at}
+    saved[prefix] = {**channel, "profile": profile_id, "liquids": liquids}
+    return saved
