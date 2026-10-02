@@ -29,6 +29,15 @@
       "label": "Nominal volume per collection, µL",
       "default": 100,
       "min": 0.1
+    },
+    "volume_mode": {
+      "type": "choice",
+      "label": "Volume mode",
+      "default": "adaptive",
+      "options": [
+        "adaptive",
+        "integral"
+      ]
     }
   },
   "steps": [
@@ -37,11 +46,13 @@
       "sensor_setpoints": {
         "{channel}": "low_flow"
       },
-      "trigger_type": "time",
+      "trigger_type": "volume",
       "trigger_params": {
-        "duration_s": "collection_ul * 60 / (low_flow)"
+        "sensor_index": "channel",
+        "target_volume_ul": "collection_ul",
+        "mode": "{volume_mode}"
       },
-      "timeout_s": "collection_ul * 60 / (low_flow) + 10",
+      "timeout_s": "1.2 * collection_ul * 60 / (low_flow) + 10",
       "on_complete": "zero",
       "confirm_message": "Collection 1, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
     },
@@ -50,11 +61,13 @@
       "sensor_setpoints": {
         "{channel}": "(low_flow + working_flow) / 2"
       },
-      "trigger_type": "time",
+      "trigger_type": "volume",
       "trigger_params": {
-        "duration_s": "collection_ul * 60 / ((low_flow + working_flow) / 2)"
+        "sensor_index": "channel",
+        "target_volume_ul": "collection_ul",
+        "mode": "{volume_mode}"
       },
-      "timeout_s": "collection_ul * 60 / ((low_flow + working_flow) / 2) + 10",
+      "timeout_s": "1.2 * collection_ul * 60 / ((low_flow + working_flow) / 2) + 10",
       "on_complete": "zero",
       "confirm_message": "Collection 2, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
     },
@@ -63,11 +76,13 @@
       "sensor_setpoints": {
         "{channel}": "working_flow"
       },
-      "trigger_type": "time",
+      "trigger_type": "volume",
       "trigger_params": {
-        "duration_s": "collection_ul * 60 / (working_flow)"
+        "sensor_index": "channel",
+        "target_volume_ul": "collection_ul",
+        "mode": "{volume_mode}"
       },
-      "timeout_s": "collection_ul * 60 / (working_flow) + 10",
+      "timeout_s": "1.2 * collection_ul * 60 / (working_flow) + 10",
       "on_complete": "zero",
       "confirm_message": "Collection 3, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
     },
@@ -76,11 +91,13 @@
       "sensor_setpoints": {
         "{channel}": "working_flow"
       },
-      "trigger_type": "time",
+      "trigger_type": "volume",
       "trigger_params": {
-        "duration_s": "collection_ul * 60 / (working_flow)"
+        "sensor_index": "channel",
+        "target_volume_ul": "collection_ul",
+        "mode": "{volume_mode}"
       },
-      "timeout_s": "collection_ul * 60 / (working_flow) + 10",
+      "timeout_s": "1.2 * collection_ul * 60 / (working_flow) + 10",
       "on_complete": "zero",
       "confirm_message": "Collection 4, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
     },
@@ -89,11 +106,13 @@
       "sensor_setpoints": {
         "{channel}": "(low_flow + working_flow) / 2"
       },
-      "trigger_type": "time",
+      "trigger_type": "volume",
       "trigger_params": {
-        "duration_s": "collection_ul * 60 / ((low_flow + working_flow) / 2)"
+        "sensor_index": "channel",
+        "target_volume_ul": "collection_ul",
+        "mode": "{volume_mode}"
       },
-      "timeout_s": "collection_ul * 60 / ((low_flow + working_flow) / 2) + 10",
+      "timeout_s": "1.2 * collection_ul * 60 / ((low_flow + working_flow) / 2) + 10",
       "on_complete": "zero",
       "confirm_message": "Collection 5, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
     },
@@ -102,11 +121,13 @@
       "sensor_setpoints": {
         "{channel}": "low_flow"
       },
-      "trigger_type": "time",
+      "trigger_type": "volume",
       "trigger_params": {
-        "duration_s": "collection_ul * 60 / (low_flow)"
+        "sensor_index": "channel",
+        "target_volume_ul": "collection_ul",
+        "mode": "{volume_mode}"
       },
-      "timeout_s": "collection_ul * 60 / (low_flow) + 10",
+      "timeout_s": "1.2 * collection_ul * 60 / (low_flow) + 10",
       "on_complete": "zero",
       "confirm_message": "Collection 6, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
     },
@@ -115,11 +136,13 @@
       "sensor_setpoints": {
         "{channel}": "low_flow"
       },
-      "trigger_type": "time",
+      "trigger_type": "volume",
       "trigger_params": {
-        "duration_s": "collection_ul * 60 / (low_flow)"
+        "sensor_index": "channel",
+        "target_volume_ul": "collection_ul",
+        "mode": "{volume_mode}"
       },
-      "timeout_s": "collection_ul * 60 / (low_flow) + 10",
+      "timeout_s": "1.2 * collection_ul * 60 / (low_flow) + 10",
       "on_complete": "zero",
       "confirm_message": "Collection 7, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
     },
@@ -128,11 +151,13 @@
       "sensor_setpoints": {
         "{channel}": "(low_flow + working_flow) / 2"
       },
-      "trigger_type": "time",
+      "trigger_type": "volume",
       "trigger_params": {
-        "duration_s": "collection_ul * 60 / ((low_flow + working_flow) / 2)"
+        "sensor_index": "channel",
+        "target_volume_ul": "collection_ul",
+        "mode": "{volume_mode}"
       },
-      "timeout_s": "collection_ul * 60 / ((low_flow + working_flow) / 2) + 10",
+      "timeout_s": "1.2 * collection_ul * 60 / ((low_flow + working_flow) / 2) + 10",
       "on_complete": "zero",
       "confirm_message": "Collection 8, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
     },
@@ -141,11 +166,13 @@
       "sensor_setpoints": {
         "{channel}": "working_flow"
       },
-      "trigger_type": "time",
+      "trigger_type": "volume",
       "trigger_params": {
-        "duration_s": "collection_ul * 60 / (working_flow)"
+        "sensor_index": "channel",
+        "target_volume_ul": "collection_ul",
+        "mode": "{volume_mode}"
       },
-      "timeout_s": "collection_ul * 60 / (working_flow) + 10",
+      "timeout_s": "1.2 * collection_ul * 60 / (working_flow) + 10",
       "on_complete": "zero",
       "confirm_message": "Collection 9, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
     },

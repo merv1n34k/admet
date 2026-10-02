@@ -13,6 +13,13 @@ from admet.workflows.calculations import calculate_run, calculation_readiness, s
 from admet.workflows.json_protocol import normalize, resolve, template_documents
 
 
+def collection_s(step, channel):
+    params = step["trigger_params"]
+    if step["trigger_type"] == "volume":
+        return params["target_volume_ul"] * 60 / step["sensor_setpoints"][str(channel)]
+    return params["duration_s"]
+
+
 def archive(root, name, *, flow=None, slope=2, multiplier=1.2, run_id=None, parameters=None):
     source = template_documents()[name]
     source["parameter_values"] = parameters or {}
@@ -28,7 +35,7 @@ def archive(root, name, *, flow=None, slope=2, multiplier=1.2, run_id=None, para
     flows = {}
     for sample in config["samples"]:
         step = document["steps"][sample["step"] - 1]
-        duration = step["trigger_params"]["duration_s"]
+        duration = collection_s(step, channel)
         events.extend([{"step_index": sample["step"] - 1, "step_name": step["name"], "state": "running",
                         "outcome": outcome, "monotonic": 100 + t}
                        for outcome, t in (("running", clock), ("completed", clock + duration))])
@@ -63,7 +70,7 @@ def archive(root, name, *, flow=None, slope=2, multiplier=1.2, run_id=None, para
     if name == "gravimetry":
         values["density_g_ml"] = 1.6
         for sample in config["samples"]:
-            duration = document["steps"][sample["step"] - 1]["trigger_params"]["duration_s"]
+            duration = collection_s(document["steps"][sample["step"] - 1], channel)
             values[sample["before"]] = 1000
             values[sample["after"]] = 1000 + flows[sample["step"]] * duration / 60 * multiplier * 1.6
     elif name == "dead_volume":
@@ -128,10 +135,14 @@ class MetrologyTests(unittest.TestCase):
             resolved = resolve(source)
             self.assertEqual(resolved["calculations"][0]["channel"], channel)
             self.assertTrue(all(set(s["sensor_setpoints"]) == {str(channel)} for s in resolved["steps"]))
-            self.assertAlmostEqual(sum(s["sensor_setpoints"][str(channel)] * s["trigger_params"]["duration_s"] / 60
-                                       for s in resolved["steps"]), 900)
+            collections = [s for s in resolved["steps"] if s["trigger_type"] == "volume"]
+            self.assertEqual([s["trigger_params"] for s in collections],
+                             [{"sensor_index": channel, "target_volume_ul": 100, "mode": "adaptive"}] * 9)
             self.assertEqual([s["sensor_setpoints"][str(channel)] for s in resolved["steps"][:3]],
                              [15, (15 + working) / 2, working])
+        source = template_documents()["gravimetry"]
+        source["parameter_values"].update(volume_mode="integral")
+        self.assertEqual({s["trigger_params"].get("mode") for s in resolve(source)["steps"]}, {"integral", None})
         directory = archive(self.tmp.name, "gravimetry")
         path = directory / "measurements.json"
         data = json.loads(path.read_text())
@@ -139,7 +150,7 @@ class MetrologyTests(unittest.TestCase):
         for sample in doc["calculations"][0]["samples"]:
             step = doc["steps"][sample["step"] - 1]
             q = step["sensor_setpoints"]["1"]
-            data["values"][sample["after"]] = 1000 + (q * 1.1 + 3) * step["trigger_params"]["duration_s"] / 60 * 1.6
+            data["values"][sample["after"]] = 1000 + (q * 1.1 + 3) * collection_s(step, 1) / 60 * 1.6
         write_json(path, data)
         result = calculate_run(directory, "gravimetry")["result"]
         self.assertEqual(result["status"], "usable")

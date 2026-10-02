@@ -13,7 +13,7 @@ def normalize_calculation(entry, steps, fields):
         raise ValueError("gravimetry requires type, channel, liquid, density and samples")
     if not isinstance(entry["liquid"], str) or not entry["liquid"].strip():
         raise ValueError("liquid must identify the measured oil")
-    expanded = sample_steps(entry, steps, mode="flow")
+    expanded = sample_steps(entry, steps, mode="flow", triggers=("time", "volume"))
     measurement_binding(fields, entry["density"], {"g/mL"})
     for sample in entry["samples"]:
         if set(sample) not in ({"step", "before", "after"}, {"step", "pass", "before", "after"}):
