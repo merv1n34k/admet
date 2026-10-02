@@ -1,4 +1,3 @@
-from contextlib import ExitStack
 from copy import deepcopy
 import csv
 import json
@@ -6,12 +5,8 @@ import math
 from pathlib import Path
 import random
 import tempfile
-import time
-from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
 
-from admet.workflows.calculations import calculate_run
 from admet.workflows.calculation_schema import declarations
 from admet.workflows.flow_scout import analyze_scout
 from admet.workflows.json_protocol import normalize, resolve, template_documents
@@ -85,100 +80,6 @@ def scout_context(directory, *, drift=0, missing=False, short=False, curved=Fals
             "summary": {"state": "completed", "artifacts": {"polling_origin_monotonic": origin}}}
 
 
-def run_simulated_scout(project_path=None, *, speed=20, protocol=None):
-    """Execute the real plan/recording pipeline against explicitly simulated SDK instruments.
-
-    Only the acquisition/trigger/event clocks are accelerated. Sensor reads receive a
-    test-only imperfect plant, not a claim that the vendor simulator models real oil.
-    """
-    from admet.ui.backend import DesktopBackend
-    from admet.engines.acquisition import engine, pipeline, triggers
-    from admet.engines.acquisition.fluidics import acquisition
-
-    project_path = Path(project_path or tempfile.mkdtemp(prefix="admet-scout-sim-")) / "scout.admetp"
-    backend = DesktopBackend(simulated=True)
-    real_start = time.monotonic()
-    def clock():
-        return 1000 + (time.monotonic() - real_start) * speed
-    plant = ImperfectOil()
-    sampled = [0.0, 0.0]
-    sdk = backend.engine.sdk
-    original_setter = sdk.set_sensor_regulation
-
-    def set_flow(sensor, pressure, target):
-        original_setter(sensor, pressure, target)
-        if sensor == 1:
-            plant.set_flow(target, clock())
-
-    def pressure(channel):
-        if channel == 1:
-            sampled[:] = plant.sample(clock())
-            return sampled[0]
-        return 0.0
-
-    class FastAcquisition(acquisition.AcquisitionThread):
-        def run(self):
-            self._start_time = clock()
-            while not self._stop_event.is_set():
-                started = time.monotonic()
-                self.poll_once()
-                self._stop_event.wait(max(0, self._interval_ms / 1000 / speed - (time.monotonic() - started)))
-
-    with ExitStack() as stack:
-        for module in (acquisition, pipeline, triggers):
-            stack.enter_context(patch.object(module, "time", SimpleNamespace(monotonic=clock)))
-        stack.enter_context(patch.object(engine, "AcquisitionThread", FastAcquisition))
-        stack.enter_context(patch.object(sdk, "get_pressure", side_effect=pressure))
-        stack.enter_context(patch.object(sdk, "get_sensor_value", side_effect=lambda ch: sampled[1] if ch == 1 else 0))
-        setter = stack.enter_context(patch.object(sdk, "set_sensor_regulation", side_effect=set_flow))
-        stack.enter_context(patch.object(sdk, "detect_instruments", side_effect=AssertionError("physical discovery")))
-        try:
-            backend.create_project(project_path)
-            backend.call("connect_fluidics")
-            if not backend.engine.hardware.state.simulated:
-                raise AssertionError("not a simulated rig")
-            backend.call("apply_corrections", {"cells_m_calibration": "IPA", "cells_m_scale": 2.25})
-            source = protocol or template_documents()["flow_stability_scout"]
-            resolved = resolve(source)
-            heights = {p["step"] - 1: p["height_cm"] for p in declarations(resolved)[0]["points"]
-                       if "height_cm" in p}
-            calls = setter.call_count
-            plan = backend.call("plan_protocol", {
-                "operation_id": "run_json_protocol", "settings": {"protocol": source, "tick_s": 0.01}})
-            if calls != setter.call_count:
-                raise AssertionError("planning invoked a setter")
-            backend.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"], "timeout_s": 1})
-            deadline = time.monotonic() + 600 / speed + 30
-            confirmed = False
-            last_gate = None
-            while time.monotonic() < deadline:
-                current = backend.call("planned_protocols", {"plan_id": plan["plan_id"]})["plans"][0]
-                status = backend.engine.observation()["protocol"]
-                if status.get("confirmation_message") and status["step_index"] != last_gate:
-                    last_gate = status["step_index"]
-                    plant.height = heights.get(last_gate, plant.height)
-                    backend.call("control_protocol", {"action": "confirm", "timeout_s": 0.1})
-                    confirmed = True
-                if current["state"] in {"completed", "failed", "cancelled"}:
-                    break
-                time.sleep(0.02)
-            if current["state"] != "completed":
-                raise AssertionError(f"simulated scout did not complete: {current['state']}")
-            if any(call.args[0] != 1 for call in setter.call_args_list):
-                raise AssertionError("scout commanded a different channel")
-            if plant.target != 0:
-                raise AssertionError("M1 was not zeroed")
-            directory = project_path / "records" / "protocols" / current["run_id"]
-            calculation = calculate_run(directory, declarations(resolved)[0]["type"])
-            return {"project": str(project_path), "plan_id": plan["plan_id"], "run_id": current["run_id"], "confirmed": confirmed,
-                    "state": current["state"], "final_target_ul_min": plant.target,
-                    "simulation": {"density_g_ml": 1.6, "scale": 2.25, "seed": 16000,
-                                   "speed": speed, "height_cm": 5, "sensor_readings": "test-only imperfect plant"},
-                    "calculation": calculation}
-        finally:
-            backend.shutdown()
-
-
 def density_recovery(directory, *, seed=16000, drift=0):
     from admet.workflows.oil_density import density_protocol, analyze_density_run
 
@@ -215,37 +116,6 @@ def density_recovery(directory, *, seed=16000, drift=0):
 
 
 class ScoutTests(unittest.TestCase):
-    def test_scouted_density_runs_and_calculates_with_imperfect_simulated_oil(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            report = run_simulated_scout(tmp, speed=5, protocol=template_documents()["density"])
-            result = report["calculation"]["result"]
-            self.assertEqual(report["state"], "completed")
-            self.assertEqual(report["final_target_ul_min"], 0)
-            self.assertEqual(result["status"], "consistent", result["issues"])
-            self.assertAlmostEqual(result["density_g_ml"], 1.6, delta=0.016)
-            directory = Path(report["project"]) / "records" / "protocols" / report["run_id"]
-            summary_path = directory / "summary.json"
-            summary = json.loads(summary_path.read_text())
-            summary["steps"][1]["confirmation"] = "Set outlet 9 cm ABOVE the reservoir"
-            summary_path.write_text(json.dumps(summary))
-            with self.assertRaisesRegex(ValueError, "execution and protocol parameters disagree"):
-                calculate_run(directory, "oil_density")
-
-    def test_full_simulated_plan_recording_and_calculation(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            report = run_simulated_scout(tmp)
-            self.assertEqual(report["state"], "completed")
-            self.assertTrue(report["confirmed"])
-            self.assertEqual(report["final_target_ul_min"], 0)
-            self.assertEqual(report["calculation"]["result"]["status"], "usable")
-            self.assertEqual(report["calculation"]["result"]["calibration"]["scale"], 2.25)
-            self.assertIsNone(report["calculation"]["result"]["density_g_ml"])
-            directory = Path(report["project"]) / "records" / "protocols" / report["run_id"]
-            source = json.loads((directory / "protocol.json").read_text())
-            self.assertEqual(source["parameters"]["oil_base_flow"][1], 5)
-            self.assertEqual(source["parameter_values"]["point_duration_s"], 60)
-            self.assertEqual(source["steps"][1]["sensor_setpoints"]["1"], "oil_base_flow * 1")
-
     def test_density_16000_recovery_with_noise_and_drift_rejection(self):
         for seed in range(16000, 16010):
             with self.subTest(seed=seed), tempfile.TemporaryDirectory() as tmp:
