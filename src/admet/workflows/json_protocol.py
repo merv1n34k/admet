@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 import re
 
+from admet.engines.acquisition.triggers import VOLUME_MODES
 from admet.workflows.calculation_schema import normalize_calculations, resolve_declarations
 
 
@@ -96,6 +97,10 @@ def interpolate(value, values):
                   lambda match: parameter_text(values[match[1]]) if match[1] in values else match[0], value)
 
 
+# Trigger settings that are text rather than numbers.
+TEXT_TRIGGER_PARAMS = ("message", "mode")
+
+
 def expression(value, values):
     if not isinstance(value, str):
         return value
@@ -160,7 +165,7 @@ def resolve(document):
                         target_key = interpolate(k, values) if key != "trigger_params" else k
                         if target_key in compiled:
                             raise ValueError("channel parameters resolve to duplicate targets")
-                        compiled[target_key] = interpolate(v, values) if k == "message" else expression(v, values)
+                        compiled[target_key] = interpolate(v, values) if k in TEXT_TRIGGER_PARAMS else expression(v, values)
                     step[key] = compiled
             for key in ("timeout_s", "repeat"):
                 if key in step:
@@ -268,6 +273,9 @@ def _normalize_resolved(document):
             if key == "message":
                 if not isinstance(value, str):
                     raise ValueError("confirmation message must be text")
+            elif key == "mode":
+                if value not in VOLUME_MODES:
+                    raise ValueError(f"volume mode must be one of: {', '.join(VOLUME_MODES)}")
             else:
                 number(value, key)
                 if key == "sensor_index" and (isinstance(value, bool) or not isinstance(value, int)):

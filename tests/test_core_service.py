@@ -192,6 +192,48 @@ class PathOwnershipTests(unittest.TestCase):
             self.assertEqual(engine.jobs[-1].metadata["workdir"], str(admet.project.path))
 
 
+class AdaptiveVolumeTests(unittest.TestCase):
+    """On the simulator, adaptive dosing lands closer to the target than integral."""
+
+    def dose(self, admet, mode, target=3.0):
+        engine = admet.engine("acquisition")
+        before = engine.latest_snapshot().volumes_ul[1]
+        doses = engine.tails.describe(1)["error_doses"]
+        admet.do("run_steps", {"steps": [{
+            "name": f"{mode} dose", "sensor_setpoints": {"1": 67.0}, "trigger_type": "volume",
+            "trigger_params": {"sensor_index": 1, "target_volume_ul": target, "mode": mode},
+            "on_complete": "zero"}], "tick_s": 0.05})
+        deadline = time.monotonic() + 12
+        while engine.tails.describe(1)["error_doses"] == doses:      # stopped and settled
+            self.assertLess(time.monotonic(), deadline, "the dose never settled")
+            time.sleep(0.05)
+        return engine.latest_snapshot().volumes_ul[1] - before
+
+    def test_adaptive_dosing_removes_the_tail_overshoot(self):
+        admet = Admet()
+        admet.do("connect_fluidics", {"simulated": True})
+        admet.do("apply_corrections")
+        self.addCleanup(admet.do, "disconnect_fluidics")
+        time.sleep(0.5)
+
+        integral = self.dose(admet, "integral") - 3.0     # also teaches the tail
+        adaptive = self.dose(admet, "adaptive") - 3.0
+
+        self.assertGreater(integral, 0.5)                 # ~0.8 s x 67 uL/min overshoot
+        self.assertLess(abs(adaptive), 0.25)
+        self.assertLess(abs(adaptive), abs(integral) / 3)
+
+        engine = admet.engine("acquisition")
+        cells = engine.channel_tails()[1]
+        self.assertIsNotNone(cells["tail_s"])
+        self.assertEqual(cells["error_doses"], 2)        # each dose's error is kept per channel
+        self.assertAlmostEqual(cells["error_last_pct"], adaptive / 3.0 * 100, delta=2)
+        admet.do("apply_corrections")                     # new corrections: learn again
+        cleared = engine.channel_tails()[1]
+        self.assertIsNone(cleared["tail_s"])
+        self.assertEqual(cleared["error_doses"], 0)
+
+
 class FluidicsOnlyRecordingTests(unittest.TestCase):
     """System validation must not need a camera pointed at the chip."""
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import statistics
 import threading
 import time
 from collections import deque
@@ -33,9 +34,54 @@ from admet.engines.acquisition.recording import (
     WriterFactory,
 )
 from admet.engines.acquisition.pipeline import PipelineEngine, ProtocolStep, build_pipeline_steps
+from admet.engines.acquisition.triggers import VolumeTrigger
 from admet.engines.acquisition.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES
 
 log = logging.getLogger(__name__)
+
+
+class TailTracker:
+    """How many seconds of flow each channel delivers after a stop, learned.
+
+    Each stop that ends a volume step at zero is measured: the volume that
+    arrives after the stop, divided by the flow at the stop, is k in seconds.
+    The median of the most recent stops is what adaptive volume steps use.
+    """
+
+    def __init__(self, keep: int = 10):
+        self._keep = keep
+        self._samples: dict[int, deque] = {}
+        self._errors: dict[int, deque] = {}
+        self._lock = threading.Lock()
+
+    def k(self, sensor: int) -> float | None:
+        with self._lock:
+            samples = self._samples.get(sensor)
+            return float(statistics.median(samples)) if samples else None
+
+    def record(self, sensor: int, k: float) -> None:
+        with self._lock:
+            self._samples.setdefault(sensor, deque(maxlen=self._keep)).append(k)
+
+    def record_error(self, sensor: int, error_pct: float) -> None:
+        """How far a settled dose landed from its target, in % of the target."""
+        with self._lock:
+            self._errors.setdefault(sensor, deque(maxlen=self._keep)).append(error_pct)
+
+    def describe(self, sensor: int) -> dict:
+        with self._lock:
+            samples = list(self._samples.get(sensor, ()))
+            errors = list(self._errors.get(sensor, ()))
+        return {"tail_s": float(statistics.median(samples)) if samples else None,
+                "tail_samples": len(samples),
+                "error_pct": float(statistics.mean(errors)) if errors else None,
+                "error_last_pct": errors[-1] if errors else None,
+                "error_doses": len(errors)}
+
+    def clear(self) -> None:
+        with self._lock:
+            self._samples.clear()
+            self._errors.clear()
 
 ActionHandler = Callable[[dict[str, Any]], dict[str, Any]]
 ActionSettingsPreparer = Callable[[RunJob, dict[str, Any]], dict[str, Any]]
@@ -150,6 +196,7 @@ class AcquisitionEngine:
         self._event_sequence = 0
         self._event_history: deque = deque(maxlen=2000)
         self._event_lock = threading.Lock()
+        self.tails = TailTracker()
         self._event_condition = threading.Condition(self._event_lock)
         self.data_queue: Queue = Queue(maxsize=50)
         self.pipeline_queue: Queue = Queue(maxsize=50)
@@ -396,6 +443,8 @@ class AcquisitionEngine:
             detected = updated.get(sensor.index)
             sensor.smin = getattr(detected, "smin", None)
             sensor.smax = getattr(detected, "smax", None)
+        # New corrections change what the sensors report, so learned tails restart.
+        self.tails.clear()
 
     def set_channel_flow(self, channel_index: int, flow_ul_min: float) -> None:
         self._require_fluidics_connected()
@@ -456,12 +505,18 @@ class AcquisitionEngine:
             channel.sensor_index: channel_index
             for channel_index, channel in enumerate(self.channel_manager.channels)
         }
+        for step in steps:
+            volume = _volume_trigger(step)
+            if volume is not None:
+                volume.tail_source = lambda sensor=volume.sensor_index: self.tails.k(sensor)
+
         def publish(event):
             try:
                 if on_event is not None:
                     on_event(event)
             finally:
                 self.record_event(event)
+                self._learn_tail(event, steps, sensor_to_channel)
 
         self._pipeline = self._pipeline_engine_factory(
             steps,
@@ -474,6 +529,61 @@ class AcquisitionEngine:
             on_event=publish,
         )
         self._pipeline.start()
+
+    def _learn_tail(self, event: Any, steps: list, sensor_to_channel: dict[int, int]) -> None:
+        """After a volume step stops at zero, measure the flow that still arrives."""
+        if str(event.outcome) != "completed" or not event.step_name:
+            return
+        if not 0 <= event.current_step < len(steps):
+            return
+        step = steps[event.current_step]
+        volume = _volume_trigger(step)
+        if volume is None or step.on_complete != "zero" or self._acquisition is None:
+            return
+        flows = volume._flows
+        flow_at_stop = statistics.median(flows) if flows else 0.0
+        channel_index = sensor_to_channel.get(volume.sensor_index)
+        if flow_at_stop < 1.0 or channel_index is None:
+            return
+        threading.Thread(
+            target=self._watch_tail,
+            args=(volume.sensor_index, channel_index, flow_at_stop,
+                  self._acquisition.get_volume(volume.sensor_index),
+                  volume._start_volume, volume._target_ul),
+            name="TailWatch", daemon=True,
+        ).start()
+
+    def _watch_tail(self, sensor: int, channel_index: int, flow_at_stop: float,
+                    volume_at_stop: float, volume_at_start: float | None = None, target_ul: float = 0.0,
+                    *, hold_s: float = 0.5, limit_s: float = 15.0) -> None:
+        band = max(0.5, 0.05 * flow_at_stop)
+        started = time.monotonic()
+        quiet_since = quiet_volume = None
+        while time.monotonic() - started < limit_s:
+            time.sleep(0.05)
+            acquisition = self._acquisition
+            channels = self.channel_manager.channels
+            if acquisition is None or channel_index >= len(channels):
+                return
+            channel = channels[channel_index]
+            if channel.active_setpoint or channel.pressure_setpoint:
+                return  # commanded again: the tail is now mixed with new flow
+            recent = [s.flows[sensor] for s in acquisition.recent_snapshots(3) if sensor < len(s.flows)]
+            if len(recent) < 3:
+                continue
+            if abs(statistics.median(recent)) <= band:
+                if quiet_since is None:
+                    quiet_since, quiet_volume = time.monotonic(), acquisition.get_volume(sensor)
+                if time.monotonic() - quiet_since >= hold_s:
+                    k = (quiet_volume - volume_at_stop) * 60.0 / flow_at_stop
+                    if 0.0 < k <= 10.0:
+                        self.tails.record(sensor, k)
+                    if volume_at_start is not None and target_ul > 0:
+                        delivered = quiet_volume - volume_at_start
+                        self.tails.record_error(sensor, (delivered - target_ul) / target_ul * 100.0)
+                    return
+            else:
+                quiet_since = quiet_volume = None
 
     def stop_pipeline(self) -> None:
         if self._pipeline and self._pipeline.is_alive():
@@ -781,6 +891,7 @@ class AcquisitionEngine:
                     "index": index,
                     "label": label,
                     "detected": _detected_channel(state, channel),
+                    **self.tails.describe(channel.sensor_index),
                     "mode": channel.mode,
                     "requested_flow_ul_min": channel.active_setpoint
                     if channel.mode == "flow"
@@ -863,6 +974,10 @@ class AcquisitionEngine:
         """Readings left out of the volume, as (elapsed_s, flow)."""
         return self._acquisition.rejected_readings(sensor_index) if self._acquisition else []
 
+    def channel_tails(self) -> list[dict[str, Any]]:
+        """Each channel's learned tail k, in channel order."""
+        return [self.tails.describe(channel.sensor_index) for channel in self.channel_manager.channels]
+
     def polling_started_monotonic(self) -> float:
         return self._acquisition.started_monotonic if self._acquisition else 0.0
 
@@ -909,6 +1024,11 @@ def create_engine(
         pipeline_engine_factory=pipeline_engine_factory,
         **kwargs,
     )
+
+
+def _volume_trigger(step: Any) -> VolumeTrigger | None:
+    trigger = getattr(step.trigger, "inner", step.trigger)
+    return trigger if isinstance(trigger, VolumeTrigger) else None
 
 
 def _detected_channel(state: Any, channel: Any) -> dict[str, Any]:

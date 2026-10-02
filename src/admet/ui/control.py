@@ -1937,6 +1937,9 @@ class ControlWindow(QMainWindow):
                 # Every reading, not just the newest: a one-reading spike
                 # between two refreshes must still reach the graph.
                 self.plot_panel.update_from_snapshots(drained)
+                tails = getattr(self.api.engine, "channel_tails", None)
+                if tails is not None:
+                    self.plot_panel.show_tails(tails())
             if self.channel_panel is not None:
                 self.channel_panel.update_modes(self._channel_states(), pipeline_paused=self._pipeline_paused())
                 self.channel_panel.update_from_snapshot(latest)
@@ -3187,6 +3190,28 @@ class PlotPanel(QWidget):
             plot.on_follow_change = self._follow.setChecked
         plots.addWidget(self._flow)
         root.addLayout(plots, stretch=1)
+        self._tails = QLabel()
+        self._tails.setObjectName("PlotCaption")
+        self._tails.setContentsMargins(Theme.SPACE_1, 0, Theme.SPACE_1, 0)
+        root.addWidget(self._tails)
+        self.show_tails([])
+
+    def show_tails(self, tails: list[dict]) -> None:
+        ks, errors, lines = [], [], []
+        for index, label in enumerate(_PLOT_LABELS):
+            tail = tails[index] if index < len(tails) else {}
+            k, error = tail.get("tail_s"), tail.get("error_pct")
+            ks.append(f"{k:.2f}" if k is not None else "–")
+            errors.append(f"{error:+.1f}" if error is not None else "–")
+            line = f"{label}: k " + (f"{k:.2f} s from {tail.get('tail_samples', 0)} stops" if k is not None else "not learned")
+            if error is not None:
+                line += (f"; error {error:+.1f}% mean of {tail.get('error_doses', 0)} doses,"
+                         f" last {tail.get('error_last_pct'):+.1f}%")
+            lines.append(line)
+        self._tails.setText(f"k, s  {' · '.join(ks)}     error, %  {' · '.join(errors)}")
+        self._tails.setToolTip("Tail k: flow still arriving after a stop. Adaptive volume steps stop "
+                               "k·flow early. Error: settled volume vs target, for volume steps that "
+                               "stop at zero. Applying corrections resets both.\n" + "\n".join(lines))
 
     def ingest_from_snapshot(self, snapshot) -> None:
         self._pressure.ingest(snapshot.elapsed_s, snapshot.pressures)

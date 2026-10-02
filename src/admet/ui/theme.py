@@ -291,6 +291,10 @@ QLabel#SchemeNode {{
 QLabel#SchemeLink {{
     color: {Theme.TEXT_MUTED};
 }}
+QLabel#PlotCaption {{
+    color: {Theme.TEXT_MUTED};
+    font-size: 10px;
+}}
 /* A tag, sized to its one word, with the reasoning set beside it. */
 QLabel#VerdictPass, QLabel#VerdictFail {{
     border-radius: {Theme.RADIUS}px;

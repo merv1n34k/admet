@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import statistics
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -94,23 +95,69 @@ class TimeTrigger(Trigger):
     def description(self) -> str:
         return f"Time: {self._duration_s:.0f}s"
 
+VOLUME_MODES = ("adaptive", "integral")
+
+
 class VolumeTrigger(Trigger):
-    def __init__(self, sensor_index: int, target_volume_ul: float):
+    """Stops a step once its volume is dispensed.
+
+    integral  stops when the counted volume reaches the target. Flow keeps
+              coming for a moment after the stop, so it overshoots by that tail.
+    adaptive  stops early by the tail it expects: when counted + k x flow / 60
+              reaches the target, k being how many seconds of flow the channel
+              delivers after a stop. With no k yet it behaves as integral.
+
+    k is TAIL_S when the protocol fixes it, otherwise whatever tail_source
+    returns -- the engine supplies the value it learned from earlier stops.
+    The flow is the median of the last three readings, so a single misread
+    cannot make the step stop early.
+    """
+
+    def __init__(self, sensor_index: int, target_volume_ul: float, mode: str = "adaptive",
+                 tail_s: float | None = None):
+        if mode not in VOLUME_MODES:
+            raise ValueError(f"volume mode must be one of {', '.join(VOLUME_MODES)}")
         self._sensor_index = sensor_index
         self._target_ul = target_volume_ul
+        self.mode = mode
+        self.tail_s = tail_s
+        self.tail_source = None
         self._start_volume: float | None = None
         self._last_dispensed = 0.0
+        self._flows: list[float] = []
+        self.tail_used_s: float | None = None
+
+    @property
+    def sensor_index(self) -> int:
+        return self._sensor_index
 
     def reset(self) -> None:
         self._start_volume = None
         self._last_dispensed = 0.0
+        self._flows = []
+        self.tail_used_s = None
+
+    def _tail(self) -> float | None:
+        if self.mode != "adaptive":
+            return None
+        if self.tail_s is not None:
+            return self.tail_s
+        return self.tail_source() if self.tail_source is not None else None
 
     def check(self, get_flow: SensorReader, get_volume: SensorReader) -> bool:
         current = get_volume(self._sensor_index)
         if self._start_volume is None:
             self._start_volume = current
         self._last_dispensed = current - self._start_volume
-        return self._last_dispensed >= self._target_ul
+        self._flows = (self._flows + [float(get_flow(self._sensor_index))])[-3:]
+        tail = self._tail()
+        expected_tail = 0.0
+        if tail is not None and tail > 0 and len(self._flows) == 3:
+            expected_tail = tail * max(0.0, statistics.median(self._flows)) / 60.0
+        done = self._last_dispensed + expected_tail >= self._target_ul
+        if done:
+            self.tail_used_s = tail if expected_tail else None
+        return done
 
     def progress(self) -> float:
         if self._target_ul <= 0:
@@ -118,7 +165,7 @@ class VolumeTrigger(Trigger):
         return min(1.0, self._last_dispensed / self._target_ul)
 
     def description(self) -> str:
-        return f"Volume: {self._target_ul:.0f} ul (sensor {self._sensor_index})"
+        return f"Volume: {self._target_ul:g} ul (sensor {self._sensor_index}, {self.mode})"
 
 class ThresholdTrigger(Trigger):
     def __init__(
