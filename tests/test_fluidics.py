@@ -218,29 +218,49 @@ class ChannelManagerTests(unittest.TestCase):
 
 
 class AcquisitionTests(unittest.TestCase):
-    def test_poll_once_integrates_volume_and_emits_snapshot(self):
-        sdk = FakeFluidicsSDK()
-        queue = Queue()
+    def _polled(self, sdk, readings, interval_s):
+        """Poll at a controlled pace, as a rig whose reads take interval_s."""
+        now = [100.0]
         acquisition = AcquisitionThread(
-            sdk,
-            pressure_count=2,
-            sensor_count=2,
-            data_queue=queue,
-            interval_ms=100,
-            stability_window_samples=2,
+            sdk, pressure_count=2, sensor_count=2, data_queue=Queue(maxsize=readings + 1),
+            interval_ms=100, stability_window_samples=2,
         )
+        snapshots = []
+        with patch("admet.engines.acquisition.fluidics.acquisition.time.monotonic",
+                   side_effect=lambda: now[0]):
+            for _ in range(readings):
+                snapshots.append(acquisition.poll_once())
+                now[0] += interval_s
+        return acquisition, snapshots
 
-        first = acquisition.poll_once()
-        second = acquisition.poll_once()
+    def test_poll_once_emits_snapshot(self):
+        sdk = FakeFluidicsSDK()
+        acquisition, (first, second) = self._polled(sdk, 2, 0.1)
 
         self.assertEqual(first.pressures, [10.0, 20.0])
         self.assertEqual(second.flows, [60.0, -30.0])
-        self.assertAlmostEqual(second.volumes_ul[0], 0.2)
-        self.assertAlmostEqual(second.volumes_ul[1], 0.1)
         self.assertTrue(second.stability)
-        self.assertEqual(queue.qsize(), 2)
-        self.assertAlmostEqual(acquisition.get_volume(0), 0.2)
         self.assertEqual(acquisition.get_flow(1), -30.0)
+
+    def test_volume_follows_real_elapsed_time_not_the_nominal_interval(self):
+        # Reads on the rig are ~110 ms apart; counting them as 100 ms made
+        # volume steps stop ~10 % late.
+        sdk = FakeFluidicsSDK()
+        acquisition, _ = self._polled(sdk, 92, 0.11)    # 91 intervals x 0.11 s = 10.01 s
+
+        self.assertAlmostEqual(acquisition.get_volume(0), 60.0 * 10.01 / 60, places=6)
+
+    def test_backflow_subtracts_from_volume(self):
+        sdk = FakeFluidicsSDK()
+        acquisition, _ = self._polled(sdk, 11, 0.1)     # 1 s at -30 uL/min
+
+        self.assertAlmostEqual(acquisition.get_volume(1), -0.5, places=6)
+
+    def test_the_first_reading_counts_no_volume(self):
+        sdk = FakeFluidicsSDK()
+        acquisition, (first,) = self._polled(sdk, 1, 0.1)
+
+        self.assertEqual(first.volumes_ul, [0.0, 0.0])
 
     def test_csv_logger_writes_header_and_rows(self):
         with tempfile.TemporaryDirectory() as tmpdir:

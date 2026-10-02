@@ -80,6 +80,9 @@ class AcquisitionThread(threading.Thread):
             deque(maxlen=stability_window_samples) for _ in range(sensor_count)
         ]
         self._volumes_ul: list[float] = [0.0] * sensor_count
+        # The previous reading, so each interval is integrated over the time
+        # that actually passed rather than the nominal polling interval.
+        self._previous_reading: tuple[float, list[float]] | None = None
         self._lock = threading.Lock()
 
         # Observation, kept apart from the queue. The queue is bounded and has
@@ -135,10 +138,14 @@ class AcquisitionThread(threading.Thread):
             self._flow_history[index].append(flow)
             self._stability_history[index].append(flow)
 
-        dt_min = (self._interval_ms / 1000.0) / 60.0
         with self._lock:
-            for index, flow in enumerate(flows):
-                self._volumes_ul[index] += abs(flow) * dt_min
+            if self._previous_reading is not None:
+                previous_s, previous_flows = self._previous_reading
+                dt_min = (elapsed_s - previous_s) / 60.0
+                for index, flow in enumerate(flows):
+                    # Trapezoid over the real interval; backflow subtracts.
+                    self._volumes_ul[index] += (previous_flows[index] + flow) / 2 * dt_min
+            self._previous_reading = (elapsed_s, list(flows))
             volumes_snapshot = list(self._volumes_ul)
 
         stability = [self._is_stable(history) for history in self._stability_history]
