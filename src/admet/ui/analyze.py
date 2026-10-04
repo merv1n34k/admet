@@ -621,15 +621,13 @@ class AnalyzeWorkflowView:
             if target is None:
                 ui.label("Select an OpenCV file.").classes("muted text-xs")
                 return
-            metadata = _video_metadata(self._resolve_media_path(target.source_path, target.project_path))
-            frame_max = max(int(metadata.get("frames") or 500) - 1, 1)
-            width_max = max(int(metadata.get("width") or 1280), 1)
-            height_max = max(int(metadata.get("height") or 720), 1)
-            preview = _read_video_frame(
-                self._resolve_media_path(target.source_path, target.project_path),
-                _preview_frame_index(target),
-            )
-            preview_ok = not bool(preview["error"])
+            source = self._resolve_media_path(target.source_path, target.project_path)
+            frames, width, height = _video_size(source)
+            # The matrix row holds the real values; these controls only show and edit them,
+            # and never change them on their own. Odd combinations are pointed out instead.
+            start = _row_int(target, "start_frame", 0)
+            end = _row_int(target, "end_frame", 0) or frames
+            preview = _read_video_frame(source, _preview_frame_index(target))
             with ui.column().classes("w-full gap-2"):
                 ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
                 ui.label(_compact_path(target.source_path)).classes("muted text-xs path-label").props(
@@ -638,73 +636,83 @@ class AnalyzeWorkflowView:
                 self._refs["opencv_preview"] = ui.html(self._opencv_preview_html(target, preview)).classes(
                     "opencv-preview w-full"
                 )
-                if not preview_ok:
+                if preview["error"]:
                     ui.label("Preview unavailable. Relocate the source before editing crop/frame values.").classes(
                         "editor-note"
                     )
-                self._slider_editor(target, "preview_frame", "Preview frame", 0, frame_max, 1, 0)
+                for warning in _video_setting_warnings(target, frames, width, height):
+                    ui.label(warning).classes("editor-note editor-warning")
+                low, high = (start, end - 1) if end > start else (0, frames - 1)
+                self._slider_editor(target, "preview_frame", "Preview frame", low, high, default=low)
                 with ui.element("div").classes("editor-slider-grid w-full"):
-                    self._slider_editor(target, "start_frame", "Start frame", 0, frame_max, 1, 0)
-                    self._slider_editor(target, "end_frame", "End frame", 0, frame_max + 1, 1, frame_max)
-                    self._slider_editor(target, "roi_x", "ROI X", 0, width_max, 1, 0)
-                    self._slider_editor(target, "roi_y", "ROI Y", 0, height_max, 1, 0)
-                    self._slider_editor(target, "roi_width", "ROI W", 0, width_max, 1, 0)
-                    self._slider_editor(target, "roi_height", "ROI H", 0, height_max, 1, 0)
+                    self._slider_editor(target, "start_frame", "Start frame", 0, frames - 1)
+                    self._slider_editor(target, "end_frame", "End frame (exclusive)", 1, frames, default=frames)
+                    self._slider_editor(target, "roi_x", "ROI X", 0, width - 1)
+                    self._slider_editor(target, "roi_y", "ROI Y", 0, height - 1)
+                    self._slider_editor(target, "roi_width", "ROI W (0 = full)", 0, width)
+                    self._slider_editor(target, "roi_height", "ROI H (0 = full)", 0, height)
 
-    def _slider_editor(
-        self,
-        row: MatrixRow,
-        key: str,
-        label: str,
-        minimum: float,
-        maximum: float,
-        step: float,
-        default: Any,
-    ) -> None:
+    def _slider_editor(self, row: MatrixRow, key: str, label: str, minimum: int, maximum: int,
+                       *, default: int | None = None) -> None:
+        """A slider and a number box for one whole-number setting of a matrix row.
+
+        Both edit row.settings, which the matrix table shows too; after an edit the
+        editor is drawn again from the row, so its ranges follow the new values.
+        """
         from nicegui import ui
 
-        value = _row_float(row, key, default)
-        value = max(minimum, min(maximum, value))
-        if step >= 1:
-            value = int(value)
-        with ui.column().classes("slider-field w-full gap-0"):
-            with ui.row().classes("slider-label-row w-full"):
-                ui.label(label).classes("muted text-xs font-semibold")
-                value_label = ui.label(_format_slider_value(value, step)).classes("slider-value")
+        stored = _row_int(row, key, minimum if default is None else default)
+        # The slider always reaches the stored value, even one outside the usual range.
+        minimum, maximum = min(int(minimum), stored), max(int(maximum), int(minimum), stored)
+        value = stored
+        last_preview = {"t": -1.0}
 
-            # Each drag tick updates the label + row object (cheap) and refreshes the
-            # preview live, but throttled to ~8x/sec so we get smooth scrubbing without
-            # the per-tick full-stage-sync + video-decode flood that used to lag/crash.
-            # Only the preview is synced here (not the whole stage), and frame decodes
-            # are lru-cached, so this stays light.
-            last_preview = {"t": -1.0}
-
-            def update_slider(event: Any, item: MatrixRow = row, name: str = key, use_int: bool = step >= 1) -> None:
-                number = _numeric(event.value)
-                if number is None:
-                    number = 0
-                value_label.set_text(_format_slider_value(number, step))
-                item.settings[name] = int(number) if use_int else float(number)
-                self.selected_uid = item.uid
-                now = time.monotonic()
-                if now - last_preview["t"] >= 0.12:
-                    last_preview["t"] = now
-                    self._sync_previews()
-
-            def commit_slider(_event: Any, item: MatrixRow = row) -> None:
-                last_preview["t"] = time.monotonic()
-                self.selected_uid = item.uid
+        def scrub(event: Any) -> None:
+            # While dragging: show the frame live (throttled), commit on release.
+            number = int(_numeric(event.value) or 0)
+            box.set_value(number)
+            row.settings[key] = number
+            self.selected_uid = row.uid
+            now = time.monotonic()
+            if now - last_preview["t"] >= 0.12:
+                last_preview["t"] = now
                 self._sync_previews()
-                self._save_setup()
 
-            slider = ui.slider(
-                min=minimum,
-                max=maximum,
-                step=step,
-                value=value,
-                on_change=update_slider,
-            ).props("dense").classes("w-full")
-            slider.on("change", commit_slider)
+        def commit(number: Any) -> None:
+            number = _numeric(number)
+            if number is None:
+                box.set_value(row.settings.get(key, value))
+                return
+            row.settings[key] = max(int(minimum), min(maximum, int(round(number))))
+            self.selected_uid = row.uid
+            self._settings_edited()
+
+        with ui.column().classes("slider-field w-full gap-0"):
+            with ui.row().classes("slider-label-row w-full items-center no-wrap"):
+                ui.label(label).classes("muted text-xs font-semibold grow")
+                box = ui.number(value=value, min=minimum, max=maximum, step=1, format="%d").props(
+                    "dense borderless input-class=text-right").classes("slider-number")
+                box.on("blur", lambda _event: commit(box.value))
+                box.on("keydown.enter", lambda _event: commit(box.value))
+            slider = ui.slider(min=minimum, max=maximum, step=1, value=value, on_change=scrub).props(
+                "dense").classes("w-full")
+            slider.on("change", lambda _event: commit(slider.value))
+
+    def _settings_edited(self) -> None:
+        """A setting changed in the editor or the table: tidy it, redraw the editor, show it in the table, save."""
+        self._remount_editor()
+        self._sync_tables()
+        self._save_setup()
+
+    def _remount_editor(self) -> None:
+        body = self._refs.get("main_body")
+        if body is None:
+            return
+        body.clear()
+        for key in ("opencv_preview", "cellpose_preview"):
+            self._refs.pop(key, None)
+        with body:
+            self._render_editor()
 
     def _opencv_preview_html(self, target: MatrixRow, frame: dict[str, Any] | None = None) -> str:
         source = self._resolve_media_path(target.source_path, target.project_path)
@@ -778,7 +786,7 @@ class AnalyzeWorkflowView:
             with ui.element("div").classes("media-editor-grid w-full"):
                 with ui.column().classes("gap-2"):
                     self._refs["cellpose_preview"] = ui.html(self._cellpose_preview_html(target)).classes("w-full")
-                    self._slider_editor(target, "image_frame", "Image frame", 1, image_max, 1, 1)
+                    self._slider_editor(target, "image_frame", "Image frame", 1, image_max)
                 with ui.column().classes("gap-2"):
                     ui.label(target.sample_id or Path(target.source_path).stem).classes("text-sm font-semibold")
                     ui.label(target.source_path).classes("muted text-xs path-label")
@@ -1498,7 +1506,8 @@ class AnalyzeWorkflowView:
         if kind is None:
             return
         row.settings[field] = cast_matrix_value(kind, value)
-        self._save_setup()
+        self.selected_uid = row.uid
+        self._settings_edited()
 
     def _project_options(self) -> dict[str, str]:
         return {str(ref.path): project_ref_label(ref) for ref in self.project_refs}
@@ -2254,7 +2263,45 @@ def _viewer_style(width: int, height: int) -> str:
 
 
 def _preview_frame_index(row: MatrixRow) -> int:
-    return max(0, _row_int(row, "start_frame", 0) + _row_int(row, "preview_frame", 0))
+    """The frame shown: an absolute frame number kept between Start and End."""
+    start = _row_int(row, "start_frame", 0)
+    frame = max(_row_int(row, "preview_frame", start), start)
+    end = _row_int(row, "end_frame", 0)
+    return min(frame, end - 1) if end > start else frame
+
+
+def _video_setting_warnings(row: MatrixRow, frames: int, width: int, height: int) -> list[str]:
+    """What is odd about a row's frame and crop values, said plainly; nothing is changed."""
+    warnings = []
+    start = _row_int(row, "start_frame", 0)
+    end = _row_int(row, "end_frame", 0) or frames
+    if start >= frames:
+        warnings.append(f"Start frame {start} is past the video's last frame ({frames - 1}).")
+    if end <= start:
+        warnings.append(f"End frame {end} is not after Start frame {start}: no frames would be analysed. "
+                        f"End is exclusive, so {end} frames from {start} means End {start + end}.")
+    elif end > frames:
+        warnings.append(f"End frame {end} is past the video's {frames} frames; analysis stops at {frames}.")
+    x, y = _row_int(row, "roi_x", 0), _row_int(row, "roi_y", 0)
+    w, h = _row_int(row, "roi_width", 0), _row_int(row, "roi_height", 0)
+    if x + w > width or y + h > height:
+        warnings.append(f"The crop {x},{y} {w}×{h} runs past the {width}×{height} frame.")
+    return warnings
+
+
+@lru_cache(maxsize=64)
+def _video_size_cached(path: str, _size: int, _mtime: float) -> tuple[int, int, int]:
+    metadata = _video_metadata(Path(path))
+    return (max(int(metadata["frames"]), 1), max(int(metadata["width"]), 1), max(int(metadata["height"]), 1))
+
+
+def _video_size(path: Path) -> tuple[int, int, int]:
+    """Frame count, width and height, read once per file version."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return _video_size_cached(str(path), -1, 0.0)
+    return _video_size_cached(str(path), stat.st_size, stat.st_mtime)
 
 
 def _compact_path(value: str, *, max_parts: int = 4) -> str:
@@ -2320,13 +2367,6 @@ def _numeric(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _format_slider_value(value: Any, step: float) -> str:
-    number = _numeric(value) or 0.0
-    if step >= 1:
-        return str(int(number))
-    return f"{number:.2f}".rstrip("0").rstrip(".")
 
 
 def _is_number(value: Any) -> bool:
@@ -2750,6 +2790,15 @@ def _style() -> str:
       align-items: center;
       justify-content: space-between;
       gap: 8px;
+    }
+    .editor-warning {
+      border-left-color: var(--warning);
+      color: var(--text);
+    }
+    .slider-number {
+      width: 96px;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 12px;
     }
     .slider-value {
       color: var(--text);
