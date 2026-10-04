@@ -197,6 +197,8 @@ class PipelineEngine(threading.Thread):
         self._pause_event.set()
         self._skip_event = threading.Event()
         self._confirm_event = threading.Event()
+        self._flowing_step: PipelineStep | None = None
+        self._flowing_lock = threading.Lock()
 
     @property
     def state(self) -> PipelineState:
@@ -221,6 +223,10 @@ class PipelineEngine(threading.Thread):
     def resume(self) -> None:
         if self._state == PipelineState.PAUSED:
             self._channel_manager.pipeline_resume_all()
+            # Pausing set the channels to zero; the step resumes where it was.
+            with self._flowing_lock:
+                if self._flowing_step is not None:
+                    self._apply_setpoints(self._flowing_step)
             self._pause_event.set()
             self._state = PipelineState.RUNNING
             self._emit_event()
@@ -332,6 +338,20 @@ class PipelineEngine(threading.Thread):
                 self._step_start_volumes[sensor_index] = self._acquisition.get_volume(sensor_index)
 
         self._emit_event()
+        with self._flowing_lock:
+            self._apply_setpoints(step)
+            self._flowing_step = step
+        try:
+            self._run_trigger(step)
+        finally:
+            self._stop_flowing()
+
+    def _stop_flowing(self) -> None:
+        # Before the step's end is applied, so a resume never restarts a finished step.
+        with self._flowing_lock:
+            self._flowing_step = None
+
+    def _apply_setpoints(self, step: PipelineStep) -> None:
         for sensor_index, setpoint in step.sensor_setpoints.items():
             channel_index = self._sensor_to_channel.get(sensor_index)
             if channel_index is not None:
@@ -339,9 +359,14 @@ class PipelineEngine(threading.Thread):
         for channel_index, pressure_mbar in step.pressure_setpoints.items():
             self._channel_manager.pipeline_set_pressure(channel_index, pressure_mbar)
 
+    def _run_trigger(self, step: PipelineStep) -> None:
         step.trigger.reset()
         while not self._stop_event.is_set() and not self._skip_event.is_set():
+            waited_from = time.monotonic()
             self._pause_event.wait()
+            paused_s = time.monotonic() - waited_from
+            if paused_s > 0.001:
+                step.trigger.shift(paused_s)
             if self._stop_event.is_set():
                 break
 
@@ -357,7 +382,8 @@ class PipelineEngine(threading.Thread):
                 # the two happened is the difference between a settle and a
                 # timeout wearing a settle's clothes.
                 timed_out = bool(getattr(step.trigger, "timed_out", False))
-                if timed_out and isinstance(step.trigger, BoundedTrigger):
+                self._stop_flowing()
+                if isinstance(step.trigger, BoundedTrigger) and step.trigger.expired:
                     self._channel_manager.pipeline_zero_all()
                     raise TimeoutError(f"step {step.name} timed out")
                 step.status = StepStatus.TIMED_OUT if timed_out else StepStatus.COMPLETED

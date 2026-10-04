@@ -44,21 +44,32 @@ class Trigger(ABC):
     def description(self) -> str:
         ...
 
+    def shift(self, seconds: float) -> None:
+        """Leave out time the protocol spent paused: nothing flowed then."""
+
 class BoundedTrigger(Trigger):
     def __init__(self, inner: Trigger, timeout_s: float):
         self.inner = inner
         self.timeout_s = timeout_s
         self.started = 0.0
         self.timed_out = False
+        # The step's own limit ran out -- unlike the inner trigger giving up,
+        # which is a result the step records.
+        self.expired = False
 
     def reset(self):
         self.started = time.monotonic()
-        self.timed_out = False
+        self.timed_out = self.expired = False
         self.inner.reset()
 
+    def shift(self, seconds):
+        self.started += seconds
+        self.inner.shift(seconds)
+
     def check(self, get_flow, get_volume):
-        self.timed_out = time.monotonic() - self.started >= self.timeout_s
-        if self.timed_out:
+        self.expired = time.monotonic() - self.started >= self.timeout_s
+        if self.expired:
+            self.timed_out = True
             return True
         done = self.inner.check(get_flow, get_volume)
         self.timed_out = bool(getattr(self.inner, "timed_out", False))
@@ -78,6 +89,10 @@ class TimeTrigger(Trigger):
 
     def reset(self) -> None:
         self._start_time = time.monotonic()
+
+    def shift(self, seconds: float) -> None:
+        if self._start_time is not None:
+            self._start_time += seconds
 
     def check(self, get_flow: SensorReader, get_volume: SensorReader) -> bool:
         if self._start_time is None:
@@ -184,6 +199,9 @@ class ThresholdTrigger(Trigger):
     def reset(self) -> None:
         self._stable_since = None
 
+    def shift(self, seconds: float) -> None:
+        self._stable_since = None  # the flow stopped while paused; it must settle again
+
     def check(self, get_flow: SensorReader, get_volume: SensorReader) -> bool:
         flow = get_flow(self._sensor_index)
         low = self._target * (1 - self._tolerance_pct / 100)
@@ -281,6 +299,11 @@ class StabilityTrigger(Trigger):
         self._samples = []
         self._started = 0.0
         self.timed_out = False
+
+    def shift(self, seconds: float) -> None:
+        if self._started:
+            self._started += seconds
+        self._samples = []  # readings from before the pause say nothing about now
 
     def check(self, get_flow: SensorReader, get_volume: SensorReader) -> bool:
         now = time.monotonic()

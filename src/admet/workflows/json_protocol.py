@@ -291,6 +291,8 @@ def _normalize_resolved(document):
         if "timeout_s" in step:
             if number(step["timeout_s"], "timeout_s") <= 0:
                 raise ValueError("timeout_s must be positive")
+            if trigger == "time" and step["timeout_s"] <= number(params.get("duration_s", 0), "duration_s"):
+                raise ValueError("a time step's timeout_s must be longer than its duration_s")
         step.setdefault("on_complete", "zero")
         try:
             _step_from(step, index)

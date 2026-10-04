@@ -131,6 +131,14 @@ class JsonProtocolTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 normalize({**document, **change})
 
+    def test_a_time_step_timeout_must_outlast_its_duration(self):
+        document = deepcopy(DOCUMENT)
+        document["steps"][0].update(trigger_type="time", trigger_params={"duration_s": 60}, timeout_s=60)
+        with self.assertRaisesRegex(ValueError, "longer than its duration"):
+            normalize(document)
+        document["steps"][0]["timeout_s"] = 70
+        normalize(document)
+
     def test_invalid_settings_are_refused(self):
         for field, value in (("timeout_s", -1), ("repeat", 1.5), ("unknown", 1),
                              ("sensor_setpoints", {"-1": 10}),

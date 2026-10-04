@@ -10,7 +10,9 @@ from admet.engines.acquisition.pipeline import (
     StepStatus,
 )
 from admet.engines.acquisition.triggers import (
+    BoundedTrigger,
     ConfirmationTrigger,
+    StabilityTrigger,
     TimeTrigger,
 )
 
@@ -169,6 +171,53 @@ class PipelineEngineTests(unittest.TestCase):
         engine.resume()
         engine.join(timeout=1.0)
         self.assertIn(("set", 0, 5.0), manager.calls)
+
+    def test_resume_puts_the_step_flow_back(self):
+        manager = FakeChannelManager()
+        events: Queue[PipelineEvent] = Queue()
+        step = PipelineStep("dose", {0: 5.0}, TimeTrigger(0.3), on_complete="zero")
+        engine = PipelineEngine([step], manager, FakeAcquisition(), events, {0: 2}, tick_s=0.001)
+        engine.start()
+        time.sleep(0.05)
+
+        engine.pause()
+        engine.resume()
+        engine.join(timeout=2.0)
+
+        sets = [call for call in manager.calls if call[0] == "set"]
+        self.assertEqual(sets, [("set", 2, 5.0), ("set", 2, 5.0), ("set", 2, 0.0)])
+        self.assertEqual(step.status, StepStatus.COMPLETED)
+
+    def test_a_pause_does_not_count_against_the_step(self):
+        manager = FakeChannelManager()
+        events: Queue[PipelineEvent] = Queue()
+        step = PipelineStep("timed", {0: 5.0}, BoundedTrigger(TimeTrigger(0.2), 0.4), on_complete="zero")
+        engine = PipelineEngine([step], manager, FakeAcquisition(), events, {0: 2}, tick_s=0.001)
+        started = time.monotonic()
+        engine.start()
+        time.sleep(0.05)
+
+        engine.pause()
+        time.sleep(0.5)                                   # longer than the step's whole limit
+        engine.resume()
+        engine.join(timeout=2.0)
+
+        self.assertEqual(engine.state, PipelineState.COMPLETED)
+        self.assertEqual(step.status, StepStatus.COMPLETED)
+        self.assertGreaterEqual(time.monotonic() - started, 0.7)   # 0.2 s of flow plus the pause
+
+    def test_a_stability_step_that_gives_up_is_recorded_not_fatal(self):
+        manager = FakeChannelManager()
+        events: Queue[PipelineEvent] = Queue()
+        acquisition = FakeAcquisition()
+        trigger = BoundedTrigger(StabilityTrigger(0, window_s=1.0, timeout_s=0.05), 5.0)
+        step = PipelineStep("settle", {0: 5.0}, trigger)
+        engine = PipelineEngine([step], manager, acquisition, events, {0: 2}, tick_s=0.001)
+        engine.start()
+        engine.join(timeout=2.0)
+
+        self.assertEqual(engine.state, PipelineState.COMPLETED)
+        self.assertEqual(step.status, StepStatus.TIMED_OUT)
 
     def test_confirmation_trigger_needs_exactly_one_operator_answer(self):
         manager = FakeChannelManager()
