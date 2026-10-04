@@ -180,6 +180,63 @@ class AnalyzeBatchRunnerTests(unittest.TestCase):
         self.assertEqual(metadata["runs"][0]["metadata"]["jobs"], [])
 
 
+class StopTests(unittest.TestCase):
+    """Ctrl+C on the server: finish the file in hand, or stop now, and keep finished work."""
+
+    def batch(self, root, engine, stop):
+        registry = EngineRegistry()
+        registry.register("opencv", lambda: engine)
+        sources = []
+        for name in ("a", "b"):
+            source = root / f"{name}.avi"
+            source.write_bytes(name.encode())
+            sources.append(source)
+        targets = tuple(AnalyzeTarget(project_path=root / "study.admetp", source_path=source,
+                                      engine="opencv", sample_id=source.stem) for source in sources)
+        return AnalyzeBatchRunner(registry, cache_root=root / "cache").run(targets, stop=stop)
+
+    def test_stop_after_the_current_file_saves_it_and_skips_the_rest(self):
+        from admet.workflows.analyze_runner import AnalysisStop
+
+        stop = AnalysisStop()
+        engine = FakeAnalyzeEngine("opencv")
+        original = engine.run
+        engine.run = lambda job: (stop.after_file.set(), original(job))[1]   # Ctrl+C during file a
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = self.batch(Path(tmpdir), engine, stop)
+            raw = report.projects[0].raw_path.read_text(encoding="utf-8")
+
+        self.assertEqual([job.status for job in report.jobs], ["complete", "stopped"])
+        self.assertIn('"item_id": "a"', raw)
+        self.assertNotIn('"item_id": "b"', raw)
+
+    def test_stop_now_abandons_the_file_in_hand_and_resumes_from_cache(self):
+        from admet.workflows.analyze_runner import AnalysisStop
+
+        stop = AnalysisStop()
+        engine = FakeAnalyzeEngine("opencv")
+        original = engine.run
+
+        def run(job):
+            if job.metadata["item_id"] == "b":
+                stop.now.set()                     # second Ctrl+C while file b runs
+                job.progress(50, "half way")
+            return original(job)
+
+        engine.run = run
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            report = self.batch(root, engine, stop)
+            self.assertEqual([job.status for job in report.jobs], ["complete", "stopped"])
+            self.assertEqual(len(list((root / "cache").rglob("result.json"))), 1)   # b left unfinished
+            self.assertIn('"item_id": "a"', report.projects[0].raw_path.read_text(encoding="utf-8"))
+
+            engine.run = original
+            resumed = self.batch(root, engine, AnalysisStop())
+
+        self.assertEqual([job.status for job in resumed.jobs], ["cached", "complete"])
+
+
 class FakeAnalyzeEngine:
     name = "Fake Analyze"
     settings = ParamSchema(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from typing import Any
@@ -75,8 +76,38 @@ def run_analyze_server(host: str, port: int, *, projects: str | None = None) -> 
         workflow = create_analyze_workflow()
         render_workflow(workflow, workflow.initial_state(), registry=registry)
 
-    ui.run(root=root, host=host, port=port, reload=False, show=False, title="admet analyze")
+    try:
+        ui.run(root=root, host=host, port=port, reload=False, show=False, title="admet analyze")
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # Ctrl+C is how the server is meant to be stopped, not a failure.
+        pass
+    _finish_running_analyses()
+    print("admet analyze stopped")
     return 0
+
+
+def _finish_running_analyses() -> None:
+    """Let analyses that are running finish their current file and save, before the process ends.
+
+    A second Ctrl+C stops them at once; files already finished are still saved.
+    """
+    import time
+
+    from admet.workflows.analyze_runner import SHUTDOWN, running_batches
+
+    SHUTDOWN.after_file.set()
+    if not running_batches():
+        return
+    print(f"waiting for {running_batches()} running analysis to finish its current file and save; "
+          "Ctrl+C again to stop now")
+    while running_batches():
+        try:
+            time.sleep(0.2)
+        except KeyboardInterrupt:
+            if SHUTDOWN.now.is_set():
+                raise
+            SHUTDOWN.now.set()
+            print("stopping now; saving the files already finished")
 
 
 def _attempt(call: Any) -> int:

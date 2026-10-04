@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,37 @@ from admet.core.engine import EngineRegistry, action_spec
 from admet.core.project import ProjectStore
 from admet.core.run import JsonlRunSink, RunJob, RunResult
 from admet.core.session import content_cache_key, session_path, write_atomic
+
+
+class AnalysisStop:
+    """How running analyses are asked to stop: after the file in hand, or at once.
+
+    A file stopped at once leaves no result.json in its cache, so it reads as not
+    done and is simply analysed again on the next run. Files already finished are
+    still written into the project either way.
+    """
+
+    def __init__(self) -> None:
+        self.after_file = threading.Event()
+        self.now = threading.Event()
+
+    def requested(self) -> bool:
+        return self.after_file.is_set() or self.now.is_set()
+
+
+class AnalysisStopped(BaseException):
+    """Raised from an engine's progress report; BaseException so a broad except in an engine cannot swallow it."""
+
+
+# Set by the analysis server when it is shut down (Ctrl+C).
+SHUTDOWN = AnalysisStop()
+_running = 0
+_running_lock = threading.Lock()
+
+
+def running_batches() -> int:
+    with _running_lock:
+        return _running
 
 
 VIDEO_SUFFIXES = {".avi", ".mp4", ".mov", ".mkv"}
@@ -74,8 +106,23 @@ class AnalyzeBatchRunner:
         *,
         on_progress: Callable[[float], None] | None = None,
         on_file_progress: Callable[[float], None] | None = None,
+        stop: AnalysisStop | None = None,
     ) -> AnalyzeBatchReport:
-        """Run every target; ON_PROGRESS gets the batch percent, ON_FILE_PROGRESS the current file's."""
+        """Run every target; ON_PROGRESS gets the batch percent, ON_FILE_PROGRESS the current file's.
+
+        STOP (by default the server's shutdown request) ends the batch early; see AnalysisStop.
+        """
+        global _running
+        stop = stop or SHUTDOWN
+        with _running_lock:
+            _running += 1
+        try:
+            return self._run(targets, on_progress=on_progress, on_file_progress=on_file_progress, stop=stop)
+        finally:
+            with _running_lock:
+                _running -= 1
+
+    def _run(self, targets, *, on_progress, on_file_progress, stop: AnalysisStop) -> AnalyzeBatchReport:
         grouped: dict[Path, list[AnalyzeTarget]] = {}
         for target in targets:
             grouped.setdefault(session_path(target.project_path), []).append(target)
@@ -92,6 +139,8 @@ class AnalyzeBatchRunner:
                 on_file_progress(0.0)
 
             def report(percent: int, message: str = "") -> None:
+                if stop.now.is_set():
+                    raise AnalysisStopped()
                 percent = max(0.0, min(100.0, float(percent)))
                 if on_file_progress is not None:
                     on_file_progress(percent)
@@ -102,7 +151,7 @@ class AnalyzeBatchRunner:
 
         reports = []
         for project_path, project_targets in grouped.items():
-            reports.append(self._run_project(project_path, project_targets, begin_file=begin_file))
+            reports.append(self._run_project(project_path, project_targets, begin_file=begin_file, stop=stop))
         if on_progress is not None:
             on_progress(100.0)
         return AnalyzeBatchReport(projects=tuple(reports))
@@ -113,6 +162,7 @@ class AnalyzeBatchRunner:
         targets: list[AnalyzeTarget],
         *,
         begin_file: Callable[[], Callable[[int, str], None]] | None = None,
+        stop: AnalysisStop | None = None,
     ) -> AnalyzeProjectReport:
         store = _open_project(project_path)
         run_target = store.analysis_run_target("analysis")
@@ -122,9 +172,12 @@ class AnalyzeBatchRunner:
 
         with _RowBuffer() as sink:
             for index, target in enumerate(targets, start=1):
+                sample_id = target.sample_id or target.source_path.stem
+                if stop is not None and stop.requested():
+                    job_reports.append(_stopped_report(run_target.run_id, index, target, sample_id))
+                    continue
                 file_progress = begin_file() if begin_file is not None else None
                 cache_policy = _cache_policy(target.cache_policy)
-                sample_id = target.sample_id or target.source_path.stem
                 try:
                     engine_id = target.engine or infer_engine(target.source_path)
                 except ValueError as exc:
@@ -221,30 +274,35 @@ class AnalyzeBatchRunner:
                     )
                 else:
                     cache_dir.mkdir(parents=True, exist_ok=True)
-                    with JsonlRunSink(rows_path) as target_sink:
-                        result = engine.run(
-                            RunJob(
-                                id=job_id,
-                                engine=engine_id,
-                                action="run_analysis",
-                                settings=action_settings,
-                                inputs=_job_inputs(engine_id, target.source_path),
-                                cache_dir=cache_dir,
-                                sink=target_sink,
-                                progress=file_progress,
-                                metadata={
-                                    "session_id": store.session.project_id,
-                                    "workdir": str(store.path),
-                                    "project_id": store.session.project_id,
-                                    "run_id": run_target.run_id,
-                                    "sample_id": sample_id,
-                                    "file_id": file.id,
-                                    "item_id": sample_id,
-                                    "cache_policy": cache_policy,
-                                },
+                    try:
+                        with JsonlRunSink(rows_path) as target_sink:
+                            result = engine.run(
+                                RunJob(
+                                    id=job_id,
+                                    engine=engine_id,
+                                    action="run_analysis",
+                                    settings=action_settings,
+                                    inputs=_job_inputs(engine_id, target.source_path),
+                                    cache_dir=cache_dir,
+                                    sink=target_sink,
+                                    progress=file_progress,
+                                    metadata={
+                                        "session_id": store.session.project_id,
+                                        "workdir": str(store.path),
+                                        "project_id": store.session.project_id,
+                                        "run_id": run_target.run_id,
+                                        "sample_id": sample_id,
+                                        "file_id": file.id,
+                                        "item_id": sample_id,
+                                        "cache_policy": cache_policy,
+                                    },
+                                )
                             )
-                        )
-                    _write_json(result_path, dict(result.metadata))
+                        _write_json(result_path, dict(result.metadata))
+                    except AnalysisStopped:
+                        # Stopped mid-file: no result.json, so the cache reads as not done.
+                        job_reports.append(_stopped_report(run_target.run_id, index, target, sample_id))
+                        continue
                     _replay_rows(rows_path, sink, job_id=job_id, item_id=sample_id, file_id=file.id)
                 job_reports.append(
                     _job_report(
@@ -470,6 +528,19 @@ def _job_report(
         status=result.status,
         metadata=metadata,
         warnings=result.warnings,
+    )
+
+
+def _stopped_report(run_id: str, index: int, target: AnalyzeTarget, sample_id: str) -> AnalyzeJobReport:
+    engine_id = target.engine or "unknown"
+    return AnalyzeJobReport(
+        job_id=f"{run_id}_{index}_{_safe(engine_id)}",
+        engine=target.engine,
+        sample_id=sample_id,
+        file_id="",
+        source_path=str(target.source_path),
+        status="stopped",
+        metadata={"reason": "analysis stopped before this file finished; run again to continue"},
     )
 
 
