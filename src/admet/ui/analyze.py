@@ -402,8 +402,10 @@ class AnalyzeWorkflowView:
             "analysis_runs": lambda: analysis_run_rows(self._analysis_project_paths()),
         }
         for key, tables in self._table_refs.items():
+            # A redrawn editor deletes the tables it held; forget those rather than write to them.
+            tables[:] = [table for table in tables if not table.is_deleted]
             source = row_sources.get(key)
-            if source is None:
+            if source is None or not tables:
                 continue
             rows = source()
             for table in tables:
@@ -1154,6 +1156,7 @@ class AnalyzeWorkflowView:
         self.source_path = row.source_path
         self.selected_uid = row.uid
         self._link_source(source, engine, row.sample_id)
+        self._prefill_video_settings(row)
         self.stage_progress["import"] = 100
         self._mark_stage("import", StageStatus.COMPLETE)
         self._notify(f"source ready: {source.name}", "success")
@@ -1180,6 +1183,7 @@ class AnalyzeWorkflowView:
             )
         )
         self._link_source(source, engine, sample_id)
+        self._prefill_video_settings(self.matrix[-1])
         self.stage_progress["import"] = 100
         self._mark_stage("import", StageStatus.COMPLETE)
         self._log(f"matrix: appended {source} -> {engine}")
@@ -1287,6 +1291,8 @@ class AnalyzeWorkflowView:
             self.settings["cache_root"] = str(cache_root)
         self._restore_setup(store)
         self._load_project_files(store)
+        for row in self.matrix:
+            self._prefill_video_settings(row)
         self.stage_progress["import"] = 100 if self.matrix else 45
         self._mark_stage("import", StageStatus.COMPLETE if self.matrix else StageStatus.ACTIVE)
         self._notify(f"project loaded: {store.path.name}", "success")
@@ -1362,6 +1368,27 @@ class AnalyzeWorkflowView:
                 self._saved_setup[str(path)] = setup
             except Exception as exc:
                 self._log(f"project: could not save the analysis setup of {path.name}: {exc}")
+
+    def _prefill_video_settings(self, row: MatrixRow) -> None:
+        """Fill the frame, crop and rate settings a video row does not have yet, from the video itself.
+
+        FPS is the rate the camera captured at, which control recorded with the
+        video; the file's own playback rate (often 24) would make every speed and
+        frequency wrong. Values already set are left as they are.
+        """
+        if row.engine != "opencv":
+            return
+        size = _known_video_size(self._resolve_media_path(row.source_path, row.project_path))
+        if size is None:
+            return  # unreadable: nothing real to fill in
+        frames, width, height = size
+        defaults = {"start_frame": 0, "end_frame": frames, "roi_x": 0, "roi_y": 0,
+                    "roi_width": width, "roi_height": height}
+        capture_fps = _recorded_capture_fps(row)
+        if capture_fps:
+            defaults["fps"] = round(capture_fps, 3)
+        for key, value in defaults.items():
+            row.settings.setdefault(key, value)
 
     def _load_project_files(self, store: ProjectStore) -> None:
         existing = {row.source_path for row in self.matrix}
@@ -2408,6 +2435,19 @@ def _overlay_svg(index: dict[str, Any], frame: int, width: int, height: int,
             + "".join(parts) + "</svg>")
 
 
+def _recorded_capture_fps(row: MatrixRow) -> float:
+    """The capture rate control recorded for this video, or 0 when it was not recorded by control."""
+    try:
+        store = ProjectStore(session_path(row.project_path))
+    except Exception:
+        return 0.0
+    source = Path(row.source_path).resolve()
+    for file in store.files_by_role(("control_video",)):
+        if store.resolve_file_path(file).resolve() == source:
+            return float(file.metadata.get("acquisition_fps") or 0.0)
+    return 0.0
+
+
 def _video_setting_warnings(row: MatrixRow, frames: int, width: int, height: int) -> list[str]:
     """What is odd about a row's frame and crop values, said plainly; nothing is changed."""
     warnings = []
@@ -2428,18 +2468,34 @@ def _video_setting_warnings(row: MatrixRow, frames: int, width: int, height: int
 
 
 @lru_cache(maxsize=64)
-def _video_size_cached(path: str, _size: int, _mtime: float) -> tuple[int, int, int]:
-    metadata = _video_metadata(Path(path))
-    return (max(int(metadata["frames"]), 1), max(int(metadata["width"]), 1), max(int(metadata["height"]), 1))
+def _probe_video(path: str, _size: int, _mtime: float) -> tuple[int, int, int] | None:
+    """Frame count, width and height as the file reports them, or None if it cannot be opened."""
+    try:
+        import cv2
+    except Exception:
+        return None
+    capture = cv2.VideoCapture(path)
+    try:
+        if not capture.isOpened():
+            return None
+        size = tuple(int(capture.get(prop) or 0) for prop in (
+            cv2.CAP_PROP_FRAME_COUNT, cv2.CAP_PROP_FRAME_WIDTH, cv2.CAP_PROP_FRAME_HEIGHT))
+        return size if all(size) else None
+    finally:
+        capture.release()
 
 
-def _video_size(path: Path) -> tuple[int, int, int]:
-    """Frame count, width and height, read once per file version."""
+def _known_video_size(path: Path) -> tuple[int, int, int] | None:
     try:
         stat = path.stat()
     except OSError:
-        return _video_size_cached(str(path), -1, 0.0)
-    return _video_size_cached(str(path), stat.st_size, stat.st_mtime)
+        return None
+    return _probe_video(str(path), stat.st_size, stat.st_mtime)
+
+
+def _video_size(path: Path) -> tuple[int, int, int]:
+    """Frame count, width and height, read once per file version; placeholders if unreadable."""
+    return _known_video_size(path) or (500, 1280, 720)
 
 
 def _compact_path(value: str, *, max_parts: int = 4) -> str:
