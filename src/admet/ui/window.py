@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from admet.workflows import Stage
 
 
 @dataclass(frozen=True)
@@ -79,3 +80,21 @@ def structure_signature(*parts: Any) -> tuple[Any, ...]:
 
 def structure_changed(current: tuple[Any, ...] | None, next_signature: tuple[Any, ...]) -> bool:
     return current != next_signature
+
+
+@dataclass(frozen=True)
+class SettingsPanelState:
+    kind: str
+    source: str = ""
+    stage_id: str = ""
+
+
+def settings_panel_state(stage: Stage) -> SettingsPanelState:
+    panel = stage.settings_panel
+    if panel is None:
+        return SettingsPanelState(kind="none", stage_id=stage.id)
+    return SettingsPanelState(
+        kind=panel.kind,
+        source=str(panel.options.get("source") or ""),
+        stage_id=stage.id,
+    )

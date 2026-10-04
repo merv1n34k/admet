@@ -133,3 +133,12 @@ def instruction_text(stage: Stage, guard_value: Callable[[str], bool]) -> str:
         if not instruction.guard or guard_enabled(instruction.guard, guard_value):
             return instruction.text
     return stage.description or stage.label
+
+
+def current_stage(workflow: Workflow, state: WorkflowState) -> Stage:
+    index = max(0, min(state.index, len(workflow.stages) - 1))
+    return workflow.stages[index]
+
+
+def stage_by_id(workflow: Workflow, state: WorkflowState, stage_id: str) -> Stage:
+    return next((stage for stage in workflow.stages if stage.id == stage_id), current_stage(workflow, state))

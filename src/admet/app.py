@@ -1,4 +1,4 @@
-"""Launch the control desktop or describe the direct Python API."""
+"""Launch the control desktop, serve project analysis, or describe the Python API."""
 
 from __future__ import annotations
 
@@ -14,6 +14,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     control = sub.add_parser("control", help="open the control desktop, which drives the rig")
     control.add_argument("--project", help="existing .admetp project")
+
+    analyze = sub.add_parser(
+        "analyze", help="serve project analysis over the network; it reads project data and never drives the rig"
+    )
+    analyze.add_argument("--host", default="0.0.0.0", help="address to listen on (default: every interface)")
+    analyze.add_argument("--port", type=int, default=8080)
+    analyze.add_argument("--projects", help="folder holding the .admetp projects to serve")
 
     describe = sub.add_parser(
         "describe", help="what exists: every operation, or one operation or engine"
@@ -37,6 +44,9 @@ def main(argv: list[str] | None = None) -> int:
 
         return desktop_main(["--project", args.project] if args.project else [])
 
+    if args.command == "analyze":
+        return run_analyze_server(args.host, args.port, projects=args.projects)
+
     if args.command == "describe":
         from admet.core.service import Admet
 
@@ -44,6 +54,29 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.error(f"unknown command {args.command!r}")
     return 2
+
+
+def run_analyze_server(host: str, port: int, *, projects: str | None = None) -> int:
+    """One server for every browser that connects; each visit gets its own view."""
+    import os
+
+    from nicegui import ui
+
+    from admet.core.discovery import ENV_ROOT
+    from admet.engines import create_engine_registry
+    from admet.ui.analyze import render_workflow
+    from admet.workflows import create_analyze_workflow
+
+    if projects:
+        os.environ[ENV_ROOT] = projects
+    registry = create_engine_registry("analyze")
+
+    def root() -> None:
+        workflow = create_analyze_workflow()
+        render_workflow(workflow, workflow.initial_state(), registry=registry)
+
+    ui.run(root=root, host=host, port=port, reload=False, show=False, title="admet analyze")
+    return 0
 
 
 def _attempt(call: Any) -> int:

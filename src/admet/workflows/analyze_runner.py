@@ -73,7 +73,9 @@ class AnalyzeBatchRunner:
         targets: list[AnalyzeTarget] | tuple[AnalyzeTarget, ...],
         *,
         on_progress: Callable[[float], None] | None = None,
+        on_file_progress: Callable[[float], None] | None = None,
     ) -> AnalyzeBatchReport:
+        """Run every target; ON_PROGRESS gets the batch percent, ON_FILE_PROGRESS the current file's."""
         grouped: dict[Path, list[AnalyzeTarget]] = {}
         for target in targets:
             grouped.setdefault(session_path(target.project_path), []).append(target)
@@ -86,11 +88,15 @@ class AnalyzeBatchRunner:
             state["index"] += 1
             if on_progress is not None and total:
                 on_progress(index / total * 100.0)
+            if on_file_progress is not None:
+                on_file_progress(0.0)
 
             def report(percent: int, message: str = "") -> None:
+                percent = max(0.0, min(100.0, float(percent)))
+                if on_file_progress is not None:
+                    on_file_progress(percent)
                 if on_progress is not None and total:
-                    fraction = max(0.0, min(100.0, float(percent))) / 100.0
-                    on_progress((index + fraction) / total * 100.0)
+                    on_progress((index + percent / 100.0) / total * 100.0)
 
             return report
 

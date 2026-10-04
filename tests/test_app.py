@@ -1,4 +1,4 @@
-"""The command line exposes only desktop launch and API discovery."""
+"""The command line launches control, serves analysis, and describes the API."""
 
 import io
 import json
@@ -21,8 +21,12 @@ def _commands() -> dict:
 
 
 class SurfaceTests(unittest.TestCase):
-    def test_the_command_line_is_describe_and_control(self):
-        self.assertEqual(set(_commands()), {"control", "describe"})
+    def test_the_command_line_is_control_analyze_and_describe(self):
+        self.assertEqual(set(_commands()), {"control", "analyze", "describe"})
+
+    def test_analyze_serves_on_every_interface_by_default(self):
+        args = build_parser().parse_args(["analyze"])
+        self.assertEqual((args.host, args.port, args.projects), ("0.0.0.0", 8080, None))
 
     def test_control_launches_desktop_and_forwards_only_project(self):
         for args, forwarded in (

@@ -23,6 +23,7 @@ control = [
   "setuptools<81",
 ]
 analyze = [
+  "nicegui>=2.0",
   "cellpose>=3.0",
   "opencv-python>=4.10",
   "packaging",

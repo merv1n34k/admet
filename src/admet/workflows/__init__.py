@@ -23,6 +23,10 @@ def __getattr__(name: str):
         from .control import create_control_workflow
 
         return create_control_workflow
+    if name == "create_analyze_workflow":
+        from .analyze import create_analyze_workflow
+
+        return create_analyze_workflow
     if name in {"Stage", "StageControl", "StageStatus", "StageAction", "Workflow", "WorkflowState"}:
         from . import model
 

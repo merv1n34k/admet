@@ -817,3 +817,7 @@ QScrollBar:vertical {{
     border: 0;
 }}
 """
+
+
+def css_variables() -> str:
+    return "".join(f"--{name}:{value};" for name, value in _WEB_TOKENS.items())
