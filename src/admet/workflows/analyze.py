@@ -57,7 +57,7 @@ def create_analyze_workflow() -> Workflow:
             Stage(
                 "import",
                 "1. Import & Batch",
-                description="Create or open projects and build the file-to-engine matrix.",
+                description="Open a project and build the file-to-engine matrix.",
                 instructions=(
                     "Add videos or imaging folders.",
                     "Each row declares its project, sample id, engine, and whether it is active.",

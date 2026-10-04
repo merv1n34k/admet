@@ -124,8 +124,9 @@ class AnalyzeWorkflowView:
         self.registry = registry
         root = projects_root()
         self.discovery_root = str(root)
-        self.project_refs = discover_projects(root)
-        self.project_path = str(root / f"admet_{time.strftime('%Y%m%d_%H%M%S')}.admetp")
+        self.project_refs = self._discover()
+        # Analysis opens existing projects only; until one is open there is none.
+        self.project_path = ""
         self.source_path = ""
         self.selected_uid = ""
         self.matrix: list[MatrixRow] = []
@@ -140,7 +141,7 @@ class AnalyzeWorkflowView:
         self.last_report: AnalyzeBatchReport | None = None
         self._run_progress = 0
         self._run_step_progress = 0
-        self.notice = "Create or select a project, then add files to the batch matrix."
+        self.notice = "Open a project, then add files to the batch matrix."
         self.notice_kind = "primary"
         self.action_log: list[str] = ["Analyze UI ready."]
         self._mounted_signature: tuple[Any, ...] | None = None
@@ -183,9 +184,8 @@ class AnalyzeWorkflowView:
                     value=selected,
                     on_change=lambda event: self._select_project(event.value),
                 ).classes("project-select")
+                ui.button("Browse…", on_click=self._open_project_browser).props("dense no-caps outline")
                 ui.button("Refresh", on_click=self._refresh_projects).props("dense no-caps outline")
-                ui.button("New Project", on_click=self._new_project).props("dense no-caps outline")
-                ui.button("Load Project", on_click=self._open_project_browser).props("dense no-caps outline")
 
     def _mount_sidebar(self) -> None:
         sidebar = self._refs.get("sidebar")
@@ -743,8 +743,8 @@ class AnalyzeWorkflowView:
         path = Path(source)
         if path.is_absolute():
             return path
-        project = session_path(project_path) if project_path else self._project_path()
-        return project / path
+        project = project_path or self.project_path
+        return session_path(project) / path if project else path
 
     def _image_count(self, target: MatrixRow) -> int:
         source = self._resolve_media_path(target.source_path, target.project_path)
@@ -890,7 +890,7 @@ class AnalyzeWorkflowView:
         return _load_fluidics_runs(self._project_paths())
 
     def _project_paths(self) -> list[Path]:
-        paths = {session_path(self.project_path)}
+        paths = {session_path(self.project_path)} if self.project_path else set()
         paths.update(session_path(row.project_path) for row in self.matrix)
         return sorted(paths)
 
@@ -901,11 +901,10 @@ class AnalyzeWorkflowView:
         return next((row for row in self.matrix if row.active and row.engine == engine), None)
 
     def _open_project_browser(self) -> None:
-        start = self._project_path()
-        root = start if start.is_dir() else projects_root(self.discovery_root)
+        current = session_path(self.project_path) if self.project_path else None
         self._open_path_browser(
-            title="Load project manifest",
-            start=root,
+            title="Open project",
+            start=current.parent if current is not None else projects_root(self.discovery_root),
             mode="project",
             row_uid=None,
         )
@@ -913,7 +912,8 @@ class AnalyzeWorkflowView:
     def _open_source_browser(self) -> None:
         selected = self._selected_row()
         source = selected.source_path if selected is not None else self.source_path
-        start = Path(source).parent if source else self._project_path().parent
+        start = Path(source).parent if source else (
+            session_path(self.project_path) if self.project_path else projects_root(self.discovery_root))
         self._open_path_browser(
             title="Add sources",
             start=start,
@@ -1002,7 +1002,13 @@ class AnalyzeWorkflowView:
                                 "dense no-caps " + ("unelevated color=primary" if is_selected else "outline")
                             ).classes("browser-select")
                         name = entry.name + ("/" if is_dir else "")
-                        if is_dir:
+                        if mode == "project" and _is_project(entry):
+                            # A project opens with one click; nothing inside it to pick.
+                            ui.button(
+                                f"▣  {entry.name}",
+                                on_click=lambda path=entry: self._select_browser_path(path, mode, row_uid, dialog),
+                            ).props("dense no-caps flat").classes("grow browser-name")
+                        elif is_dir:
                             ui.button(name, on_click=lambda path=entry: navigate(path)).props(
                                 "dense no-caps flat"
                             ).classes("grow browser-name")
@@ -1031,17 +1037,9 @@ class AnalyzeWorkflowView:
     ) -> None:
         dialog.close()
         if mode == "project":
-            manifest = path if path.name == "manifest.json" else path / "manifest.json"
-            self._load_project_from_manifest(manifest)
+            self._load_project(path)
             return
         self._upsert_source(path, row_uid=row_uid)
-
-    def _load_project_from_manifest(self, manifest: Path) -> None:
-        if manifest.name != "manifest.json" or not manifest.is_file():
-            self._notify("Select a project manifest.json.", "warning")
-            self._refresh()
-            return
-        self._load_project(manifest.parent)
 
     def _upsert_source(self, source: Path, *, row_uid: str | None) -> None:
         source = source.expanduser().resolve()
@@ -1109,13 +1107,13 @@ class AnalyzeWorkflowView:
         # A file the project already lists -- a recording made by control -- is
         # left as it is, with its role and recording details.
         try:
-            path = session_path(self.project_path)
-            store = ProjectStore(path) if (path / "manifest.json").is_file() else ProjectStore.create(path, path.stem)
+            if not self.project_path:
+                raise ValueError("no project is open")
+            store = ProjectStore(session_path(self.project_path))
             if any(store.resolve_file_path(file).resolve() == source.resolve() for file in store.session.files):
                 return
             store.register_analysis_file(source, engine=engine, sample_id=sample_id)
             store.save()
-            self.project_refs = discover_projects(self.discovery_root)
         except Exception as exc:
             self._log(f"project: could not link {source.name}: {exc}")
 
@@ -1156,7 +1154,7 @@ class AnalyzeWorkflowView:
 
     def _guard_value(self, guard: str) -> bool:
         if guard == "project_ready":
-            return (self._project_path() / "manifest.json").is_file()
+            return bool(self.project_path) and (session_path(self.project_path) / "manifest.json").is_file()
         if guard == "has_matrix_rows":
             return bool(self.matrix)
         if guard == "has_opencv_targets":
@@ -1188,29 +1186,10 @@ class AnalyzeWorkflowView:
         self._log("matrix: cleared")
         self._refresh()
 
-    def _new_project(self) -> None:
-        path = self._project_path()
-        try:
-            store = ProjectStore.create(path, path.stem)
-        except Exception as exc:
-            self._notify(f"project create failed: {exc}", "danger")
-            self._refresh()
-            return
-        store.update_metadata(cache_root=self.settings["cache_root"])
-        self.project_path = str(store.path)
-        self.stage_progress["import"] = max(self.stage_progress["import"], 30)
-        self._mark_stage("import", StageStatus.ACTIVE)
-        self._notify(f"project ready: {store.path.name}", "success")
-        self._log(f"project: created {store.path}")
-        self.project_refs = discover_projects(self.discovery_root)
-        self._render_current_stage(force_mount=True)
-
-    def _load_project(self, path: Path | None = None) -> None:
-        path = session_path(path) if path is not None else self._project_path()
-        if path.name == "manifest.json":
-            path = path.parent
+    def _load_project(self, path: Path) -> None:
+        path = session_path(path)
         if not (path / "manifest.json").is_file():
-            self._notify("Project manifest not found.", "warning")
+            self._notify(f"{path.name} is not a project: no manifest.json in it.", "warning")
             self._refresh()
             return
         try:
@@ -1228,7 +1207,8 @@ class AnalyzeWorkflowView:
         self._mark_stage("import", StageStatus.COMPLETE if self.matrix else StageStatus.ACTIVE)
         self._notify(f"project loaded: {store.path.name}", "success")
         self._log(f"project: loaded {store.path}")
-        self.project_refs = discover_projects(self.discovery_root)
+        self._remember_project(store.path)
+        self.project_refs = self._discover()
         self._render_current_stage(force_mount=True)
 
     def _load_project_files(self, store: ProjectStore) -> None:
@@ -1376,7 +1356,7 @@ class AnalyzeWorkflowView:
         self._render_current_stage(force_mount=True)
 
     def _analysis_project_paths(self) -> set[str]:
-        return {row.project_path for row in self.matrix} | {self.project_path}
+        return {row.project_path for row in self.matrix} | ({self.project_path} if self.project_path else set())
 
     def _targets(self, engine: str | None = None) -> list[MatrixRow]:
         return [
@@ -1428,8 +1408,33 @@ class AnalyzeWorkflowView:
             return
         self._load_project(session_path(value))
 
+    def _discover(self) -> list:
+        return discover_projects(self.discovery_root, recent=self._recent_projects())
+
+    def _recent_projects(self) -> dict[str, str]:
+        """Projects opened before, wherever they are; kept by the server across restarts."""
+        try:
+            from nicegui import app
+
+            return dict(app.storage.general.get("recent_projects", {}))
+        except Exception:  # no running server, e.g. in tests
+            return {}
+
+    def _remember_project(self, path: Path) -> None:
+        from datetime import datetime, timezone
+
+        try:
+            from nicegui import app
+
+            app.storage.general["recent_projects"] = {
+                **self._recent_projects(),
+                str(Path(path).resolve()): datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }
+        except Exception:
+            pass
+
     def _refresh_projects(self) -> None:
-        self.project_refs = discover_projects(self.discovery_root)
+        self.project_refs = self._discover()
         self._notify(f"found {len(self.project_refs)} project(s).", "success")
         self._refresh()
 
@@ -1458,16 +1463,6 @@ class AnalyzeWorkflowView:
 
     def _stage_by_id(self, stage_id: str) -> Any:
         return stage_by_id(self.workflow, self.state, stage_id)
-
-    def _project_path(self) -> Path:
-        value = str(self.project_path or "").strip()
-        if not value:
-            value = str(self._default_project_path())
-            self.project_path = value
-        return session_path(value)
-
-    def _default_project_path(self) -> Path:
-        return projects_root(self.discovery_root) / f"admet_{time.strftime('%Y%m%d_%H%M%S')}.admetp"
 
     def _instruction(self) -> str:
         return instruction_text(self._stage(), self._guard_value)
@@ -2284,6 +2279,10 @@ def _existing_dir(path: Path) -> Path:
     return candidate if candidate.is_dir() else Path.cwd()
 
 
+def _is_project(path: Path) -> bool:
+    return path.suffix == ".admetp" and (path / "manifest.json").is_file()
+
+
 def _browser_entries(path: Path, mode: str) -> list[Path]:
     try:
         entries = list(path.iterdir())
@@ -2291,7 +2290,7 @@ def _browser_entries(path: Path, mode: str) -> list[Path]:
         return []
     dirs = [entry for entry in entries if entry.is_dir()]
     if mode == "project":
-        files = [entry for entry in entries if entry.is_file() and entry.name == "manifest.json"]
+        files = []
     else:
         allowed = VIDEO_SUFFIXES | IMAGE_SUFFIXES
         files = [entry for entry in entries if entry.is_file() and entry.suffix.lower() in allowed]
