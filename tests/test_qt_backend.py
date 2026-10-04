@@ -143,7 +143,7 @@ class DesktopBackendTests(unittest.TestCase):
         path = Path(self.backend.workdir) / "records" / "protocols" / completed["run_id"]
         summary = json.loads((path / "summary.json").read_text())
         self.assertEqual(summary["state"], "completed")
-        self.assertTrue(Path(summary["artifacts"]["fluidics_csv"]).is_file())
+        self.assertTrue((Path(self.backend.workdir) / summary["artifacts"]["fluidics_csv"]).is_file())
         with self.assertRaisesRegex(RuntimeError, "completed"):
             self.backend.call("control_protocol", {"action": "execute", "plan_id": plan["plan_id"]})
         self.backend.shutdown()
@@ -208,7 +208,7 @@ class DesktopBackendTests(unittest.TestCase):
         directory = Path(self.backend.workdir) / "records" / "protocols" / completed["run_id"]
         summary = json.loads((directory / "summary.json").read_text())
         self.assertEqual(json.loads((directory / "protocol.json").read_text()), document)
-        self.assertTrue(Path(summary["artifacts"]["fluidics_csv"]).is_file())
+        self.assertTrue((Path(self.backend.workdir) / summary["artifacts"]["fluidics_csv"]).is_file())
         events = self.backend.call("protocol_events", {"limit": 1000})["events"]
         completed = next(e for e in events if e["step_name"] == "Run set01_rep01" and e["outcome"] == "completed")
         self.assertGreaterEqual(float(completed["step_volumes"][0]), 5)
@@ -257,8 +257,8 @@ class DesktopBackendTests(unittest.TestCase):
         completed = self.wait_completed(plan["plan_id"])
         summary = json.loads((Path(self.backend.workdir) / "records/protocols" / completed["run_id"] / "summary.json").read_text())
         self.assertTrue(summary["normalized_settings"]["include_video"])
-        self.assertTrue(Path(summary["artifacts"]["video_path"]).is_file())
-        self.assertTrue(Path(summary["artifacts"]["fluidics_csv"]).is_file())
+        self.assertTrue((Path(self.backend.workdir) / summary["artifacts"]["video_path"]).is_file())
+        self.assertTrue((Path(self.backend.workdir) / summary["artifacts"]["fluidics_csv"]).is_file())
         self.assertFalse(camera.recording)
 
     def test_camera_start_failure_never_starts_protocol(self):
@@ -301,10 +301,11 @@ class DesktopBackendTests(unittest.TestCase):
     def test_density_completion_closes_recording_without_running_calculations(self):
         from tests.test_oil_density import recorded_density
 
-        document, csv_path, events_path, origin = recorded_density(self.tmp.name)
+        document, csv_path, events_path, origin = recorded_density(self.backend.workdir)
         plan = self.plan(document)
         service = self.backend.service
         stored = service._protocol_plans[plan["plan_id"]]
+        stored["run_id"] = "run_" + "1" * 32
         store = service._plan_store(plan["plan_id"])
         directory = store.begin(stored)
         (directory / "events.jsonl").write_text(events_path.read_text())

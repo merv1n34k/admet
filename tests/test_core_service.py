@@ -261,6 +261,26 @@ class FluidicsOnlyRecordingTests(unittest.TestCase):
             self.assertTrue(recording["active"])
             self.assertEqual(recording["fluidics_csv"], started["csv_path"])
 
+    def test_two_stops_at_once_close_one_recording(self):
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmp:
+            admet = Admet()
+            admet.create_project(Path(tmp) / "rig.admetp")
+            admet.do("connect_fluidics", {"simulated": True})
+            self.addCleanup(admet.do, "disconnect_fluidics")
+            admet.do("start_recording", {"recording_label": "twice"})
+            engine = admet.engine("acquisition")
+            results = []
+            stoppers = [threading.Thread(target=lambda: results.append(engine.stop_recording())) for _ in range(2)]
+            for stopper in stoppers:
+                stopper.start()
+            for stopper in stoppers:
+                stopper.join(timeout=5)
+
+            self.assertEqual(sorted(bool(result.get("recording")) for result in results), [False, True])
+            self.assertFalse(engine.recording_active)
+
     def test_a_recording_starts_with_no_camera_connected(self):
         with tempfile.TemporaryDirectory() as tmp:
             admet, started = self._recorded(tmp)

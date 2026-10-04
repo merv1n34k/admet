@@ -527,8 +527,11 @@ class Admet:
             if plan["operation_id"] == "run_json_protocol":
                 if engine is not None and engine.recording_active:
                     raise RuntimeError("stop the existing recording before executing a JSON protocol")
+                # A protocol's recording lasts as long as the protocol: a frame or
+                # time limit would close the fluidics CSV while it still runs.
                 recording = self.do("start_recording", {
                     "recording_label": plan["run_id"], "include_video": plan["recording"]["include_video"],
+                    "recording_max_frames": 0, "recording_max_seconds": 0,
                 })
                 artifact = self._run_artifacts[plan_id]
                 artifact["recording"] = True

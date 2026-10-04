@@ -248,10 +248,16 @@ class JsonProtocolTests(unittest.TestCase):
             try:
                 admet.do("connect_fluidics", {"simulated": True})
                 admet.do("apply_corrections", {})
+                started = []
+                do = admet.do
+                admet.do = lambda op, settings=None: (started.append(settings) if op == "start_recording" else None,
+                                                      do(op, settings))[1]
                 plan = admet.plan_protocol(operation_id="run_json_protocol", settings={"protocol": DOCUMENT})
                 admet.control_protocol(action="execute", plan_id=plan["plan_id"], timeout_s=1)
                 admet.control_protocol(action="confirm", timeout_s=1)
                 admet.wait_for_protocol(timeout_s=2)
+                # The recording lasts as long as the protocol, with no frame or time limit.
+                self.assertEqual([(s["recording_max_frames"], s["recording_max_seconds"]) for s in started], [(0, 0)])
                 deadline = time.monotonic() + 3
                 while admet.planned_protocols()["plans"][0]["state"] == "executing":
                     if time.monotonic() >= deadline:

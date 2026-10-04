@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -213,6 +214,9 @@ class RecordingCoordinator:
         self._csv_recording_report_dir: Path | None = None
         self._csv_recordings: list[dict[str, Any]] = []
         self._last_recording: RecordingMetadata | None = None
+        # The camera's frame limit, an E-STOP and the end of a protocol can all
+        # stop a recording, from different threads; one at a time.
+        self._lock = threading.RLock()
 
     @property
     def recording_active(self) -> bool:
@@ -224,6 +228,16 @@ class RecordingCoordinator:
         *,
         camera_recorder: RecordingCamera | None = None,
         frame_size: tuple[int, int] = (0, 0),
+    ) -> dict[str, Any]:
+        with self._lock:
+            return self._start_recording(settings, camera_recorder=camera_recorder, frame_size=frame_size)
+
+    def _start_recording(
+        self,
+        settings: dict[str, Any],
+        *,
+        camera_recorder: RecordingCamera | None,
+        frame_size: tuple[int, int],
     ) -> dict[str, Any]:
         if self._recording:
             recording = self.active_recording_metadata()
@@ -246,6 +260,10 @@ class RecordingCoordinator:
         return self._start_csv_only_recording(settings, report_root, recording_label)
 
     def stop_recording(self) -> dict[str, Any]:
+        with self._lock:
+            return self._stop_recording()
+
+    def _stop_recording(self) -> dict[str, Any]:
         if self._recording_run is not None and self._recording_run.current is not None:
             metadata = self._recording_run.stop_recording()
             self._restore_camera_preview_after_recording()

@@ -589,7 +589,10 @@ class AcquisitionEngine:
         if self._pipeline and self._pipeline.is_alive():
             self._pipeline.stop()
             self._pipeline.join(timeout=3.0)
-        self._pipeline = None
+        # A protocol still finishing (closing a long video) stays known, so a
+        # second one cannot start on top of it.
+        if self._pipeline is not None and not self._pipeline.is_alive():
+            self._pipeline = None
 
     def pause_pipeline(self) -> None:
         if self._pipeline:
