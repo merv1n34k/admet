@@ -63,6 +63,8 @@ class StoredRun:
     run_id: str
     raw_path: Path
     jobs: tuple[dict[str, Any], ...]
+    # Each file's settings when it was analysed (crop, frames, ...).
+    matrix: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -146,6 +148,7 @@ class AnalyzeWorkflowView:
         self.last_report: AnalyzeBatchReport | None = None
         self._run_progress = 0
         self._run_step_progress = 0
+        self.show_overlay = True
         # What each project last had saved, so an unchanged screen writes nothing.
         self._saved_setup: dict[str, dict[str, Any]] = {}
         self.notice = "Open a project, then add files to the batch matrix."
@@ -640,6 +643,12 @@ class AnalyzeWorkflowView:
                     ui.label("Preview unavailable. Relocate the source before editing crop/frame values.").classes(
                         "editor-note"
                     )
+                analysis = self._stored_analysis(target)
+                if analysis is not None:
+                    with ui.row().classes("items-center gap-2"):
+                        ui.checkbox("Show analysis: droplets and trajectories", value=self.show_overlay,
+                                    on_change=lambda event: self._toggle_overlay(event.value))
+                        ui.label(f"from the analysis of {analysis['analyzed']}").classes("muted text-xs")
                 for warning in _video_setting_warnings(target, frames, width, height):
                     ui.label(warning).classes("editor-note editor-warning")
                 low, high = (start, end - 1) if end > start else (0, frames - 1)
@@ -698,6 +707,42 @@ class AnalyzeWorkflowView:
                 "dense").classes("w-full")
             slider.on("change", lambda _event: commit(slider.value))
 
+    def _toggle_overlay(self, show: bool) -> None:
+        self.show_overlay = bool(show)
+        self._sync_previews()
+
+    def _stored_analysis(self, row: MatrixRow) -> dict[str, Any] | None:
+        """The latest stored analysis of this file: where its rows are and the crop it ran with."""
+        source = str(Path(row.source_path).resolve())
+        for run in reversed(self._stored_runs()):
+            for job in run.jobs:
+                if (job.get("engine") != row.engine or job.get("status") not in {"complete", "cached"}
+                        or str(_resolve_project_path(run.project_path, str(job.get("source_path") or "")).resolve()) != source):
+                    continue
+                file_id = str(job.get("file_id") or "")
+                settings = next((entry.get("settings") or {} for entry in run.matrix
+                                 if entry.get("file_id") == file_id), {})
+                at = str((job.get("metadata") or {}).get("analyzed_at") or "")
+                return {"raw_path": run.raw_path if run.raw_path.is_absolute() else run.project_path / run.raw_path,
+                        "file_id": file_id, "settings": settings, "analyzed": _local_time(at) if at else "an earlier run"}
+        return None
+
+    def _analysis_overlay_svg(self, row: MatrixRow, frame: int, width: int, height: int) -> str:
+        """Droplets found in this frame and the paths they took to get here, over the frame."""
+        analysis = self._stored_analysis(row)
+        if analysis is None or not analysis["raw_path"].is_file():
+            return ""
+        raw = analysis["raw_path"]
+        index = _overlay_index(str(raw), raw.stat().st_mtime, analysis["file_id"])
+        # Positions were measured inside the crop the analysis used; shift them back onto the frame.
+        crop = analysis["settings"]
+        if crop.get("roi_width") or crop.get("roi_height"):
+            x, y = int(crop.get("roi_x") or 0), int(crop.get("roi_y") or 0)
+            area = (x, y, int(crop.get("roi_width") or width - x), int(crop.get("roi_height") or height - y))
+        else:
+            area = (0, 0, width, height)
+        return _overlay_svg(index, frame, width, height, area)
+
     def _settings_edited(self) -> None:
         """A setting changed in the editor or the table: tidy it, redraw the editor, show it in the table, save."""
         self._remount_editor()
@@ -734,9 +779,11 @@ class AnalyzeWorkflowView:
         if roi_width_raw or roi_height_raw:
             roi = f'<div class="admet-roi" style="left:{left}%; top:{top}%; width:{width}%; height:{height}%;"></div>'
         style = _viewer_style(width_px, height_px)
+        overlay = self._analysis_overlay_svg(target, frame_index, width_px, height_px) if self.show_overlay else ""
         return f"""
         <div class="admet-viewer" style="{style}">
           <img class="admet-video-frame" src="{frame['src']}" alt="{html.escape(target.sample_id)} frame {frame_index}">
+          {overlay}
           {roi}
           <div class="admet-playhead">{html.escape(target.sample_id or Path(target.source_path).stem)} - frame {frame_index}</div>
         </div>
@@ -1602,12 +1649,14 @@ def _load_stored_runs(project_paths: list[Path]) -> list[StoredRun]:
             raw_path = _resolve_project_path(project_path, str(run.get("raw_path") or ""))
             run_metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
             jobs = tuple(job for job in run_metadata.get("jobs", ()) if isinstance(job, dict))
+            settings = run.get("settings") if isinstance(run.get("settings"), dict) else {}
             runs.append(
                 StoredRun(
                     project_path=project_path,
                     run_id=str(run.get("run_id") or raw_path.parent.name),
                     raw_path=raw_path,
                     jobs=jobs,
+                    matrix=tuple(row for row in settings.get("matrix", ()) if isinstance(row, dict)),
                 )
             )
     return runs
@@ -2270,6 +2319,95 @@ def _preview_frame_index(row: MatrixRow) -> int:
     return min(frame, end - 1) if end > start else frame
 
 
+@lru_cache(maxsize=4)
+def _overlay_index(raw_path: str, _mtime: float, file_id: str) -> dict[str, Any]:
+    """One file's detections by frame, each droplet's path, and the counter's trajectory axis.
+
+    Read once per version of the raw file: only this file's detection and context rows
+    are parsed, so the preview stays fast on long recordings.
+    """
+    frames: dict[int, list[dict[str, Any]]] = {}
+    paths: dict[int, list[tuple[int, float, float]]] = {}
+    trajectory: dict[str, Any] = {}
+    marker = f'"file_id": "{file_id}"'
+    with open(raw_path, encoding="utf-8") as handle:
+        for line in handle:
+            if marker not in line or ('"detection"' not in line and '"run_context"' not in line):
+                continue
+            row = json.loads(line)
+            values = row.get("values") or {}
+            if row.get("kind") == "run_context":
+                trajectory = values.get("trajectory") or {}
+            elif row.get("kind") == "detection":
+                frame = int(values.get("frame", -1))
+                frames.setdefault(frame, []).append(values)
+                if values.get("droplet_id") is not None:
+                    paths.setdefault(int(values["droplet_id"]), []).append(
+                        (frame, float(values.get("centroid_x", 0)), float(values.get("centroid_y", 0))))
+    for path in paths.values():
+        path.sort()
+    return {"frames": frames, "paths": paths, "trajectory": trajectory}
+
+
+@lru_cache(maxsize=4)
+def _contour_points(path: str) -> Any:
+    import numpy as np
+
+    with np.load(path) as data:
+        return data["points"]
+
+
+def _detection_outline(detection: dict[str, Any]) -> list[tuple[float, float]]:
+    path, offset, length = (detection.get(key) for key in ("contour_path", "contour_offset", "contour_length"))
+    if path and offset is not None and length:
+        try:
+            points = _contour_points(str(path))[int(offset):int(offset) + int(length)].reshape(-1, 2)
+            return [(float(x), float(y)) for x, y in points]
+        except Exception:
+            pass
+    x, y = float(detection.get("bbox_x", 0)), float(detection.get("bbox_y", 0))
+    w, h = float(detection.get("bbox_width", 0)), float(detection.get("bbox_height", 0))
+    return [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+
+
+def _overlay_svg(index: dict[str, Any], frame: int, width: int, height: int,
+                 area: tuple[int, int, int, int]) -> str:
+    """AREA is the crop the analysis ran on, in frame pixels; its positions are relative to it."""
+    dx, dy, area_w, area_h = area
+    parts = [f'<clipPath id="ov-area"><rect x="{dx}" y="{dy}" width="{area_w}" height="{area_h}"/></clipPath>']
+    trajectory = index["trajectory"]
+    if trajectory.get("axis") and trajectory.get("center"):
+        # The counter's axis and the checkpoint lines across it.
+        ax, ay = trajectory["axis"]
+        cx, cy = trajectory["center"][0] + dx, trajectory["center"][1] + dy
+        span = max(width, height)
+        parts.append('<g clip-path="url(#ov-area)">')
+        parts.append(f'<line class="ov-axis" x1="{cx - ax * span:.1f}" y1="{cy - ay * span:.1f}" '
+                     f'x2="{cx + ax * span:.1f}" y2="{cy + ay * span:.1f}"/>')
+        for position in trajectory.get("checkpoints") or []:
+            px, py = cx + ax * position, cy + ay * position
+            parts.append(f'<line class="ov-checkpoint" x1="{px + ay * span:.1f}" y1="{py - ax * span:.1f}" '
+                         f'x2="{px - ay * span:.1f}" y2="{py + ax * span:.1f}"/>')
+        parts.append('</g>')
+    for detection in index["frames"].get(frame, []):
+        droplet = detection.get("droplet_id")
+        path = [(x + dx, y + dy) for f, x, y in index["paths"].get(int(droplet), []) if f <= frame] \
+            if droplet is not None else []
+        if len(path) > 1:
+            points = " ".join(f"{x:.1f},{y:.1f}" for x, y in path)
+            parts.append(f'<polyline class="ov-path" points="{points}"/>')
+        outline = " ".join(f"{x + dx:.1f},{y + dy:.1f}" for x, y in _detection_outline(detection))
+        parts.append(f'<polygon class="ov-droplet" points="{outline}"/>')
+        x, y = float(detection.get("centroid_x", 0)) + dx, float(detection.get("centroid_y", 0)) + dy
+        parts.append(f'<circle class="ov-centroid" cx="{x:.1f}" cy="{y:.1f}" r="2"/>')
+        if droplet is not None:
+            parts.append(f'<text class="ov-label" x="{x + 4:.1f}" y="{y - 4:.1f}">{int(droplet)}</text>')
+    if len(parts) == 1:
+        return ""
+    return (f'<svg class="admet-overlay" viewBox="0 0 {width} {height}" preserveAspectRatio="none">'
+            + "".join(parts) + "</svg>")
+
+
 def _video_setting_warnings(row: MatrixRow, frames: int, width: int, height: int) -> list[str]:
     """What is odd about a row's frame and crop values, said plainly; nothing is changed."""
     warnings = []
@@ -2791,6 +2929,19 @@ def _style() -> str:
       justify-content: space-between;
       gap: 8px;
     }
+    .admet-overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    .admet-overlay .ov-droplet { fill: none; stroke: #39d353; stroke-width: 1; vector-effect: non-scaling-stroke; }
+    .admet-overlay .ov-centroid { fill: #ff5a5f; }
+    .admet-overlay .ov-path { fill: none; stroke: #ffd166; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+    .admet-overlay .ov-axis { stroke: #4cc9f0; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+    .admet-overlay .ov-checkpoint { stroke: #4cc9f0; stroke-width: 1; opacity: 0.45; vector-effect: non-scaling-stroke; }
+    .admet-overlay .ov-label { fill: #ffd166; font: 9px Menlo, Consolas, monospace; }
     .editor-warning {
       border-left-color: var(--warning);
       color: var(--text);
