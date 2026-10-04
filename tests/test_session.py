@@ -339,3 +339,12 @@ class SystemCheckRecordTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectPathTests(unittest.TestCase):
+    def test_a_dotted_name_keeps_its_dots(self):
+        from admet.core.session import session_path
+
+        self.assertEqual(session_path("Assay 1.5uM").name, "Assay 1.5uM.admetp")
+        self.assertNotEqual(session_path("Assay 1.5uM"), session_path("Assay 1.10uM"))
+        self.assertEqual(session_path("rig.admetp/manifest.json").name, "rig.admetp")

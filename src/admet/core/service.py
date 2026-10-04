@@ -32,7 +32,7 @@ from admet.core.engine import ActionSpec, action_spec
 from admet.core.clock import now_iso as _now_iso
 from admet.core.project import ProjectStore
 from admet.core.run import RunJob, RunResult
-from admet.core.session import PROJECT_EXTENSION
+from admet.core.session import PROJECT_EXTENSION, session_path
 from admet.workflows.operations import operation as find_operation
 
 # Which engine registry each engine belongs to.
@@ -181,14 +181,14 @@ class Admet:
     def create_project(self, path: str | Path, project_id: str = "") -> ProjectStore:
         """Start a new project, and make it the one runs write into."""
         self._require_project_idle()
-        path = Path(path)
+        path = session_path(path)
         self.project = ProjectStore.create(path, project_id or path.stem)
         return self.project
 
     def open_project(self, path: str | Path) -> ProjectStore:
         """Open an existing project, or say plainly that it is not one."""
         self._require_project_idle()
-        path = Path(path)
+        path = session_path(path)
         if not (path / "manifest.json").is_file():
             raise NoProject(f"{path} is not a project: no manifest.json in it")
         self.project = ProjectStore(path)

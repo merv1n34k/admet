@@ -110,6 +110,9 @@ class ProjectLiquidTests(unittest.TestCase):
         self.assertEqual(new_liquid("dSurf", "M", "H2O", 1.0, 1.1, taken={"dsurf_m"})["id"], "dsurf_m_2")
 
     def test_a_new_liquid_is_checked(self):
-        for args in (("", "M", "H2O", 1.0), ("x", "S", "H2O", 1.0), ("x", "M", "Honey", 1.0), ("x", "M", "H2O", 0)):
+        for args in (("", "M", "H2O", 1.0), ("x", "S", "H2O", 1.0), ("x", "M", "Honey", 1.0), ("x", "M", "H2O", 0),
+                     ("x", "M", "H2O", float("inf"))):
             with self.assertRaises(ValueError):
                 new_liquid(*args, 0.0, taken=set())
+        with self.assertRaises(ValueError):
+            new_liquid("x", "M", "H2O", 1.0, float("nan"), taken=set())

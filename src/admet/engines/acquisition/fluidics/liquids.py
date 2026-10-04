@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -161,7 +162,7 @@ def check_liquid(entry: dict[str, object]) -> dict[str, object]:
     if entry.get("calibration") not in SENSOR_CALIBRATIONS:
         raise ValueError(f"Unknown sensor table: {entry.get('calibration')}")
     density, viscosity = float(entry.get("density", 0)), float(entry.get("viscosity", 0))
-    if not density > 0 or viscosity < 0:
+    if not (math.isfinite(density) and math.isfinite(viscosity)) or not density > 0 or viscosity < 0:
         raise ValueError("Density must be positive and viscosity not negative")
     return {**entry, "density": density, "viscosity": viscosity}
 

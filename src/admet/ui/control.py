@@ -291,6 +291,7 @@ class ControlStagePage(QWidget):
         self.protocol_confirm_label: QLabel | None = None
         self.param_editors: dict[str, QWidget] = {}
         self.liquid_summary: SummaryLabel | None = None
+        self.calibration_sources: dict[str, QTableWidgetItem] = {}
         self.action_table: QTableWidget | None = None
         self.channel_panel: ChannelControlPanel | None = None
         self.video_table: QTableWidget | None = None
@@ -700,6 +701,7 @@ class ControlWindow(QMainWindow):
         self.channel_panel = page.channel_panel
         self.video_table = page.video_table
         self.log_label = page.log_label
+        self._calibration_sources = page.calibration_sources
 
     def _save_page_refs(self) -> None:
         page = self.current_stage_page
@@ -715,6 +717,7 @@ class ControlWindow(QMainWindow):
         page.channel_panel = self.channel_panel
         page.video_table = self.video_table
         page.log_label = self.log_label
+        page.calibration_sources = self._calibration_sources
 
     def _toc_click_handler(self, index: int):
         def handler(event) -> None:
@@ -2374,8 +2377,10 @@ class ControlWindow(QMainWindow):
         for prefix, *_rest in FLUIDIC_CHANNELS:
             channel = saved.get(prefix) if isinstance(saved.get(prefix), dict) else {}
             self.values[f"{prefix}_dead_volume_ul"] = dead_volume(saved, prefix)
+            # A project that never chose a liquid here starts on the channel's
+            # default, not on whatever the previous project left selected.
             profile = (self._profile(channel.get("profile") or "")
-                       or self._profile(self.values.get(f"{prefix}_profile", "")))
+                       or self._profile(self._param_by_name(f"{prefix}_profile").default))
             if profile is None:
                 continue
             self.values[f"{prefix}_profile"] = profile.id

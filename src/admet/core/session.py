@@ -120,7 +120,8 @@ def session_path(path: str | Path) -> Path:
     if target.name == MANIFEST_FILENAME:
         target = target.parent
     if target.suffix != PROJECT_EXTENSION:
-        target = target.with_suffix(PROJECT_EXTENSION)
+        # Appended, not swapped: "Assay 1.5uM" keeps its ".5uM".
+        target = target.with_name(target.name + PROJECT_EXTENSION)
     return target
 
 
