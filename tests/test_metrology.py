@@ -35,7 +35,7 @@ def archive(root, name, *, flow=None, slope=2, multiplier=1.2, run_id=None, para
     channel = config["channel"]
     flows = {}
     tail = (clock, 0.0)
-    for sample in config["samples"]:
+    for sample in config.get("samples", []):
         step = document["steps"][sample["step"] - 1]
         duration = collection_s(step, channel)
         events.extend([{"step_index": sample["step"] - 1, "step_name": step["name"], "state": "running",
@@ -83,13 +83,7 @@ def archive(root, name, *, flow=None, slope=2, multiplier=1.2, run_id=None, para
             values[sample["before"]] = 1000
             values[sample["after"]] = 1000 + flows[sample["step"]] * (duration + tail_s) / 60 * multiplier * 1.6
     elif name == "dead_volume":
-        values["flow_multiplier"] = multiplier
-        for sample in config["samples"]:
-            values[sample["injection"]] = sample.get("settle_s", 10)
-            values[sample["arrival"]] = values[sample["injection"]] + 10 * 60 / flows[sample["step"]]
-            values[sample["timing_uncertainty"]] = 0.2
-    elif name == "viscosity":
-        values["flow_multiplier"] = multiplier
+        values.update(zip(config["volumes"], (80, 82, 84)))
     write_json(directory / "measurements.json", {"fields": source.get("measurements", {}),
                "values": values, "revision": 1})
     return directory
@@ -190,48 +184,35 @@ class MetrologyTests(unittest.TestCase):
         write_json(path, data)
         self.assertEqual(calculate_run(directory, "gravimetry")["result"]["status"], "inconclusive")
 
-    def test_dead_volume_integrates_marker_interval_and_reports_uncertainty(self):
+    def test_dead_volume_summarises_the_values_entered_by_hand(self):
         directory = archive(self.tmp.name, "dead_volume")
         result = calculate_run(directory, "dead_volume")["result"]
+
         self.assertEqual(result["status"], "usable")
-        self.assertIsNone(result["volume_ul"])
-        self.assertTrue(all(abs(row["volume_ul"] - 12) < 0.005 for row in result["targets"]))
-        self.assertGreater(result["samples"][0]["timing_uncertainty_ul"], 0)
-        self.assertIsNone(result["uncertainty"])
+        self.assertEqual(result["volumes_ul"], [80, 82, 84])
+        self.assertAlmostEqual(result["volume_ul"], 82)
+        self.assertAlmostEqual(result["sd_ul"], 2)
+        self.assertAlmostEqual(result["ci95_ul"][1] - 82, 4.303 * 2 / 3 ** 0.5, places=3)
         path = directory / "measurements.json"
         payload = json.loads(path.read_text())
-        for arrival in (5, 10000):
-            payload["values"]["arrival_1"] = arrival
-            write_json(path, payload)
-            result = calculate_run(directory, "dead_volume")["result"]
-            self.assertEqual(result["status"], "inconclusive")
-            self.assertIsNone(result["volume_ul"])
-        payload["values"]["arrival_1"] = None
+        payload["values"]["dead_volume_2"] = None
         write_json(path, payload)
         self.assertIn("Missing measurement", calculation_readiness(directory, "dead_volume"))
-
-    def test_dead_volume_explicit_calibration_reference_and_staleness(self):
-        calibration = archive(self.tmp.name, "gravimetry")
-        reference = calculate_run(calibration, "gravimetry")
-        directory = archive(self.tmp.name, "dead_volume")
-        path = directory / "measurements.json"
-        payload = json.loads(path.read_text())
-        payload["values"]["flow_multiplier"] = None
+        payload["values"]["dead_volume_2"] = 0
         write_json(path, payload)
-        with self.assertRaisesRegex(ValueError, "Missing measurement"):
+        with self.assertRaisesRegex(ValueError, "positive"):
             calculate_run(directory, "dead_volume")
-        refs = {"calibration": reference["path"]}
-        result = calculate_run(directory, "dead_volume", references=refs)
-        self.assertTrue(all(abs(row["volume_ul"] - 12) < 0.005 for row in result["result"]["targets"]))
-        summary_path = directory / "summary.json"
-        summary = json.loads(summary_path.read_text())
-        summary["rig_fingerprint"]["correction_settings"]["cells_m_scale"] = 3
-        write_json(summary_path, summary)
-        with self.assertRaisesRegex(ValueError, "matching recorded"):
-            calculate_run(directory, "dead_volume", references=refs)
-        calibration.joinpath("measurements.json").write_text("{}")
-        with self.assertRaisesRegex(ValueError, "outdated"):
-            calculate_run(directory, "dead_volume", references=refs)
+
+    def test_dead_volume_steps_only_ask_and_leave_the_channels_alone(self):
+        for channel in (0, 1, 2):
+            source = template_documents()["dead_volume"]
+            source["parameter_values"].update(channel=channel)
+            resolved = resolve(source)
+            self.assertEqual(resolved["calculations"][0]["channel"], channel)
+            for step in resolved["steps"]:
+                self.assertEqual((step["sensor_setpoints"], step["pressure_setpoints"], step["on_complete"]),
+                                 ({}, {}, "hold"))
+                self.assertIn(f"channel {channel}", step["confirm_message"])
 
     def test_trace_ignores_missing_values_outside_exact_window(self):
         from admet.workflows.calculation_inputs import trace, volume_ul
@@ -242,38 +223,6 @@ class MetrologyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Missing samples"):
             trace({"csv": path}, 1, 0.5, 2)
 
-    def test_dead_volume_per_rate_repeats_and_one_selected_channel(self):
-        invalid = template_documents()["dead_volume"]
-        invalid["calculations"][0]["samples"] = None
-        with self.assertRaisesRegex(ValueError, "list of objects"):
-            normalize(invalid)
-        for channel, working in ((0, 250), (1, 67), (2, 67)):
-            source = template_documents()["dead_volume"]
-            source["parameter_values"].update(channel=channel, working_flow=working)
-            resolved = resolve(source)
-            self.assertTrue(all(set(s["sensor_setpoints"]) == {str(channel)} for s in resolved["steps"]))
-            self.assertEqual(resolved["calculations"][0]["channel"], channel)
-        directory = archive(self.tmp.name, "dead_volume")
-        path = directory / "measurements.json"
-        data = json.loads(path.read_text())
-        doc = resolve(json.loads((directory / "protocol.json").read_text()))
-        for sample in doc["calculations"][0]["samples"]:
-            q = doc["steps"][sample["step"] - 1]["sensor_setpoints"]["1"]
-            volume = 10 if q == 15 else 20 if q == 41 else 30
-            data["values"][sample["arrival"]] = data["values"][sample["injection"]] + volume * 60 / q
-        write_json(path, data)
-        result = calculate_run(directory, "dead_volume")["result"]
-        self.assertEqual(result["status"], "usable")
-        self.assertIsNone(result["volume_ul"])
-        for row, expected in zip(result["targets"], (12, 24, 36)):
-            self.assertAlmostEqual(row["volume_ul"], expected, delta=0.005)
-            self.assertEqual(row["repeat_statistics"]["repeats"], 3)
-        data["values"]["injection_1"] = 0
-        write_json(path, data)
-        result = calculate_run(directory, "dead_volume")["result"]
-        self.assertEqual(result["status"], "inconclusive")
-        self.assertIn("settling", " ".join(result["issues"]))
-
     def test_viscosity_recovers_resistance_ratio_and_absolute_reference(self):
         reference_dir = archive(self.tmp.name, "viscosity", run_id="reference", slope=2)
         path = reference_dir / "measurements.json"
@@ -282,7 +231,7 @@ class MetrologyTests(unittest.TestCase):
         write_json(path, payload)
         reference = calculate_run(reference_dir, "viscosity")
         self.assertEqual(reference["result"]["status"], "usable")
-        self.assertAlmostEqual(reference["result"]["resistance_mbar_min_ul"], 2 / 1.2, places=3)
+        self.assertAlmostEqual(reference["result"]["resistance_mbar_min_ul"], 2, places=3)   # recorded flow as is
         self.assertIsNone(reference["result"]["viscosity_mpa_s"])
         sample_dir = archive(self.tmp.name, "viscosity", run_id="sample", slope=5)
         refs = {"reference": reference["path"]}
@@ -296,15 +245,9 @@ class MetrologyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "same identified path"):
             calculate_run(other, "viscosity", references=refs)
 
-    def test_viscosity_rejects_unstable_incomplete_and_uncalibrated_data(self):
+    def test_viscosity_rejects_unstable_data(self):
         directory = archive(self.tmp.name, "viscosity")
         path = directory / "measurements.json"
-        payload = json.loads(path.read_text())
-        payload["values"]["flow_multiplier"] = None
-        write_json(path, payload)
-        self.assertIn("Missing measurement", calculation_readiness(directory, "viscosity"))
-        payload["values"]["flow_multiplier"] = 1
-        write_json(path, payload)
         csv_path = directory / "fluidics.csv"
         with csv_path.open(newline="") as handle:
             rows = list(csv.DictReader(handle))
@@ -331,7 +274,7 @@ class MetrologyTests(unittest.TestCase):
             normalize(source)
 
     def test_changed_execution_and_calculation_bindings_are_refused(self):
-        for name in ("gravimetry", "dead_volume", "viscosity"):
+        for name in ("gravimetry", "viscosity"):
             directory = archive(self.tmp.name, name)
             path = directory / "protocol.json"
             document = json.loads(path.read_text())
@@ -348,21 +291,7 @@ class MetrologyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "declarations disagree"):
             calculate_run(directory, "gravimetry")
 
-    def test_viscosity_reuses_flow_curve_and_checks_coverage(self):
-        calibration = archive(self.tmp.name, "gravimetry")
-        reference = calculate_run(calibration, "gravimetry")
-        directory = archive(self.tmp.name, "viscosity")
-        refs = {"calibration": reference["path"]}
-        result = calculate_run(directory, "viscosity", references=refs)["result"]
-        self.assertEqual(result["status"], "usable", result["issues"])
-        self.assertIsNone(result["flow_multiplier"])
-        self.assertTrue(all(abs(p["flow_multiplier"] - 1.2) < 0.001 for p in result["samples"]))
-        outside = archive(self.tmp.name, "viscosity", run_id="outside", parameters={"working_flow": 100})
-        result = calculate_run(outside, "viscosity", references=refs)["result"]
-        self.assertEqual(result["status"], "inconclusive")
-        self.assertIn("calibrated range", " ".join(result["issues"]))
-
-    def test_viscosity_channel_selection_and_archived_pressure_mode(self):
+    def test_viscosity_channel_selection_and_flow_control_only(self):
         for channel, working in ((0, 250), (1, 67), (2, 67)):
             source = template_documents()["viscosity"]
             source["parameter_values"].update(channel=channel, working_flow=working)
@@ -372,45 +301,35 @@ class MetrologyTests(unittest.TestCase):
         source = template_documents()["viscosity"]
         for step in source["steps"]:
             step["pressure_setpoints"] = step.pop("sensor_setpoints")
-        self.assertEqual(len(normalize(source)["calculations"][0]["samples"]), 6)
+        with self.assertRaisesRegex(ValueError, "flow control"):        # flow-controlled only
+            normalize(source)
 
-    def test_reference_identity_and_results_survive_project_move(self):
+    def test_results_survive_project_move(self):
         import shutil
         from admet.workflows.calculations import result_text
 
-        calibration = archive(self.tmp.name, "gravimetry")
-        ref = calculate_run(calibration, "gravimetry")
-        directory = archive(self.tmp.name, "dead_volume")
-        result = calculate_run(directory, "dead_volume", references={"calibration": ref["path"]})
-        self.assertIn("TIMING UNCERTAINTY", result_text(result))
+        directory = archive(self.tmp.name, "gravimetry")
+        result = calculate_run(directory, "gravimetry")
+        self.assertIn("MULTIPLIER", result_text(result))
         copied = Path(self.tmp.name) / "copied"
         shutil.copytree(Path(self.tmp.name) / "records", copied / "records")
-        self.assertFalse(saved_results(copied / "records" / "protocols" / "dead_volume")[0]["outdated"])
-        path = directory / "summary.json"
-        summary = json.loads(path.read_text())
-        summary["rig_fingerprint"]["channel_mapping"][1]["sensor_device_sn"] = 99
-        write_json(path, summary)
-        with self.assertRaisesRegex(ValueError, "sensor identity"):
-            calculate_run(directory, "dead_volume", references={"calibration": ref["path"]})
+        self.assertFalse(saved_results(copied / "records" / "protocols" / "gravimetry")[0]["outdated"])
 
-    def test_new_schema_expanded_repeats_and_invalid_sample_units(self):
+    def test_sample_steps_passes_and_units_are_checked(self):
         from copy import deepcopy
 
-        for name in ("gravimetry", "dead_volume", "viscosity"):
+        for name in ("gravimetry", "viscosity"):
             source = template_documents()[name]
             sample = source["calculations"][0]["samples"][0]
             sample["step"] = 999
             with self.assertRaisesRegex(ValueError, "expanded step"):
                 normalize(source)
         source = template_documents()["gravimetry"]
-        source["calculations"][0]["samples"] = source["calculations"][0]["samples"][:3]
-        for sample in source["calculations"][0]["samples"]:
+        single_rate = deepcopy(source)
+        for sample in single_rate["calculations"][0]["samples"]:
             sample.pop("pass")
-        source["measurements"] = {k: v for k, v in source["measurements"].items() if v.get("step", 0) <= 3}
-        first = deepcopy(source["steps"][0])
-        first["repeat"] = 3
-        source["steps"] = [first, source["steps"][-1]]
-        self.assertEqual(len(normalize(source)["calculations"][0]["samples"]), 3)
+        with self.assertRaisesRegex(ValueError, "pass"):              # only the three-pass series
+            normalize(single_rate)
         source["measurements"]["mass_after_3"]["unit"] = "s"
         with self.assertRaisesRegex(ValueError, "unit"):
             normalize(source)

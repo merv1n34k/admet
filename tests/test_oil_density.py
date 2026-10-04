@@ -11,15 +11,22 @@ from admet.workflows.oil_density import (
     OilDensityMeasurement,
     analyze_oil_density,
     relative_density,
-    density_protocol,
     analyze_density_run,
 )
 from admet.workflows.json_protocol import normalize, resolve, template_documents
 from admet.workflows.calculation_schema import declarations
 
 
-def recorded_density(directory, *, densities=(1.2, 1.2), missing=False, unsettled=False, scouted=False, curvature=0):
-    document = normalize(density_protocol("dsurf", scouted=scouted))
+def density_document(oil="dsurf", *, parameterized=False):
+    """The density template, as is or with its parameters already filled in."""
+    document = template_documents()["density"]
+    document["parameter_values"]["oil_name"] = oil
+    return normalize(document if parameterized else resolve(document))
+
+
+def recorded_density(directory, *, densities=(1.2, 1.2), missing=False, unsettled=False, parameterized=False,
+                     curvature=0):
+    document = density_document(parameterized=parameterized)
     resolved = resolve(document)
     rows, events = [], []
     origin = 100.0
@@ -78,8 +85,8 @@ class RecordedDensityTests(unittest.TestCase):
             self.assertEqual(len(declarations(document)[0]["points"]), 18)
             self.assertTrue(all(s["on_complete"] == "zero" for s in document["steps"]))
 
-    def test_scouted_density_parameters_gates_and_curved_pressure_response(self):
-        source = normalize(density_protocol("dsurf", scouted=True))
+    def test_density_parameters_gates_and_curved_pressure_response(self):
+        source = density_document(parameterized=True)
         source["parameter_values"].update(oil_base_flow=10, height_low_cm=6, settling_s=12)
         resolved = resolve(source)
         self.assertEqual(resolved["steps"][1]["sensor_setpoints"], {"1": 10})
@@ -92,7 +99,7 @@ class RecordedDensityTests(unittest.TestCase):
                 self.assertIn("open to atmosphere", step["confirm_message"])
         with tempfile.TemporaryDirectory() as tmp:
             result = analyze_density_run(*recorded_density(
-                tmp, scouted=True, densities=(1.6, 1.6), curvature=0.008), completed=True)
+                tmp, parameterized=True, densities=(1.6, 1.6), curvature=0.008), completed=True)
         self.assertEqual(result["status"], "consistent", result["issues"])
         self.assertAlmostEqual(result["density_g_ml"], 1.6)
         self.assertEqual(len(result["points"]), 18)
@@ -106,20 +113,20 @@ class RecordedDensityTests(unittest.TestCase):
             lambda d: d["calculations"][0].update(temperature=20),
             lambda d: d["calculations"][0]["points"][0].update(step=1),
             lambda d: d["calculations"][0]["points"][0].update(height_cm=float("nan")),
-            lambda d: d["calculations"][0]["points"][0].update(settle_s=19),
+            lambda d: d["calculations"][0]["points"][0].update(settle_s=26),   # under 5 s left of 30
             lambda d: d["steps"][1].update(repeat=2),
             lambda d: d["steps"][1].update(on_complete="hold"),
             lambda d: d["steps"][1].update(sensor_setpoints={"0": 5}),
             lambda d: d["steps"][1].update(timeout_s=10),
             lambda d: d["calculations"][0]["points"][-1].update(height_cm=15),
         ):
-            document = density_protocol("dsurf")
+            document = density_document()
             mutate(document)
             with self.assertRaises(ValueError):
                 normalize(document)
 
     def test_gate_uses_same_height_as_calculation_and_does_not_mutate_source(self):
-        document = density_protocol("dsurf")
+        document = density_document()
         before = deepcopy(document)
         normalized = normalize(document)
         self.assertEqual(document, before)
@@ -127,11 +134,11 @@ class RecordedDensityTests(unittest.TestCase):
             if point["height_cm"] == 5:
                 point["height_cm"] = 6
         normalized = normalize(normalized)
-        first_measurement = normalized["calculations"][0]["points"][3]["step"] - 1
+        first_measurement = normalized["calculations"][0]["points"][0]["step"] - 1
         self.assertIn("6 cm ABOVE", normalized["steps"][first_measurement]["confirm_message"])
 
     def test_density_never_targets_other_channels(self):
-        document = normalize(density_protocol("dsurf"))
+        document = density_document()
         for step in document["steps"]:
             self.assertLessEqual(set(step["sensor_setpoints"]) | set(step["pressure_setpoints"]), {"1"})
         for step_index, step in enumerate(document["steps"]):
@@ -147,7 +154,7 @@ class RecordedDensityTests(unittest.TestCase):
         self.assertAlmostEqual(result["density_g_ml"], 1.2)
         self.assertAlmostEqual(result["repeat_difference_percent"], 0)
         self.assertIsNone(result["ci95_g_ml"])
-        self.assertEqual(len(result["points"]), 21)
+        self.assertEqual(len(result["points"]), 18)
         self.assertGreater(result["points"][0]["samples"], 40)
 
     def test_missing_and_unsettled_data_are_not_valid_densities(self):

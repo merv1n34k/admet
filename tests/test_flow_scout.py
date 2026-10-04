@@ -81,30 +81,28 @@ def scout_context(directory, *, drift=0, missing=False, short=False, curved=Fals
 
 
 def density_recovery(directory, *, seed=16000, drift=0):
-    from admet.workflows.oil_density import density_protocol, analyze_density_run
+    from admet.workflows.oil_density import analyze_density_run
+    from tests.test_oil_density import density_document
 
-    document = normalize(density_protocol("simulation_16000"))
-    for step in document["steps"]:
-        target = step["sensor_setpoints"].get("1", 0)
-        if target:
-            step["sensor_setpoints"]["1"] = {5: 15, 15: 30, 20: 45}[target]
+    document = density_document("simulation_16000")
     plant = ImperfectOil(seed=seed, drift=drift)
     rows, events = [], []
     origin, clock = 100, 10
     for point in declarations(document)[0]["points"]:
         step = document["steps"][point["step"] - 1]
+        duration = step["trigger_params"]["duration_s"]
         plant.height = point["height_cm"]
         plant.set_flow(0, clock - 2)
         plant.set_flow(step["sensor_setpoints"]["1"], clock)
         events.extend([{"monotonic": origin + clock, "step_index": point["step"] - 1,
                         "step_name": step["name"], "state": "running", "outcome": "running"},
-                       {"monotonic": origin + clock + 20, "step_index": point["step"] - 1,
+                       {"monotonic": origin + clock + duration, "step_index": point["step"] - 1,
                         "step_name": step["name"], "state": "running", "outcome": "completed"}])
-        for tick in range(200):
+        for tick in range(int(duration * 10)):
             now = clock + tick / 10
             pressure, flow = plant.sample(now)
             rows.append((now, pressure, flow))
-        clock += 22
+        clock += duration + 2
     directory = Path(directory)
     csv_path, events_path = directory / "density.csv", directory / "density_events.jsonl"
     with csv_path.open("w", newline="") as handle:

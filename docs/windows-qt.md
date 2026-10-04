@@ -80,8 +80,8 @@ a protocol or recording is active.
    missing project paths (or paths without a manifest) are removed from this local
    history only; no project data is deleted. Unknown last-opened times show **—**.
 2. Select and connect the camera if needed; enable Live for preview.
-3. Select Fluigent, connect, then set liquid profiles/correction factors and
-   apply them. The device panels and live plots are restored from the Qt UI.
+3. Select Fluigent, connect, then on **Calibration** set each channel's liquid,
+   correction factors and dead volume, and apply them. The device panels and live plots are restored from the Qt UI.
 4. The TOC keeps **Priming** and **Wash** as fixed stages. Use **+ Protocol step**
    to insert custom experiments between them. Each experiment has a **Protocol**
    section between the existing action bar and graphs/camera: select a saved
@@ -162,7 +162,7 @@ the previous gravimetry and pressure-flow examples are no longer offered.
 In **Experiment 1**, select **dropseq**, then **Plan** to review it. Its source is
 [`dropseq.json`](../templates/dropseq.json). Execute saves the definition with the run.
 Priming and Wash remain separate existing stages; this template does not repeat
-them or change correction factors or camera settings.
+them or change the calibration or camera settings.
 
 The template follows the existing Drop-Seq defaults for one set and one replicate:
 

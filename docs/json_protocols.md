@@ -12,7 +12,8 @@ The Qt Plan button creates one replaceable in-memory preview per experiment tab.
 No preview file is written. Editing invalidates the preview; Execute rechecks the
 rig and guards, assigns a fresh `run_id`, and only then archives the execution
 snapshot and starts recording. New recordings live under
-`records/protocols/<run_id>/`; old plan-ID-based archives remain readable.
+`records/protocols/<run_id>/`. Only the current project format is read; older
+projects will be converted by a separate migrate command.
 Internal preview IDs/digests are not experiment history or reusable execution permission.
 
 ## Editable parameters in Qt
@@ -215,15 +216,12 @@ JSON declares a list of known calculators, with one entry per calculation type:
 ]
 ```
 
-This illustrates bindings; a usable gravimetry result needs at least two repeats.
-Use the bundled three-repeat template as a complete example. References to steps
+This illustrates bindings; gravimetry needs the three-pass series (up/down/up).
+Use the bundled template as a complete example. References to steps
 use expanded, one-based indices; measurement `step` associations must match.
 Unknown types/fields, incompatible units, missing step references and invalid
 sampling recipes are rejected before execution. `liquid` and viscosity `path_id`
 accept text parameters; viscosity `settle_s` accepts numeric parameter expressions.
-Existing saved `analysis` blocks remain readable, but cannot coexist with
-`calculations`. Bundled density and scout templates now use the list without
-changing their execution targets, heights or confirmation gates.
 
 ### Gravimetry
 
@@ -263,39 +261,18 @@ single multiplier is offered only when all factors span ≤5% of their mean;
 otherwise use the flow-dependent calibration curve. R² and three repeats alone
 do not establish absolute accuracy or guarantee statistical significance. Balance
 resolution, density, evaporation and retained droplets add systematic uncertainty.
-Historical single-rate before/after runs remain readable as single-rate checks.
 
 ### Dead volume
 
-One selected channel, the same low/middle/working flow levels as gravimetry, and
-three passes (up/down/up). Each target therefore has three marker measurements.
-The parameter table sets a settling interval (default 20 seconds) followed by an
-observation volume (default 50 µL, converted to time at each target).
-Lengthen this window before planning if the marker cannot arrive in time.
-Nominal total consumption is about 573 µL at the M defaults or 847.5 µL with L
-working flow 250 µL/min, excluding priming and marker reset/flush operations.
-For each pass, the **Measurements** table has injection time, outlet breakthrough
-time and the standard uncertainty of each timestamp, all in seconds. Times are
-relative to the step's actual running start, not the confirmation gate. Record
-times manually using a synchronized time reference; there is no automatic marker
-detection or timestamp button. Introduce the marker after settling without changing
-the flow path; repeat the same first-breakthrough criterion each time. Injection
-before the declared settling interval ends is rejected by calculation.
+Dead volume is measured by hand. The protocol has three confirmation-only steps:
+they set no flow and leave every channel as it is (`on_complete: hold`), so you run
+the selected channel yourself — manual channel control stays available while the
+protocol waits. For each measurement, find the channel's dead volume your own way,
+enter it in the **Measurements** table (µL) and confirm.
 
-Effective volume = integral of calibrated measured flow from injection to arrival.
-The marker must arrive inside its step. This estimates displacement volume, not
-pressure startup delay or a guarantee of complete fluid replacement. Marker
-dispersion affects the result. Three valid repeats per flow target with CV ≤5%
-are required. Invalid declared passes are not silently discarded. Different flow
-levels are never pooled into one mean dead volume; results include per-flow SD,
-repeat CV and repeatability-only 95% Student-t intervals. Historical single-rate
-marker runs remain readable under their original two-repeat/10% checks.
-Timing-only standard uncertainty is
-`sqrt(Q_injection² + Q_arrival²) × timestamp_sigma / 60`, with calibrated Q in
-µL/min. Repeat SEM and this timing contribution are separate, not total uncertainty.
-Timing uncertainty above 10% of volume produces an explicit warning. No regression
-R² applies to this integration. This first-breakthrough protocol does not measure
-V50 or V90, which require a normalized detector signal or analyzed timed fractions.
+The calculation reports the mean of the three values, their SD and CV, and a
+repeatability-only 95% Student-t interval. Nothing is copied anywhere: enter the
+result in the Calibration table's dead volume column yourself.
 
 ### Viscosity
 
@@ -303,14 +280,13 @@ Select the channel and the same low/working flow parameters as gravimetry.
 The template uses flow control: low → middle → working → working → middle → low,
 measuring the pressure needed at each level. Confirm each pass. Each point ends at
 zero flow; the final one-second zero-flow step closes out recording coverage.
-Older pressure-controlled recipes remain readable and calculable.
 Keep the filled geometry, outlet height and
 identified `path_id` unchanged between sample and reference runs. Temperature must
 be comparable; record it separately, not in a mandatory ADMET field.
 
-Fit measured `P = P0 + RQ` separately for the two passes. Q uses the explicitly
-chosen flow multiplier or the matching gravimetry curve at that point's measured
-mean flow. Minimum averaging is 5 seconds/10 samples; default is
+Fit measured `P = P0 + RQ` separately for the two passes. Q is the recorded flow,
+already corrected inside the flow unit by the Calibration stage; no multiplier is
+applied on top. Minimum averaging is 5 seconds/10 samples; default is
 30 seconds after 20 seconds settling. Only interior measured samples enter the
 point statistics, not interpolated boundary values. Required checks are positive R, R² ≥0.95,
 flow CV and early/late pressure/flow drift ≤5%, and slope disagreement ≤10%.
@@ -325,21 +301,12 @@ measurement. This assumes Newtonian laminar flow, unchanged geometry and compara
 temperature; matching a path label does not verify the physical setup. Fit standard
 errors do not include calibration/geometry/temperature uncertainty.
 
-### Calibration selection and saved results
+### Calibration and saved results
 
-Dead volume and viscosity need either a positive, explicitly entered recorded-flow
-multiplier or a selected usable gravimetry result. Enter 1 only when the logged
-flow is already calibrated. Selected gravimetry must match oil, channel, sensor
-identity and the recorded channel corrections. Reapplying corrections after
-gravimetry invalidates reuse of that multiplier: do not apply it twice. If both a
-reference and a manual value exist, the explicitly selected reference takes precedence.
-Multi-rate gravimetry results supply a piecewise-linear recorded-to-true flow
-curve, not an averaged multiplier. Viscosity uses the point mean; marker volume
-integrates corrected flow samples. At most 5% outside the measured endpoint range
-is allowed using the nearest endpoint's multiplier to accommodate repeatability;
-larger excursions are refused rather than silently extrapolated. Matching liquid,
-channel and correction state still applies. Curve-based results leave the single
-`flow_multiplier` null and preserve their explicit calibration reference.
+Corrections belong to the rig: set them on the Calibration stage, where they are
+applied inside the flow unit. Calculations never apply a second correction to
+recorded flow. Gravimetry reports the factor between weighed and recorded volume;
+enter any change to the scale by hand on the Calibration stage.
 
 Calculations consume closed recordings, actual step events and run measurements.
 Missing/nonfinite samples, gaps over one second, pauses, skipped/incomplete steps

@@ -13,17 +13,16 @@ def normalize_calculation(entry, steps, fields):
         raise ValueError("gravimetry requires type, channel, liquid, density and samples")
     if not isinstance(entry["liquid"], str) or not entry["liquid"].strip():
         raise ValueError("liquid must identify the measured oil")
-    expanded = sample_steps(entry, steps, mode="flow", triggers=("time", "volume"))
+    expanded = sample_steps(entry, steps, triggers=("time", "volume"))
     measurement_binding(fields, entry["density"], {"g/mL"})
     for sample in entry["samples"]:
-        if set(sample) not in ({"step", "before", "after"}, {"step", "pass", "before", "after"}):
-            raise ValueError("gravimetry sample requires step, before, after and optional pass")
+        if set(sample) != {"step", "pass", "before", "after"}:
+            raise ValueError("gravimetry sample requires step, pass, before and after")
         for key in ("before", "after"):
             measurement_binding(fields, sample[key], {"mg", "g"}, sample["step"])
         if sample["before"] == sample["after"]:
             raise ValueError("before and after masses must be distinct measurements")
-    if any("pass" in sample for sample in entry["samples"]):
-        three_flow_passes(entry, expanded)
+    three_flow_passes(entry, expanded)
     return deepcopy(entry)
 
 
@@ -171,17 +170,13 @@ def calculate(context):
             issues.append(f"Step {sample['step']}: {exc}")
         rows.append(result)
     stats = repeat_statistics(factors)
-    curve = flow_curve(rows, issues) if any("pass" in s for s in config["samples"]) else {}
-    if not curve and stats["sd"] is not None and stats["sd"] > 0.1 * stats["mean"]:
-        issues.append("Correction repeat CV exceeds 10%; investigate collection consistency")
-    scalar_ok = not curve or (factors and max(factors) - min(factors) <= 0.05 * stats["mean"])
+    curve = flow_curve(rows, issues)
+    scalar_ok = factors and max(factors) - min(factors) <= 0.05 * stats["mean"]
     return {"status": "usable" if len(factors) >= 2 and not issues else "inconclusive",
             "channel": config["channel"], "liquid": config["liquid"], "density_g_ml": rho, "samples": rows,
             "multiplier": stats["mean"] if len(factors) >= 2 and not issues and scalar_ok else None,
-            **curve,
-            **({"repeat_statistics": stats} if not curve else {}), "uncertainty": None, "issues": issues,
-            "thresholds": {"repeat_cv_max": 0.05 if curve else 0.1, "minimum_repeats": 3 if curve else 2,
-                           "flow_fit_r_squared_min": 0.95 if curve else None},
+            **curve, "uncertainty": None, "issues": issues,
+            "thresholds": {"repeat_cv_max": 0.05, "minimum_repeats": 3, "flow_fit_r_squared_min": 0.95},
             "correction_settings": calibration_context(context),
             "calibration_identity": calibration_identity(context),
             "note": "Multiplier applies to recorded flow, not raw sensor readings. No hardware changes. "

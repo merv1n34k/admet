@@ -69,7 +69,7 @@ density result rather than guessing measurement windows. The calculation
 selector is backed by `workflows/calculations.py`; additional calculators can
 register there without adding experiment-specific TOC pages.
 
-Enter masses or marker times in the experiment's separate **Measurements** table,
+Enter masses or dead volumes in the experiment's separate **Measurements** table,
 enabled when execution starts. Choose reference results explicitly in Calculations;
 the app never chooses the latest calibration or applies a computed multiplier to
 hardware. Changed measurements or reference inputs mark saved results outdated.

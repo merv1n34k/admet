@@ -126,11 +126,6 @@
     }
   ],
   "measurements": {
-    "flow_multiplier": {
-      "label": "Recorded-flow multiplier (or select gravimetry result in Calculations)",
-      "unit": "1",
-      "min": 0
-    },
     "known_viscosity": {
       "label": "Known viscosity (reference liquid only; otherwise leave blank)",
       "unit": "mPa.s",
@@ -143,7 +138,6 @@
       "channel": "channel",
       "liquid": "{oil_name}",
       "path_id": "{path_id}",
-      "flow_multiplier": "flow_multiplier",
       "known_viscosity": "known_viscosity",
       "samples": [
         {

@@ -7,20 +7,17 @@ from statistics import mean, stdev
 from admet.workflows.calculation_schema import measurement_binding, sample_steps
 from admet.workflows.calculation_inputs import step_window, trace
 from admet.workflows.gravimetry import measurement, calibration_context, linear_fit
-from admet.workflows.dead_volume import flow_multiplier
 
 
 def normalize_calculation(entry, steps, fields):
-    if set(entry) != {"type", "channel", "liquid", "path_id", "flow_multiplier", "known_viscosity", "samples"}:
-        raise ValueError("viscosity requires type, channel, liquid, path_id, flow_multiplier, known_viscosity and samples")
+    if set(entry) != {"type", "channel", "liquid", "path_id", "known_viscosity", "samples"}:
+        raise ValueError("viscosity requires type, channel, liquid, path_id, known_viscosity and samples")
     for key in ("liquid", "path_id"):
         if not isinstance(entry[key], str) or not entry[key].strip():
             raise ValueError(f"viscosity requires a nonempty {key}")
-    expanded = sample_steps(entry, steps, mode="either")
-    measurement_binding(fields, entry["flow_multiplier"], {"1"})
+    expanded = sample_steps(entry, steps)
     measurement_binding(fields, entry["known_viscosity"], {"mPa.s"})
     passes = {1: [], 2: []}
-    modes = set()
     for sample in entry["samples"]:
         if (set(sample) != {"step", "pass", "settle_s"} or type(sample["pass"]) is not int
                 or sample["pass"] not in passes):
@@ -30,18 +27,16 @@ def normalize_calculation(entry, steps, fields):
         if (type(settle) not in (int, float) or not math.isfinite(settle) or settle < 0
                 or step.trigger_params["duration_s"] - settle < 5):
             raise ValueError("viscosity requires nonnegative settling and at least 5 seconds averaging")
-        modes.add("flow" if step.sensor_setpoints else "pressure")
-        passes[sample["pass"]].append((step.sensor_setpoints or step.pressure_setpoints)[entry["channel"]])
-    if (len(modes) != 1 or len(passes[1]) < 3 or passes[2] != list(reversed(passes[1]))
+        passes[sample["pass"]].append(step.sensor_setpoints[entry["channel"]])
+    if (len(passes[1]) < 3 or passes[2] != list(reversed(passes[1]))
             or any(b <= a for a, b in zip(passes[1], passes[1][1:]))
             or [s["step"] for s in entry["samples"]] != sorted(s["step"] for s in entry["samples"])
             or [s["pass"] for s in entry["samples"]] != sorted(s["pass"] for s in entry["samples"])):
-        raise ValueError("viscosity requires one control mode, ordered increasing levels and their reverse pass")
+        raise ValueError("viscosity requires ordered increasing flow levels and their reverse pass")
     return deepcopy(entry)
 
 
 def check(context):
-    flow_multiplier(context)
     key = context["config"]["known_viscosity"]
     if context["measurements"]["values"].get(key) is not None and measurement(context, key) <= 0:
         raise ValueError("Known reference viscosity must be positive or left blank")
@@ -63,7 +58,6 @@ def fit(points):
 def calculate(context):
     check(context)
     config = context["config"]
-    factor = flow_multiplier(context)
     points, passes, issues = [], [], []
     for sample in config["samples"]:
         point = {"step": sample["step"], "pass": sample["pass"], "flow_ul_min": None,
@@ -74,13 +68,12 @@ def calculate(context):
             raw = [r[1] for r in rows]
             if window[1] - window[0] < 5 or len(rows) < 10 or min(raw) <= 0:
                 raise ValueError("Insufficient settled positive-flow samples")
-            point_factor = flow_multiplier(context, mean(raw))
-            q, p = [v * point_factor for v in raw], [r[2] for r in rows]
+            q, p = raw, [r[2] for r in rows]
             cv = stdev(q) / mean(q)
             quarter = max(2, len(q) // 4)
             drift = abs(mean(q[:quarter]) - mean(q[-quarter:])) / mean(q)
             pressure_drift = abs(mean(p[:quarter]) - mean(p[-quarter:])) / max(abs(mean(p)), 1)
-            point.update(flow_ul_min=mean(q), pressure_mbar=mean(p), flow_cv=cv, flow_multiplier=point_factor,
+            point.update(flow_ul_min=mean(q), pressure_mbar=mean(p), flow_cv=cv,
                          flow_drift_fraction=drift, pressure_drift_fraction=pressure_drift, samples=len(rows))
             if max(cv, drift, pressure_drift) > 0.05:
                 raise ValueError("Settled flow CV or pressure/flow drift exceeds 5%")
@@ -112,13 +105,13 @@ def calculate(context):
     ref_viscosity = reference.get("known_viscosity_mpa_s")
     absolute = ratio * ref_viscosity if ratio and ref_viscosity else None
     return {"status": "usable" if not issues else "inconclusive", "channel": config["channel"],
-            "liquid": config["liquid"], "path_id": config["path_id"], "flow_multiplier": factor,
+            "liquid": config["liquid"], "path_id": config["path_id"],
             "resistance_mbar_min_ul": resistance, "relative_viscosity": ratio,
             "viscosity_mpa_s": absolute, "known_viscosity_mpa_s": known,
             "samples": points, "passes": passes, "pass_disagreement_fraction": disagreement,
             "uncertainty": None, "issues": issues, "correction_settings": calibration_context(context),
             "thresholds": {"r_squared_min": 0.95, "stability_fraction_max": 0.05, "pass_difference_max": 0.1},
-            "note": "P = P0 + RQ fits calibrated measured flow, excluding settling. Viscosity ratios require "
+            "note": "P = P0 + RQ fits the recorded flow, already corrected by the rig calibration, excluding settling. Viscosity ratios require "
                     "unchanged geometry and comparable temperature with Newtonian laminar flow. Absolute viscosity "
                     "requires a selected reference with known viscosity. Fit errors exclude calibration, geometry "
                     "and temperature uncertainty. No hardware calibration is changed."}

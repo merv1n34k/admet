@@ -31,13 +31,6 @@ def resolve_declarations(document, values):
             entry["liquid"] = interpolate(entry["liquid"], values)
         if "channel" in entry:
             entry["channel"] = expression(entry["channel"], values)
-        if entry["type"] == "dead_volume":
-            samples = entry.get("samples")
-            if not isinstance(samples, list) or any(not isinstance(s, dict) for s in samples):
-                raise ValueError("dead_volume samples must be a list of objects")
-            for sample in samples:
-                if "settle_s" in sample:
-                    sample["settle_s"] = expression(sample["settle_s"], values)
         if entry["type"] == "viscosity":
             entry["path_id"] = interpolate(entry.get("path_id"), values)
             samples = entry.get("samples")
@@ -90,7 +83,7 @@ def measurement_binding(fields, key, units, step=None):
         raise ValueError(f"{key}: measurement must belong to step {step}")
 
 
-def sample_steps(entry, steps, *, mode, triggers=("time",)):
+def sample_steps(entry, steps, *, triggers=("time",)):
     from admet.engines.acquisition.pipeline import expand_protocol_steps
     from admet.workflows.operations import _step_from
 
@@ -109,10 +102,8 @@ def sample_steps(entry, steps, *, mode, triggers=("time",)):
         seen.add(index)
         step = expanded[index - 1]
         controlled = set(step.sensor_setpoints) | set(step.pressure_setpoints)
-        targets = (step.sensor_setpoints or step.pressure_setpoints) if mode == "either" else (
-            step.sensor_setpoints if mode == "flow" else step.pressure_setpoints)
-        if controlled != {channel} or targets.get(channel, 0) <= 0 or step.trigger_type not in triggers:
-            raise ValueError(f"sample step {index} must use positive single-channel {mode} control and "
+        if controlled != {channel} or step.sensor_setpoints.get(channel, 0) <= 0 or step.trigger_type not in triggers:
+            raise ValueError(f"sample step {index} must use positive single-channel flow control and "
                              + " or ".join(triggers))
         if step.trigger_type == "volume" and step.trigger_params.get("sensor_index") != channel:
             raise ValueError(f"sample step {index} must count volume on channel {channel}")
