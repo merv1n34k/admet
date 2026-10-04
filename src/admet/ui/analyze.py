@@ -40,6 +40,10 @@ VIDEO_SUFFIXES = {".avi", ".mp4", ".mov", ".mkv"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 
 
+# Manifest metadata key holding what the analysis screen had for a project.
+ANALYSIS_SETUP_KEY = "analysis_setup"
+
+
 @dataclass
 class MatrixRow:
     uid: str
@@ -141,6 +145,8 @@ class AnalyzeWorkflowView:
         self.last_report: AnalyzeBatchReport | None = None
         self._run_progress = 0
         self._run_step_progress = 0
+        # What each project last had saved, so an unchanged screen writes nothing.
+        self._saved_setup: dict[str, dict[str, Any]] = {}
         self.notice = "Open a project, then add files to the batch matrix."
         self.notice_kind = "primary"
         self.action_log: list[str] = ["Analyze UI ready."]
@@ -688,6 +694,7 @@ class AnalyzeWorkflowView:
                 last_preview["t"] = time.monotonic()
                 self.selected_uid = item.uid
                 self._sync_previews()
+                self._save_setup()
 
             slider = ui.slider(
                 min=minimum,
@@ -1202,6 +1209,7 @@ class AnalyzeWorkflowView:
         cache_root = store.session.metadata.get("cache_root")
         if cache_root:
             self.settings["cache_root"] = str(cache_root)
+        self._restore_setup(store)
         self._load_project_files(store)
         self.stage_progress["import"] = 100 if self.matrix else 45
         self._mark_stage("import", StageStatus.COMPLETE if self.matrix else StageStatus.ACTIVE)
@@ -1210,6 +1218,74 @@ class AnalyzeWorkflowView:
         self._remember_project(store.path)
         self.project_refs = self._discover()
         self._render_current_stage(force_mount=True)
+
+    def _restore_setup(self, store: ProjectStore) -> None:
+        """Bring back the matrix, its per-file settings and the stage progress saved in the project."""
+        saved = store.session.metadata.get(ANALYSIS_SETUP_KEY)
+        if not isinstance(saved, dict):
+            return
+        self.settings.update({key: value for key, value in (saved.get("settings") or {}).items()
+                              if key in self.settings})
+        existing = {row.source_path for row in self.matrix}
+        for entry in saved.get("matrix") or []:
+            if not isinstance(entry, dict) or not entry.get("source"):
+                continue
+            source = str(_resolve_project_path(store.path, str(entry["source"])))
+            if source in existing:
+                continue
+            self.matrix.append(MatrixRow(
+                uid=_uid(),
+                project_path=str(store.path),
+                source_path=source,
+                engine=str(entry.get("engine") or infer_engine(Path(source))),
+                sample_id=str(entry.get("sample_id") or Path(source).stem),
+                cache_policy=str(entry.get("cache_policy") or "use"),
+                active=bool(entry.get("active", True)),
+                settings=dict(entry.get("settings") or {}),
+            ))
+        stages = saved.get("stages") or {}
+        self.stage_progress.update({key: int(value) for key, value in (stages.get("progress") or {}).items()
+                                    if key in self.stage_progress})
+        statuses = {key: StageStatus(value) for key, value in (stages.get("statuses") or {}).items()
+                    if value in {status.value for status in StageStatus}}
+        self.state = replace(self.state, statuses={**self.state.statuses, **statuses})
+        self._saved_setup[str(store.path)] = saved
+
+    def _setup_for(self, project: Path) -> dict[str, Any]:
+        """This screen's state for one project: its matrix rows, settings and stage progress."""
+        def stored(source: str) -> str:
+            path = Path(source)
+            try:
+                return path.resolve().relative_to(project.resolve()).as_posix()
+            except ValueError:
+                return str(path)
+
+        return {
+            "matrix": [
+                {"source": stored(row.source_path), "engine": row.engine, "sample_id": row.sample_id,
+                 "cache_policy": row.cache_policy, "active": row.active, "settings": dict(row.settings)}
+                for row in self.matrix if session_path(row.project_path) == project
+            ],
+            "settings": dict(self.settings),
+            "stages": {"progress": dict(self.stage_progress),
+                       "statuses": {key: str(value) for key, value in self.state.statuses.items()}},
+        }
+
+    def _save_setup(self) -> None:
+        """Keep what the screen shows in each project it involves, so a reopened project comes back as left."""
+        projects = {row.project_path for row in self.matrix} | ({self.project_path} if self.project_path else set())
+        for project in projects:
+            path = session_path(project)
+            if not (path / "manifest.json").is_file():
+                continue
+            setup = self._setup_for(path)
+            if self._saved_setup.get(str(path)) == setup:
+                continue
+            try:
+                ProjectStore(path).update_metadata(**{ANALYSIS_SETUP_KEY: setup})
+                self._saved_setup[str(path)] = setup
+            except Exception as exc:
+                self._log(f"project: could not save the analysis setup of {path.name}: {exc}")
 
     def _load_project_files(self, store: ProjectStore) -> None:
         existing = {row.source_path for row in self.matrix}
@@ -1391,14 +1467,17 @@ class AnalyzeWorkflowView:
             return
         if field == "active":
             row.active = bool(value)
+            self._save_setup()
             return
         if field == "sample_id":
             row.sample_id = str(value or "")
+            self._save_setup()
             return
         kind = matrix_field_kind(field)
         if kind is None:
             return
         row.settings[field] = cast_matrix_value(kind, value)
+        self._save_setup()
 
     def _project_options(self) -> dict[str, str]:
         return {str(ref.path): project_ref_label(ref) for ref in self.project_refs}
@@ -1475,6 +1554,7 @@ class AnalyzeWorkflowView:
         self.action_log.append(f"{time.strftime('%H:%M:%S')} {message}")
 
     def _refresh(self) -> None:
+        self._save_setup()
         self._render_current_stage()
 
 
