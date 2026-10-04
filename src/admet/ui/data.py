@@ -122,8 +122,9 @@ def analysis_run_rows(project_paths: set[str]) -> list[dict[str, Any]]:
     return rows
 
 
-def matrix_row(row: Any) -> dict[str, Any]:
+def matrix_row(row: Any, analyzed: str = "") -> dict[str, Any]:
     return {
+        "analyzed": analyzed or "—",
         "uid": row.uid,
         "project": Path(row.project_path).name,
         "project_path": row.project_path,

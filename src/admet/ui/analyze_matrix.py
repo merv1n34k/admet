@@ -20,6 +20,7 @@ def matrix_columns() -> list[dict[str, Any]]:
         {"name": "source", "label": "Source", "field": "source", "align": "left"},
         {"name": "engine", "label": "Engine", "field": "engine", "align": "left"},
         {"name": "sample_id", "label": "Sample ID", "field": "sample_id", "align": "left"},
+        {"name": "analyzed", "label": "Analyzed", "field": "analyzed", "align": "left"},
     ]
 
 

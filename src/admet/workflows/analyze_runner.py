@@ -5,7 +5,8 @@ import json
 import shutil
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -298,6 +299,11 @@ class AnalyzeBatchRunner:
                                     },
                                 )
                             )
+                        # When this file was analysed; a later run that replays the cache keeps it.
+                        result = replace(result, metadata={
+                            **result.metadata,
+                            "analyzed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        })
                         _write_json(result_path, dict(result.metadata))
                     except AnalysisStopped:
                         # Stopped mid-file: no result.json, so the cache reads as not done.

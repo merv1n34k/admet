@@ -8,6 +8,7 @@ import json
 import math
 import time
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from statistics import mean, median, pstdev
@@ -371,7 +372,7 @@ class AnalyzeWorkflowView:
 
     def _sync_tables(self) -> None:
         row_sources = {
-            "matrix": lambda: [matrix_row(row) for row in self.matrix],
+            "matrix": lambda: self._matrix_rows(self.matrix),
             "project_files": self._project_file_rows,
             "recording_inventory": self._recording_inventory_rows,
             "opencv_matrix": lambda: [
@@ -473,7 +474,7 @@ class AnalyzeWorkflowView:
 
         table = ui.table(
             columns=matrix_columns(),
-            rows=[matrix_row(row) for row in rows],
+            rows=self._matrix_rows(rows),
             row_key="uid",
         ).classes("slim-table matrix-table w-full").props("dense flat hide-bottom")
         self._register_table("matrix", table)
@@ -887,11 +888,31 @@ class AnalyzeWorkflowView:
         return _load_stored_runs(self._project_paths())
 
     def _raw_summaries(self) -> list[RawSummary]:
+        """Stored results of the files ticked Use in the matrix, not everything ever analysed."""
+        used = {(Path(row.project_path).name, row.engine, row.sample_id) for row in self.matrix if row.active}
         summaries = []
         for run in self._stored_runs():
             rows = read_raw_rows(run.project_path, run.raw_path)
-            summaries.extend(summarize_raw_rows(run, rows))
+            summaries.extend(summary for summary in summarize_raw_rows(run, rows)
+                             if (summary.project, summary.engine, summary.sample_id) in used)
         return summaries
+
+    def _analyzed(self) -> dict[tuple[str, str], str]:
+        """When each file was last analysed, keyed by (engine, source path), from the stored runs."""
+        analyzed = {}
+        for run in self._stored_runs():
+            for job in run.jobs:
+                if job.get("status") not in {"complete", "cached"} or not job.get("source_path"):
+                    continue
+                source = _resolve_project_path(run.project_path, str(job["source_path"])).resolve()
+                at = str((job.get("metadata") or {}).get("analyzed_at") or "")
+                analyzed[(str(job.get("engine")), str(source))] = _local_time(at) if at else "yes"
+        return analyzed
+
+    def _matrix_rows(self, rows: list[MatrixRow]) -> list[dict[str, Any]]:
+        analyzed = self._analyzed()
+        return [matrix_row(row, analyzed.get((row.engine, str(Path(row.source_path).resolve())), ""))
+                for row in rows]
 
     def _fluidics_runs(self) -> list[FluidicsRun]:
         return _load_fluidics_runs(self._project_paths())
@@ -1500,8 +1521,6 @@ class AnalyzeWorkflowView:
             return {}
 
     def _remember_project(self, path: Path) -> None:
-        from datetime import datetime, timezone
-
         try:
             from nicegui import app
 
@@ -2257,6 +2276,13 @@ def _friendly_video_error(message: str) -> str:
 def _percent(value: Any, denominator: int) -> float:
     number = _numeric(value) or 0.0
     return round(max(0.0, min(100.0, number / max(denominator, 1) * 100.0)), 2)
+
+
+def _local_time(stamp: str) -> str:
+    try:
+        return datetime.fromisoformat(stamp).astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return stamp
 
 
 def _resolve_project_path(project_path: Path, stored_path: str) -> Path:
