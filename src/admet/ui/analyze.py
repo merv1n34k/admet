@@ -2151,7 +2151,7 @@ def _viewer_style(width: int, height: int) -> str:
     width = max(int(width or 16), 1)
     height = max(int(height or 9), 1)
     ratio = width / height
-    return f"--frame-ratio:{ratio:.8f}; --frame-aspect:{width} / {height};"
+    return f"--frame-ratio:{ratio:.8f}; --frame-aspect:{width} / {height}; --frame-width:{width}px;"
 
 
 def _preview_frame_index(row: MatrixRow) -> int:
@@ -2525,8 +2525,9 @@ def _style() -> str:
       padding: 4px;
     }
     .admet-viewer {
+      /* Native pixel size, shrunk only to fit the panel: never enlarged, never overflowing. */
       position: relative;
-      width: min(100%, calc(460px * var(--frame-ratio, 1.77777778)));
+      width: min(100%, var(--frame-width, 640px));
       max-width: 100%;
       height: auto;
       aspect-ratio: var(--frame-aspect, 16 / 9);
