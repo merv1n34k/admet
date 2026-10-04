@@ -12,18 +12,12 @@ from admet.engines.acquisition.settings import CORRECTION_PARAM_NAMES
 
 
 class DesktopBackend:
-    aliases = {
-        "camera_status": "read_status",
-        "refresh_cameras": "list_cameras",
-        "apply_camera_settings": "set_camera_settings",
-        "cleanup_shutdown": "shutdown_instrument",
-    }
-
     def __init__(self, *, simulated=False, service=None):
         self.service = service or Admet()
         self.simulated = simulated
         self.engine = self.service.engine("acquisition")
         self.lock = threading.RLock()
+        self.metadata_lock = threading.RLock()
         self._previews = {}
 
     def preview(self, scope, document):
@@ -51,7 +45,9 @@ class DesktopBackend:
         return dict(self.session.metadata.get("calibration") or {}) if self.session else {}
 
     def save_calibration(self, calibration):
-        with self.lock:
+        # Not the command lock: a connect holds that for seconds, and the
+        # screen saves calibration while it waits.
+        with self.metadata_lock:
             if not self.session:
                 return
             project = self.service.project
@@ -68,7 +64,7 @@ class DesktopBackend:
     def add_liquid(self, name, unit, calibration, density, viscosity=0.0):
         from admet.engines.acquisition.fluidics.liquids import load_profiles, new_liquid
 
-        with self.lock:
+        with self.metadata_lock:
             if not self.session:
                 raise RuntimeError("Open a project before adding a liquid")
             taken = {profile.id for profile in load_profiles()} | {entry.get("id") for entry in self.liquids}
@@ -83,7 +79,7 @@ class DesktopBackend:
         from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_UNITS
         from admet.engines.acquisition.fluidics.liquids import check_liquid
 
-        with self.lock:
+        with self.metadata_lock:
             liquids = self.liquids
             index = next((i for i, entry in enumerate(liquids) if entry.get("id") == liquid_id), None)
             if index is None:
@@ -183,7 +179,7 @@ class DesktopBackend:
             return self.service.do(operation, settings)
 
     def run(self, job):
-        action = self.aliases.get(job.action, job.action)
+        action = job.action
         settings = dict(job.settings)
         with self.lock:
             if action == "read_status":

@@ -655,5 +655,6 @@ class ProtocolEditor(QWidget):
     def update_plan(self, plans):
         if self.plan:
             self.plan = next((p for p in plans if p["plan_id"] == self.plan["plan_id"]), self.plan)
-            self.show_plan()
+            if not self.dirty:  # an edit hid the plan; showing it again would show steps that are out of date
+                self.show_plan()
             self.lock_definition(self.plan["state"] == "executing")

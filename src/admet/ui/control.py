@@ -364,6 +364,7 @@ class ControlWindow(QMainWindow):
         self._last_frame_id = 0
         self._last_status_poll = 0.0
         self._marker_sequence = 0
+        self._plot_origin = 0.0
         self._marker_step: int | None = None
         self._last_poll_error = ""
         self._camera_ack_pending = False
@@ -614,9 +615,9 @@ class ControlWindow(QMainWindow):
         index = next(i for i, item in enumerate(stages) if item.id == "calculations")
         stages.insert(index, stage)
         self.workflow.stages = tuple(stages)
-        self.workflow_state = replace(self.workflow_state, statuses={
-            **self.workflow_state.statuses, stage.id: StageStatus.PENDING,
-        })
+        current = self.workflow_state.index
+        self.workflow_state = replace(self.workflow_state, index=current + 1 if current >= index else current,
+                                      statuses={**self.workflow_state.statuses, stage.id: StageStatus.PENDING})
         self._rebuild_toc()
         self._select_stage(index)
         return stage
@@ -636,6 +637,7 @@ class ControlWindow(QMainWindow):
 
     def _reset_project_workflow(self):
         self._measurement_save_timer.stop()
+        self._numeric_drafts.clear()
         self._detach_live_widgets()
         if self._calculations is not None:
             self._calculations.setParent(None)
@@ -1778,7 +1780,7 @@ class ControlWindow(QMainWindow):
         payload = self._action_payload(action)
         if settings:
             payload.update(settings)
-        if action in {"apply_camera_settings", "apply_corrections"}:
+        if action in {"set_camera_settings", "apply_corrections"}:
             if self._numeric_drafts.keys() & payload.keys():
                 self._notify("Finish or correct numeric entries before applying settings.", "warning")
                 return None
@@ -1948,7 +1950,7 @@ class ControlWindow(QMainWindow):
             self._last_status_poll = now
             self.status_tasks.submit(
                 lambda: (self.api.run(RunJob(
-                    id="qt_status", engine="acquisition", action="camera_status",
+                    id="qt_status", engine="acquisition", action="read_status",
                 )), self.api.call("planned_protocols")["plans"]),
                 self._status_received,
                 lambda exc: self._append_log(f"status: {exc}"),
@@ -2035,6 +2037,14 @@ class ControlWindow(QMainWindow):
             except Empty:
                 break
         latest = drained[-1] if drained else None
+        origin = self.api.engine.polling_started_monotonic()
+        if origin and origin != self._plot_origin:
+            # A reconnect restarts the plot clock at zero; old points would sit
+            # on the same times and mix into step results.
+            self._plot_origin = origin
+            self._marker_step = None
+            if self.plot_panel is not None:
+                self.plot_panel.clear()
         if latest is not None:
             self._latest_snapshot = latest
             if self.plot_panel is not None:
@@ -2261,12 +2271,12 @@ class ControlWindow(QMainWindow):
 
     def _action_requires_project(self, action: str) -> bool:
         return action in {
-            "refresh_cameras",
+            "list_cameras",
             "connect_camera",
             "disconnect_camera",
             "start_camera_live",
             "stop_camera_live",
-            "apply_camera_settings",
+            "set_camera_settings",
             "start_recording",
         }
 
@@ -2327,7 +2337,10 @@ class ControlWindow(QMainWindow):
         self._camera_apply_timer.start(180)
 
     def _apply_camera_values(self) -> None:
-        self._run("apply_camera_settings", raise_errors=False, refresh=False)
+        if self.tasks.busy:
+            self._camera_apply_timer.start(180)
+            return
+        self._run("set_camera_settings", raise_errors=False, refresh=False)
 
     def _schedule_correction_apply(self) -> None:
         if self._syncing_table or not self._fluigent_ready():
@@ -2444,6 +2457,9 @@ class ControlWindow(QMainWindow):
             self._notify(f"Calibration save failed: {exc}", "danger")
 
     def _apply_correction_values(self) -> None:
+        if self.tasks.busy:
+            self._correction_apply_timer.start(180)  # another command is running; try again after it
+            return
         self._run("apply_corrections", raise_errors=False, refresh=False)
         self._refresh_action_box(self.workflow.current_stage(self.workflow_state))
 
@@ -2658,7 +2674,6 @@ class ControlWindow(QMainWindow):
             QTimer.singleShot(0, self._render_current_stage)
 
     def _action_payload(self, action: str) -> dict[str, Any]:
-        action = self.api.aliases.get(action, action)
         action_params: tuple[str, ...] = ()
         for spec in self.api.engine.actions:
             if spec.id == action:

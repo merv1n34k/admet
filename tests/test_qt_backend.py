@@ -389,7 +389,7 @@ class DesktopBackendTests(unittest.TestCase):
     def test_simulation_fence_and_camera_nulls(self):
         self.backend.call("connect_fluidics", {"simulated": False})
         self.assertTrue(self.backend.engine.hardware.state.simulated)
-        for action in ("connect_camera", "list_cameras", "refresh_cameras"):
+        for action in ("connect_camera", "list_cameras"):
             with self.assertRaisesRegex(RuntimeError, "disabled in simulation"):
                 self.backend.run(RunJob("test", "acquisition", action))
         observed = self.backend.call("observe")
@@ -452,17 +452,17 @@ class DesktopBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate"):
             loads('{"name":"one","name":"two"}')
 
-    def test_legacy_camera_aliases_use_current_engine_with_mocked_camera(self):
+    def test_camera_actions_run_on_the_engine_with_mocked_camera(self):
         from admet.engines.acquisition.camera import Camera
         from tests.test_camera_backend import FakePylon
 
         self.backend.simulated = False
         self.backend.engine.camera = Camera(FakePylon)
-        self.backend.run(RunJob("refresh", "acquisition", "refresh_cameras"))
+        self.backend.run(RunJob("refresh", "acquisition", "list_cameras"))
         self.backend.run(RunJob("connect", "acquisition", "connect_camera", {"camera_index": 0}))
         self.assertTrue(self.backend.engine.camera.connected)
         result = self.backend.run(RunJob(
-            "settings", "acquisition", "apply_camera_settings", {"camera_width": 512},
+            "settings", "acquisition", "set_camera_settings", {"camera_width": 512},
         ))
         self.assertIsNotNone(result.metadata)
         self.backend.run(RunJob("disconnect", "acquisition", "disconnect_camera"))

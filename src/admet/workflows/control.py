@@ -177,7 +177,7 @@ def create_control_workflow() -> Workflow:
                              ParamOption("camera_fluidics", "Camera + fluidics")),
                 ), *CAMERA_SETTINGS.params)),
                 actions=(
-                    StageAction("Refresh", "refresh_cameras", guard="project_ready", variant="secondary"),
+                    StageAction("Refresh", "list_cameras", guard="project_ready", variant="secondary"),
                     StageAction(
                         "Connect",
                         "connect_camera",
@@ -293,7 +293,7 @@ def create_control_workflow() -> Workflow:
                     ),
                 ),
                 actions=(
-                    StageAction("Disconnect Devices", "cleanup_shutdown", variant="warning"),
+                    StageAction("Disconnect Devices", "shutdown_instrument", variant="warning"),
                     StageAction(
                         "Continue",
                         completes=True,
