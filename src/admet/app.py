@@ -1,4 +1,4 @@
-"""Launch the Qt desktop or describe the direct Python API."""
+"""Launch the control desktop or describe the direct Python API."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="admet", description="ADMET desktop and instrument control")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    qt = sub.add_parser("qt", help="open the standalone Qt desktop")
-    qt.add_argument("--project", help="existing .admetp project")
+    control = sub.add_parser("control", help="open the control desktop, which drives the rig")
+    control.add_argument("--project", help="existing .admetp project")
 
     describe = sub.add_parser(
         "describe", help="what exists: every operation, or one operation or engine"
@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "qt":
+    if args.command == "control":
         from admet.ui.app import main as desktop_main
 
         return desktop_main(["--project", args.project] if args.project else [])

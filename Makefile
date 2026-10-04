@@ -11,7 +11,7 @@ setup:
 	uv sync --all-extras
 
 dev:
-	uv run --extra control admet qt
+	uv run --extra control admet control
 
 describe:
 	uv run admet describe acquisition

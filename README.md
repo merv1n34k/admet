@@ -7,11 +7,11 @@ The desktop and direct Python binding share the same acquisition service.
 
 ```powershell
 uv sync --locked --extra control
-uv run --locked --extra control admet qt
+uv run --locked --extra control admet control
 ```
 
-With the project environment activated, open the app with `admet qt`
-(optionally `--project PATH`). Without activation, use `uv run --extra control admet qt`.
+With the project environment activated, open the app with `admet control`
+(optionally `--project PATH`). Without activation, use `uv run --extra control admet control`.
 
 The desktop defaults to real devices. Step 2 has a **Simulated Hardware** selector
 for Fluigent; choose before connecting. This does not simulate the camera.

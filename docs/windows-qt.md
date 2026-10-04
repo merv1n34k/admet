@@ -20,7 +20,7 @@ git clone --branch feat/windows-qt-protocols https://github.com/merv1n34k/admet.
 cd admet2
 uv python install 3.12
 uv sync --locked --extra control
-uv run --locked --extra control admet qt
+uv run --locked --extra control admet control
 ```
 
 For an existing clone, finish any run and close ADMET before updating. Preserve
@@ -31,7 +31,7 @@ git fetch origin
 git switch feat/windows-qt-protocols
 git pull --ff-only origin feat/windows-qt-protocols
 uv sync --locked --extra control
-uv run --locked --extra control admet qt
+uv run --locked --extra control admet control
 ```
 
 The project uses Python 3.12 and the normal `.venv`. The control extra includes
@@ -42,8 +42,8 @@ no chat session or agent.
 Launch from PowerShell:
 
 ```powershell
-uv run --locked --extra control admet qt
-uv run --locked --extra control admet qt --project "D:\Experiments\today.admetp"
+uv run --locked --extra control admet control
+uv run --locked --extra control admet control --project "D:\Experiments\today.admetp"
 ```
 
 The launcher has no mode flags. Step 2 restores the **Simulated Hardware** selector

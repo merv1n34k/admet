@@ -21,29 +21,29 @@ def _commands() -> dict:
 
 
 class SurfaceTests(unittest.TestCase):
-    def test_the_command_line_is_describe_and_qt(self):
-        self.assertEqual(set(_commands()), {"qt", "describe"})
+    def test_the_command_line_is_describe_and_control(self):
+        self.assertEqual(set(_commands()), {"control", "describe"})
 
-    def test_qt_launches_desktop_and_forwards_only_project(self):
+    def test_control_launches_desktop_and_forwards_only_project(self):
         for args, forwarded in (
-            (["qt"], []),
-            (["qt", "--project", "test.admetp"], ["--project", "test.admetp"]),
+            (["control"], []),
+            (["control", "--project", "test.admetp"], ["--project", "test.admetp"]),
         ):
             with self.subTest(args=args), patch("admet.ui.app.main", return_value=0) as desktop:
                 self.assertEqual(main(args), 0)
                 desktop.assert_called_once_with(forwarded)
 
-    def test_qt_help_does_not_launch_desktop(self):
+    def test_control_help_does_not_launch_desktop(self):
         with patch("admet.ui.app.main", side_effect=AssertionError("desktop launched")):
             with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as caught:
-                main(["qt", "--help"])
+                main(["control", "--help"])
         self.assertEqual(caught.exception.code, 0)
 
-    def test_qt_rejects_server_options(self):
+    def test_control_rejects_server_options(self):
         for option in (["--runtime", "runtime"], ["--create-project"]):
             with self.subTest(option=option), redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as caught:
-                    main([*option, "qt"])
+                    main([*option, "control"])
                 self.assertEqual(caught.exception.code, 2)
 
     def test_describe_shows_the_operations_and_the_engines(self):
