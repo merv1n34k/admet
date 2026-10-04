@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import functools
 import json
+import threading
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -38,10 +40,37 @@ class AnalysisRunTarget:
     run_metadata_path: Path
 
 
+_LOCKS: dict[str, threading.RLock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def project_lock(path: str | Path) -> threading.RLock:
+    """One lock per project, shared by every copy of it in this process."""
+    key = str(session_path(path).resolve())
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(key, threading.RLock())
+
+
+def _locked(method):
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self.lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class ProjectStore:
     def __init__(self, project_path: str | Path, session: AdmetSession | None = None):
         self.path = session_path(project_path)
         self.session = session if session is not None else load_session(self.path)
+        # The manifest as this copy last read or wrote it; save() writes only
+        # what changed since, over whatever is on disk by then.
+        self._base: AdmetSession | None = None if session is not None else self.session
+
+    @property
+    def lock(self) -> threading.RLock:
+        """Hold it around a change to the session and its save."""
+        return project_lock(self.path)
 
     @classmethod
     def create(
@@ -56,9 +85,19 @@ class ProjectStore:
         path = save_session(project_path, new_session(project_id))
         return cls(path)
 
+    @_locked
     def save(self) -> None:
+        # Another writer -- the protocol thread, an analysis run, another copy
+        # -- may have saved since this copy read the manifest. Keep its changes.
+        manifest = self.path / "manifest.json"
+        if self._base is not None and manifest.is_file():
+            on_disk = load_session(self.path)
+            if on_disk != self._base:
+                self.session = _merge(self._base, self.session, on_disk)
         self.path = save_session(self.path, self.session)
+        self.session = self._base = load_session(self.path)
 
+    @_locked
     def update_metadata(self, **metadata: Any) -> None:
         self.session = replace(
             self.session,
@@ -66,6 +105,7 @@ class ProjectStore:
         )
         self.save()
 
+    @_locked
     def upsert_file_path(
         self,
         source_path: str | Path,
@@ -117,6 +157,7 @@ class ProjectStore:
             fluidics_csv_path=self.records_dir / "fluidics" / f"{recording_id}.csv",
         )
 
+    @_locked
     def append_control_recording(self, recording: dict[str, Any]) -> None:
         normalized = self._normalize_control_recording(recording)
         metadata_path = self.records_dir / "metadata.json"
@@ -135,6 +176,7 @@ class ProjectStore:
         self._register_control_recording(normalized)
         self.save()
 
+    @_locked
     def append_system_check(
         self,
         snapshot: dict[str, Any],
@@ -214,6 +256,7 @@ class ProjectStore:
             run_metadata_path=run_dir / "run.json",
         )
 
+    @_locked
     def register_analysis_file(
         self,
         source_path: str | Path,
@@ -236,6 +279,7 @@ class ProjectStore:
         )
         return file
 
+    @_locked
     def finish_analysis_run(
         self,
         target: AnalysisRunTarget,
@@ -371,6 +415,32 @@ class ProjectStore:
             return path.relative_to(self.path.resolve()).as_posix()
         except ValueError:
             return str(path)
+
+
+_MISSING = object()
+
+
+def _merge(base: AdmetSession, mine: AdmetSession, on_disk: AdmetSession) -> AdmetSession:
+    """On-disk manifest plus what this copy changed since BASE: keys, files and items."""
+    def changes(before: dict, after: dict, target: dict) -> dict:
+        merged = dict(target)
+        for key in before.keys() | after.keys():
+            if before.get(key, _MISSING) != after.get(key, _MISSING):
+                if key in after:
+                    merged[key] = after[key]
+                else:
+                    merged.pop(key, None)
+        return merged
+
+    def by_id(values) -> dict:
+        return {value.id: value for value in values}
+
+    return replace(
+        on_disk,
+        metadata=changes(base.metadata, mine.metadata, on_disk.metadata),
+        files=tuple(changes(by_id(base.files), by_id(mine.files), by_id(on_disk.files)).values()),
+        items=tuple(changes(by_id(base.items), by_id(mine.items), by_id(on_disk.items)).values()),
+    )
 
 
 def _stamped_id(label: str) -> str:

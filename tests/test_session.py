@@ -348,3 +348,33 @@ class ProjectPathTests(unittest.TestCase):
         self.assertEqual(session_path("Assay 1.5uM").name, "Assay 1.5uM.admetp")
         self.assertNotEqual(session_path("Assay 1.5uM"), session_path("Assay 1.10uM"))
         self.assertEqual(session_path("rig.admetp/manifest.json").name, "rig.admetp")
+
+
+class ProjectSaveTests(unittest.TestCase):
+    def test_a_stale_copy_keeps_what_another_copy_saved(self):
+        from admet.core.project import ProjectStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            analysis = ProjectStore.create(Path(tmp) / "rig.admetp", "rig")   # e.g. an analysis run, read early
+            control = ProjectStore(analysis.path)
+            control.update_metadata(calibration={"cells_m": {"profile": "water_m"}})
+            analysis.update_metadata(cache_root="/cache")                    # saved later from the old copy
+
+            saved = ProjectStore(analysis.path).session.metadata
+            self.assertEqual(saved["calibration"], {"cells_m": {"profile": "water_m"}})
+            self.assertEqual(saved["cache_root"], "/cache")
+
+    def test_threads_editing_one_project_lose_nothing(self):
+        import threading
+        from admet.core.project import ProjectStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project = ProjectStore.create(Path(tmp) / "rig.admetp", "rig")
+            writers = [threading.Thread(target=project.update_metadata, kwargs={f"key_{n}": n}) for n in range(20)]
+            for writer in writers:
+                writer.start()
+            for writer in writers:
+                writer.join(timeout=5)
+
+            saved = ProjectStore(project.path).session.metadata
+            self.assertEqual({key for key in saved if key.startswith("key_")}, {f"key_{n}" for n in range(20)})

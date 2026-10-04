@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import replace
 from pathlib import Path
 
 from admet.core.run import RunResult
@@ -17,7 +16,6 @@ class DesktopBackend:
         self.simulated = simulated
         self.engine = self.service.engine("acquisition")
         self.lock = threading.RLock()
-        self.metadata_lock = threading.RLock()
         self._previews = {}
 
     def preview(self, scope, document):
@@ -45,15 +43,10 @@ class DesktopBackend:
         return dict(self.session.metadata.get("calibration") or {}) if self.session else {}
 
     def save_calibration(self, calibration):
-        # Not the command lock: a connect holds that for seconds, and the
-        # screen saves calibration while it waits.
-        with self.metadata_lock:
-            if not self.session:
-                return
-            project = self.service.project
-            project.session = replace(project.session, metadata={**project.session.metadata,
-                                                                 "calibration": calibration})
-            project.save()
+        # Only the project's own lock, not the command lock: a connect holds
+        # that for seconds, and the screen saves calibration while it waits.
+        if self.service.project is not None:
+            self.service.project.update_metadata(calibration=calibration)
 
     @property
     def liquids(self):
@@ -64,22 +57,23 @@ class DesktopBackend:
     def add_liquid(self, name, unit, calibration, density, viscosity=0.0):
         from admet.engines.acquisition.fluidics.liquids import load_profiles, new_liquid
 
-        with self.metadata_lock:
-            if not self.session:
-                raise RuntimeError("Open a project before adding a liquid")
+        project = self.service.project
+        if project is None:
+            raise RuntimeError("Open a project before adding a liquid")
+        with project.lock:
             taken = {profile.id for profile in load_profiles()} | {entry.get("id") for entry in self.liquids}
             entry = new_liquid(name, unit, calibration, density, viscosity, taken)
-            project = self.service.project
-            project.session = replace(project.session, metadata={**project.session.metadata,
-                                                                 "liquids": [*self.liquids, entry]})
-            project.save()
+            project.update_metadata(liquids=[*self.liquids, entry])
             return entry
 
     def update_liquid(self, liquid_id, **changes):
         from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_UNITS
         from admet.engines.acquisition.fluidics.liquids import check_liquid
 
-        with self.metadata_lock:
+        project = self.service.project
+        if project is None:
+            raise RuntimeError("Open a project before editing a liquid")
+        with project.lock:
             liquids = self.liquids
             index = next((i for i, entry in enumerate(liquids) if entry.get("id") == liquid_id), None)
             if index is None:
@@ -91,9 +85,7 @@ class DesktopBackend:
             if in_use:
                 raise ValueError(f"{entry['name']} is in use on a {FLUIDIC_CHANNEL_UNITS[in_use[0]]} channel")
             liquids[index] = entry
-            project = self.service.project
-            project.session = replace(project.session, metadata={**project.session.metadata, "liquids": liquids})
-            project.save()
+            project.update_metadata(liquids=liquids)
             return entry
 
     def set_acquisition_mode(self, mode):
@@ -107,9 +99,7 @@ class DesktopBackend:
                 raise RuntimeError("Stop recording before changing acquisition mode")
             if mode == self.acquisition_mode:
                 return
-            project = self.service.project
-            project.session = replace(project.session, metadata={**project.session.metadata, "acquisition_mode": mode})
-            project.save()
+            self.service.project.update_metadata(acquisition_mode=mode)
             self._discard_previews()
 
     @property
@@ -142,10 +132,9 @@ class DesktopBackend:
             self.service._require_project_idle()
             if self.service.project:
                 if checkup is not None:
-                    project = self.service.project
-                    project.session = replace(project.session, metadata={**project.session.metadata,
-                                                                         "qt_checkup": checkup})
-                self.service.project.save()
+                    self.service.project.update_metadata(qt_checkup=checkup)
+                else:
+                    self.service.project.save()
 
     def measurements(self, run_id, changes=None):
         with self.lock:
