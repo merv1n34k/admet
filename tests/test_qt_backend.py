@@ -67,24 +67,17 @@ class DesktopBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "in use"):
             self.backend.update_liquid(entry["id"], unit="L")    # Cells M is an M channel
 
-    def test_preflight_save_preserves_historical_check_entries(self):
-        from copy import deepcopy
+    def test_preflight_save_replaces_the_checkup_and_keeps_other_metadata(self):
         from dataclasses import replace
 
-        old = {"flow_checks": [{"channel": "Oil L", "samples": [{"pressure_mbar": None}]}],
-               "dispense_checks": [{"weights_g": [{"empty": 1.25, "full": None}]}],
-               "conditions": {"flows_ul_min": {"oil": 10}}}
-        before = deepcopy(old)
         project = self.backend.service.project
-        project.session = replace(project.session, metadata={"qt_checkup": old, "note": "retain"})
-        self.backend.save_project(checkup={"conditions": {"flows_ul_min": {"oil": 20}}})
+        project.session = replace(project.session, metadata={"qt_checkup": {"flow_checks": []}, "note": "retain"})
+        checkup = {"conditions": {"flows_ul_min": {"oil": 20}}}
+        self.backend.save_project(checkup=checkup)
         self.backend.open_project(project.path)
         saved = self.backend.session.metadata
         self.assertEqual(saved["note"], "retain")
-        self.assertEqual(saved["qt_checkup"]["flow_checks"], before["flow_checks"])
-        self.assertEqual(saved["qt_checkup"]["dispense_checks"], before["dispense_checks"])
-        self.assertEqual(saved["qt_checkup"]["conditions"]["flows_ul_min"]["oil"], 20)
-        self.assertEqual(old, before)
+        self.assertEqual(saved["qt_checkup"], checkup)
 
     def test_corrected_range_is_refreshed_before_planning_scout_base_15(self):
         from admet.workflows.json_protocol import template_documents

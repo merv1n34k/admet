@@ -1,10 +1,10 @@
 """Protocol definitions and run artifacts within an ADMET project."""
 
 import json
+from pathlib import Path
 import re
 
 from admet.workflows.json_protocol import load, normalize, validate_measurement
-from admet.core.compat import protocol_run_id, valid_recorded_run_id
 from admet.core.session import write_atomic
 
 
@@ -55,7 +55,7 @@ class ProtocolStore:
             write_json(self.root / "records" / "protocols" / plan["run_id"] / "plan.json", plan)
 
     def begin(self, plan):
-        directory = self.root / "records" / "protocols" / protocol_run_id(plan)
+        directory = self.root / "records" / "protocols" / plan["run_id"]
         write_json(directory / "plan.json", plan)
         definition = plan["normalized_settings"].get("protocol")
         if definition is not None:
@@ -63,7 +63,7 @@ class ProtocolStore:
             fields = definition.get("measurements", {})
             if fields:
                 write_json(directory / "measurements.json", {
-                    "run_id": protocol_run_id(plan), "revision": 0,
+                    "run_id": plan["run_id"], "revision": 0,
                     "fields": fields, "values": {key: None for key in fields},
                 })
         path = directory / "summary.json"
@@ -73,7 +73,7 @@ class ProtocolStore:
         return directory
 
     def measurements(self, run_id, changes=None):
-        if not valid_recorded_run_id(run_id):
+        if not isinstance(run_id, str) or re.fullmatch(r"run_[a-f0-9]{32}", run_id) is None:
             raise ValueError("invalid run ID")
         path = self.root / "records" / "protocols" / run_id / "measurements.json"
         if not path.resolve().is_relative_to(self.root.resolve()):
@@ -100,4 +100,10 @@ class ProtocolStore:
 
     def finish(self, plan, directory, artifacts):
         self.plan(plan)
+        # Recordings are named relative to the project, so a moved project still finds them.
+        artifacts = {key: self._relative(value) if key in ("fluidics_csv", "video_path") and value else value
+                     for key, value in artifacts.items()}
         write_json(directory / "summary.json", {**plan, "artifacts": artifacts})
+
+    def _relative(self, path):
+        return Path(path).resolve().relative_to(self.root.resolve()).as_posix()

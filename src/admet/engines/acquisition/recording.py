@@ -61,10 +61,8 @@ class RecordingMetadata:
     recording_id: str
     report_dir: str
     output_dir: str
-    video_prefix: str
     width: int
     height: int
-    fps: float
     converted_fps: float = 0.0
     acquisition_fps: float = 0.0
     fluidics_csv: str = ""
@@ -152,10 +150,8 @@ class RecordingRun:
             recording_id=recording_id,
             report_dir=str(report_dir),
             output_dir=str(video_dir),
-            video_prefix=recording_id,
             width=width,
             height=height,
-            fps=fps,
             converted_fps=fps,
             fluidics_csv=str(csv_path),
         )
@@ -176,9 +172,9 @@ class RecordingRun:
         now = time.monotonic()
         output_dir = Path(self.current.output_dir)
         candidates = []
-        if output_dir.exists() and self.current.video_prefix:
+        if output_dir.exists():
             candidates = sorted(
-                output_dir.glob(f"{self.current.video_prefix}.avi"),
+                output_dir.glob(f"{self.current.recording_id}.avi"),
                 key=lambda path: path.stat().st_mtime,
             )
 
@@ -387,10 +383,8 @@ class RecordingCoordinator:
             recording_id=recording_id,
             report_dir=str(report_dir),
             output_dir="",
-            video_prefix=recording_id,
             width=0,
             height=0,
-            fps=0.0,
             fluidics_csv=csv_path,
         )
         self._csv_recording = metadata

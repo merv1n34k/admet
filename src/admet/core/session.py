@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .compat import allows_external_path, session_project_id
 
 PROJECT_EXTENSION = ".admetp"
 MANIFEST_FILENAME = "manifest.json"
@@ -49,7 +48,7 @@ class AdmetSession:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AdmetSession:
         session = cls(
-            project_id=session_project_id(data),
+            project_id=str(data["project_id"]),
             files=tuple(
                 _session_file_from_dict(item, index)
                 for index, item in enumerate(data.get("files", ()), start=1)
@@ -220,7 +219,7 @@ def _relativize_path(path: str, root: Path, *, metadata: dict[str, Any]) -> str:
     try:
         return stored.resolve().relative_to(root).as_posix()
     except ValueError:
-        if allows_external_path(metadata):
+        if metadata.get("external"):
             return str(stored)
         raise ValueError(
             f"absolute path outside project bundle requires metadata.external=true: {path}"

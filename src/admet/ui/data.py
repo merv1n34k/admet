@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from admet.core.compat import converted_frame_rate
 
 VIDEO_TABLE_COLUMNS = (
     ("video", "Video"),
@@ -18,11 +17,10 @@ VIDEO_TABLE_COLUMNS = (
 def video_metadata(recording: dict[str, Any]) -> dict[str, Any]:
     width = int(float(recording.get("width") or 0))
     height = int(float(recording.get("height") or 0))
-    converted_fps = float(converted_frame_rate(recording) or 0.0)
+    converted_fps = float(recording.get("converted_fps") or 0.0)
     acquisition_fps = float(recording.get("acquisition_fps") or 0.0)
     return {
         "video_path": str(recording.get("video_path") or ""),
-        "video_prefix": str(recording.get("video_prefix") or ""),
         "started_at": str(recording.get("started_at") or ""),
         "stopped_at": str(recording.get("stopped_at") or ""),
         "duration_s": float(recording.get("duration_s") or 0.0),
@@ -44,7 +42,7 @@ def video_row(recording: dict[str, Any]) -> dict[str, str]:
     if frames is None:
         frames = metadata["frames_written"]
     return {
-        "video": Path(video_path).name if video_path else str(recording.get("video_prefix") or "recording"),
+        "video": Path(video_path).name if video_path else str(recording.get("recording_id") or "recording"),
         "acquisition_fps": _format_number(metadata["acquisition_fps"], digits=2),
         "dimensions": metadata["dimensions"],
         "converted_fps": _format_number(metadata["converted_fps"], digits=2),
@@ -56,7 +54,6 @@ def video_row(recording: dict[str, Any]) -> dict[str, str]:
 def recording_video_key(recording: dict[str, Any], row: dict[str, str]) -> str:
     for value in (
         recording.get("recording_id"),
-        recording.get("video_prefix"),
         Path(str(recording.get("video_path") or "")).stem,
         Path(str(row.get("video") or "")).stem,
         row.get("video"),

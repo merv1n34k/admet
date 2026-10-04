@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .compat import converted_frame_rate, recording_id as stored_recording_id
 
 from .session import (
     AdmetSession,
@@ -287,7 +286,7 @@ class ProjectStore:
         self.save()
 
     def _normalize_control_recording(self, recording: dict[str, Any]) -> dict[str, Any]:
-        recording_id = stored_recording_id(recording).strip()
+        recording_id = str(recording.get("recording_id") or "").strip()
         if not recording_id:
             raise ValueError("control recording requires recording_id")
         video_path = Path(str(recording.get("video_path") or self.records_dir / "camera" / f"{recording_id}.avi"))
@@ -305,7 +304,6 @@ class ProjectStore:
         normalized.update(
             {
                 "recording_id": recording_id,
-                "video_prefix": str(recording.get("video_prefix") or recording_id),
                 "report_dir": "records",
                 "output_dir": "records/camera",
                 "video_path": self._stored_path(video_path) if wrote_video else "",
@@ -474,7 +472,6 @@ def _video_metadata(recording: dict[str, Any]) -> dict[str, Any]:
     height = int(float(recording.get("height") or 0))
     return {
         "video_path": str(recording.get("video_path") or ""),
-        "video_prefix": str(recording.get("video_prefix") or ""),
         "started_at": str(recording.get("started_at") or ""),
         "stopped_at": str(recording.get("stopped_at") or ""),
         "duration_s": float(recording.get("duration_s") or 0.0),
@@ -484,7 +481,7 @@ def _video_metadata(recording: dict[str, Any]) -> dict[str, Any]:
         "height": height,
         "dimensions": f"{width}x{height}" if width and height else "",
         "acquisition_fps": float(recording.get("acquisition_fps") or 0.0),
-        "converted_fps": float(converted_frame_rate(recording) or 0.0),
+        "converted_fps": float(recording.get("converted_fps") or 0.0),
         "fluidics_csv": str(recording.get("fluidics_csv") or ""),
     }
 
@@ -492,7 +489,7 @@ def _video_metadata(recording: dict[str, Any]) -> dict[str, Any]:
 def _csv_metadata(recording: dict[str, Any]) -> dict[str, Any]:
     return {
         "fluidics_csv": str(recording.get("fluidics_csv") or ""),
-        "recording_id": stored_recording_id(recording),
+        "recording_id": str(recording.get("recording_id") or ""),
         "started_at": str(recording.get("started_at") or ""),
         "stopped_at": str(recording.get("stopped_at") or ""),
         "duration_s": float(recording.get("duration_s") or 0.0),

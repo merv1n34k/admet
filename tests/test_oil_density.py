@@ -23,7 +23,7 @@ def recorded_density(directory, *, densities=(1.2, 1.2), missing=False, unsettle
     resolved = resolve(document)
     rows, events = [], []
     origin = 100.0
-    for index, point in enumerate(resolved["analysis"]["points"]):
+    for index, point in enumerate(resolved["calculations"][0]["points"]):
         start = index * 50 + 30
         step = resolved["steps"][point["step"] - 1]
         duration = step["trigger_params"]["duration_s"]
@@ -84,7 +84,7 @@ class RecordedDensityTests(unittest.TestCase):
         resolved = resolve(source)
         self.assertEqual(resolved["steps"][1]["sensor_setpoints"], {"1": 10})
         self.assertEqual(resolved["steps"][1]["trigger_params"]["duration_s"], 32)
-        self.assertEqual(resolved["analysis"]["points"][0]["height_cm"], 6)
+        self.assertEqual(resolved["calculations"][0]["points"][0]["height_cm"], 6)
         self.assertIn("6 cm ABOVE", resolved["steps"][1]["confirm_message"])
         for step in resolved["steps"]:
             self.assertEqual(set(step["sensor_setpoints"]), {"1"})
@@ -102,16 +102,16 @@ class RecordedDensityTests(unittest.TestCase):
 
     def test_invalid_analysis_is_refused(self):
         for mutate in (
-            lambda d: d["analysis"].update(type="unknown"),
-            lambda d: d["analysis"].update(temperature=20),
-            lambda d: d["analysis"]["points"][0].update(step=1),
-            lambda d: d["analysis"]["points"][0].update(height_cm=float("nan")),
-            lambda d: d["analysis"]["points"][0].update(settle_s=19),
+            lambda d: d["calculations"][0].update(type="unknown"),
+            lambda d: d["calculations"][0].update(temperature=20),
+            lambda d: d["calculations"][0]["points"][0].update(step=1),
+            lambda d: d["calculations"][0]["points"][0].update(height_cm=float("nan")),
+            lambda d: d["calculations"][0]["points"][0].update(settle_s=19),
             lambda d: d["steps"][1].update(repeat=2),
             lambda d: d["steps"][1].update(on_complete="hold"),
             lambda d: d["steps"][1].update(sensor_setpoints={"0": 5}),
             lambda d: d["steps"][1].update(timeout_s=10),
-            lambda d: d["analysis"]["points"][-1].update(height_cm=15),
+            lambda d: d["calculations"][0]["points"][-1].update(height_cm=15),
         ):
             document = density_protocol("dsurf")
             mutate(document)
@@ -123,11 +123,11 @@ class RecordedDensityTests(unittest.TestCase):
         before = deepcopy(document)
         normalized = normalize(document)
         self.assertEqual(document, before)
-        for point in normalized["analysis"]["points"]:
+        for point in normalized["calculations"][0]["points"]:
             if point["height_cm"] == 5:
                 point["height_cm"] = 6
         normalized = normalize(normalized)
-        first_measurement = normalized["analysis"]["points"][3]["step"] - 1
+        first_measurement = normalized["calculations"][0]["points"][3]["step"] - 1
         self.assertIn("6 cm ABOVE", normalized["steps"][first_measurement]["confirm_message"])
 
     def test_density_never_targets_other_channels(self):
@@ -139,14 +139,6 @@ class RecordedDensityTests(unittest.TestCase):
                 self.assertEqual(document["steps"][step_index - 1]["sensor_setpoints"], {"1": 0})
         self.assertEqual(document["steps"][-1]["sensor_setpoints"], {"1": 0})
         self.assertTrue(all(not s["pressure_setpoints"] for s in document["steps"]))
-
-    def test_archived_pressure_zero_protocols_remain_analyzable(self):
-        document = density_protocol("dsurf")
-        for step in document["steps"]:
-            if step["sensor_setpoints"] == {"1": 0}:
-                step.pop("sensor_setpoints")
-                step["pressure_setpoints"] = {"1": 0}
-        self.assertEqual(len(normalize(document)["analysis"]["points"]), 21)
 
     def test_measured_windows_remove_settling_gates_resistance_and_constant_offsets(self):
         with tempfile.TemporaryDirectory() as directory:

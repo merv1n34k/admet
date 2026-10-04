@@ -242,7 +242,7 @@ def _normalize_resolved(document):
 
     if not isinstance(document, dict):
         raise ValueError("protocol must be a JSON object")
-    unknown = set(document) - {"name", "steps", "analysis", "calculations", "measurements"}
+    unknown = set(document) - {"name", "steps", "calculations", "measurements"}
     if unknown:
         raise ValueError(f"unknown protocol fields: {', '.join(sorted(unknown))}")
     name = document.get("name")
@@ -304,9 +304,7 @@ def _normalize_resolved(document):
     if "measurements" in document:
         result["measurements"] = measurement_fields(document["measurements"], len(expanded))
     calculations = normalize_calculations(document, normalized, result.get("measurements", {}))
-    if "analysis" in document:
-        result["analysis"] = calculations[0]
-    elif "calculations" in document:
+    if "calculations" in document:
         result["calculations"] = calculations
     return result
 

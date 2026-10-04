@@ -22,39 +22,6 @@ from admet.core.session import (
 
 
 class SessionProjectTests(unittest.TestCase):
-    def test_historical_project_id_and_external_flags_remain_readable(self):
-        data = {"id": "old-project", "metadata": {"note": "keep"}}
-        self.assertEqual(AdmetSession.from_dict(data).project_id, "old-project")
-        self.assertEqual(AdmetSession.from_dict({**data, "project_id": "current"}).project_id, "current")
-        self.assertNotIn("project_id", data)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            external = str(Path(tmpdir) / "external.avi")
-            for flag in ("external", "external_media", "nas"):
-                with self.subTest(flag=flag):
-                    session = AdmetSession("project", files=(
-                        SessionFile("video", external, "input", metadata={flag: True}),
-                    ))
-                    path = save_session(Path(tmpdir) / flag, session)
-                    self.assertEqual(load_session(path).files[0].path, external)
-
-    def test_historical_recording_aliases_register_without_changing_input(self):
-        from admet.core.compat import converted_frame_rate
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = ProjectStore.create(Path(tmpdir) / "old", "old")
-            video = store.records_dir / "camera" / "old-recording.avi"
-            video.parent.mkdir(parents=True)
-            video.write_bytes(b"mock video")
-            recording = {"video_prefix": "old-recording", "fps": 25, "video_path": str(video)}
-            store.append_control_recording(recording)
-            loaded = load_session(store.path)
-            self.assertEqual(loaded.files[0].id, "video-old-recording")
-            self.assertEqual(loaded.files[0].metadata["converted_fps"], 25)
-            self.assertIsNone(loaded.files[0].metadata["frames_recorded"])
-            self.assertNotIn("recording_id", recording)
-            self.assertIsNone(converted_frame_rate({}))
-            self.assertEqual(converted_frame_rate({"fps": 25, "converted_fps": 30}), 30)
-
     def test_session_path_uses_admetp_extension(self):
         self.assertEqual(session_path("run").name, "run.admetp")
         self.assertEqual(session_path("run.admetp").name, "run.admetp")

@@ -9,9 +9,7 @@ import re
 from statistics import mean, stdev
 import uuid
 
-from admet.core.compat import protocol_run_id
 from admet.core.protocol_store import write_json
-from admet.workflows.compat import density_analysis
 from admet.workflows.oil_density import _finite, analyze_density_run
 from admet.workflows.flow_scout import analyze_scout
 from admet.workflows.calculation_schema import declarations
@@ -24,9 +22,6 @@ def available_calculations(directory):
     try:
         document = read_json(Path(directory) / "protocol.json")
         result.extend(item["type"] for item in declarations(document) if item["type"] in CALCULATIONS)
-        if not declarations(document):
-            density_analysis(document)
-            result.append("oil_density")
     except (OSError, ValueError, KeyError, TypeError):
         pass
     return list(dict.fromkeys([*result, "recording_summary"]))
@@ -79,8 +74,7 @@ def _density(context):
                     or expected.get("trigger_params") != step["trigger_params"]
                     or (expected.get("confirmation") or "") != step.get("confirm_message", "")):
                 raise ValueError("Recorded density execution and protocol parameters disagree")
-    document["analysis"] = density_analysis(document)
-    mapping = document["analysis"]["points"]
+    mapping = next(item for item in declarations(document) if item["type"] == "oil_density")["points"]
     previous = None
     for point in mapping:
         group = (point["pass"], point["height_cm"])
@@ -165,7 +159,7 @@ def calculate_run(directory, calculation_id, *, references=None):
         raise ValueError("Recording changed during calculation; refresh and try again")
     payload = {"calculation_id": calculation_id, "calculation_version": calculation["version"],
                "created_at": datetime.now(timezone.utc).isoformat(), "plan_id": summary.get("plan_id"),
-               "run_id": protocol_run_id(summary),
+               "run_id": summary["run_id"],
                "inputs": inputs, "measurement_revision": context["measurements"]["revision"],
                "references": {key: value["path"] for key, value in context["references"].items()}, "result": result}
     path = directory / "calculations" / f"{calculation_id}_{uuid.uuid4().hex}.json"

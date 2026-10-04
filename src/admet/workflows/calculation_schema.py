@@ -15,9 +15,7 @@ SCHEMAS = {
 
 
 def declarations(document):
-    if "analysis" in document and "calculations" in document:
-        raise ValueError("use calculations or legacy analysis, not both")
-    return document.get("calculations", [document["analysis"]] if "analysis" in document else [])
+    return document.get("calculations", [])
 
 
 def resolve_declarations(document, values):

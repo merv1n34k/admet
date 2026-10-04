@@ -9,17 +9,19 @@ from admet.workflows.calculations import calculate_run, recorded_runs, saved_res
 from tests.test_oil_density import recorded_density
 
 
+RUN_ID = "run_" + "0" * 32
+
+
 def archived_density(project):
-    directory = Path(project) / "records" / "protocols" / "synthetic"
+    directory = Path(project) / "records" / "protocols" / RUN_ID
     directory.mkdir(parents=True, exist_ok=True)
     document, csv_path, _events, origin = recorded_density(directory)
-    document.pop("analysis")
     write_json(directory / "protocol.json", document)
     write_json(directory / "summary.json", {
-        "state": "completed", "completed_at": "2026-09-28T12:00:00+00:00", "plan_id": "synthetic",
-        "normalized_settings": {"protocol": document},
-        "artifacts": {"fluidics_csv": str(csv_path), "polling_origin_monotonic": origin,
-                      "recording_closed": True},
+        "state": "completed", "completed_at": "2026-09-28T12:00:00+00:00", "plan_id": "plan_synthetic",
+        "run_id": RUN_ID, "normalized_settings": {"protocol": document},
+        "artifacts": {"fluidics_csv": Path(csv_path).relative_to(project).as_posix(),
+                      "polling_origin_monotonic": origin, "recording_closed": True},
     })
     return directory
 
@@ -48,44 +50,13 @@ class CalculationTests(unittest.TestCase):
         for path, contents in before.items():
             self.assertEqual(path.read_bytes(), contents)
 
-    def test_relocated_windows_recording_rebases_inside_project(self):
-        path = self.directory / "summary.json"
-        summary = json.loads(path.read_text())
-        summary["artifacts"]["fluidics_csv"] = "D:\\old\\experiment.admetp\\records\\protocols\\synthetic\\fluidics.csv"
-        write_json(path, summary)
-        self.assertAlmostEqual(calculate_run(self.directory, "oil_density")["result"]["density_g_ml"], 1.2)
+    def test_a_moved_project_still_finds_its_recording(self):
+        import shutil
 
-    def test_current_density_metadata_takes_precedence_over_historical_labels(self):
-        from admet.workflows.compat import density_analysis
-
-        path = self.directory / "protocol.json"
-        document = json.loads(path.read_text())
-        document["analysis"] = density_analysis(document)
-        for step in document["steps"]:
-            step["name"] = "Current step without legacy geometry label"
-        write_json(path, document)
-        summary_path = self.directory / "summary.json"
-        summary = json.loads(summary_path.read_text())
-        summary["run_id"] = "run_current"
-        write_json(summary_path, summary)
-        before = path.read_bytes()
-        result = calculate_run(self.directory, "oil_density")
+        moved = Path(self.tmp.name) / "moved"
+        shutil.copytree(Path(self.tmp.name) / "records", moved / "records")
+        result = calculate_run(moved / "records" / "protocols" / RUN_ID, "oil_density")
         self.assertAlmostEqual(result["result"]["density_g_ml"], 1.2)
-        self.assertEqual(result["run_id"], "run_current")
-        self.assertEqual(path.read_bytes(), before)
-
-    def test_historical_density_rejects_mismatched_targets_and_timing(self):
-        path = self.directory / "protocol.json"
-        original = path.read_text()
-        for field, value, message in (("sensor_setpoints", {"1": 999}, "flow target disagree"),
-                                      ("trigger_params", {"duration_s": 5}, "20-second")):
-            with self.subTest(field=field):
-                document = json.loads(original)
-                step = next(step for step in document["steps"] if step["name"].startswith("Scout"))
-                step[field] = value
-                write_json(path, document)
-                with self.assertRaisesRegex(ValueError, message):
-                    calculate_run(self.directory, "oil_density")
 
     def test_active_or_unclosed_recording_is_refused(self):
         path = self.directory / "summary.json"
@@ -110,16 +81,12 @@ class CalculationTests(unittest.TestCase):
         self.assertIsNone(result["density_g_ml"])
         self.assertIn("missing recording clock origin", result["issues"])
 
-    def test_changed_height_label_or_unrecognized_run_is_refused(self):
+    def test_changed_height_label_is_refused(self):
         path = self.directory / "protocol.json"
         document = json.loads(path.read_text())
         document["steps"][1]["confirm_message"] = "Set outlet 8 cm ABOVE the oil"
         write_json(path, document)
         with self.assertRaisesRegex(ValueError, "height.*disagree"):
-            calculate_run(self.directory, "oil_density")
-        document["steps"][1]["name"] = "Unknown geometry"
-        write_json(path, document)
-        with self.assertRaisesRegex(ValueError, "recognized density"):
             calculate_run(self.directory, "oil_density")
 
     def test_summary_missing_values_remain_null(self):

@@ -6,9 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
-from copy import deepcopy
 
-from admet.core.compat import recording_path
 from admet.workflows.calculation_schema import declarations
 from admet.workflows.json_protocol import resolve, validate_measurement
 
@@ -23,15 +21,18 @@ def fingerprint(paths, directory):
 
 
 def input_path(directory, value):
-    path = Path(value)
-    normalized = str(value).replace("\\", "/")
-    if path.is_absolute() or (len(normalized) > 2 and normalized[1:3] == ":/"):
-        if "/records/" in normalized:
-            candidate = directory.parents[2] / ("records/" + normalized.rsplit("/records/", 1)[1])
-            if candidate.is_file():
-                return candidate
-        return path
-    return directory / path
+    return directory / value
+
+
+def recording_path(directory, summary):
+    """The run's fluidics CSV, stored relative to the project root."""
+    value = summary.get("artifacts", {}).get("fluidics_csv")
+    if not isinstance(value, str) or not value:
+        raise ValueError("This run has no fluidics recording")
+    path = directory.parents[2] / value
+    if not path.is_file():
+        raise ValueError(f"Recording not found: {value}")
+    return path
 
 
 def result_current(payload):
@@ -76,10 +77,6 @@ def load_context(directory, calculation_id, entry, references=None):
             validate_measurement(value, field)
             if field.get("required") and value is None and calculation_id != "recording_summary":
                 raise ValueError(f"Missing measurement: {field['label']}")
-    if document and "calculations" in document and calculation_id in {"oil_density", "flow_scout"}:
-        document = deepcopy(document)
-        document.pop("calculations")
-        document["analysis"] = config
     loaded_references = {}
     for role, value in (references or {}).items():
         expected = entry.get("references", {}).get(role)

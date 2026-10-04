@@ -240,7 +240,7 @@ def density_protocol(oil_id, *, scouted=False):
                 if flow_index == 2 or (repeat == 0 and flow_index == 0):
                     steps.append(zero())
     document = {"name": f"density_{oil_id}", "steps": steps,
-                "analysis": {"type": "oil_density", "oil_id": oil_id, "points": points}}
+                "calculations": [{"type": "oil_density", "oil_id": oil_id, "points": points}]}
     if scouted:
         document["parameters"] = {
             "oil_base_flow": ["Oil base flow, µL/min (1x / 2x / 3x)", 15],
@@ -282,11 +282,8 @@ def normalize_analysis(value, steps):
     scout_count = 3 if len(points) == 21 else 0
 
     def zero_step(step):
-        # Accept archived pressure-zero runs for analysis; new recipes use flow zero.
-        return (step["trigger_params"].get("duration_s") == 0 and (
-            (step["sensor_setpoints"] == {"1": 0} and not step["pressure_setpoints"])
-            or (step["pressure_setpoints"] == {"1": 0} and not step["sensor_setpoints"])
-        ))
+        return (step["trigger_params"].get("duration_s") == 0
+                and step["sensor_setpoints"] == {"1": 0} and not step["pressure_setpoints"])
 
     for step in steps:
         if step.get("repeat", 1) != 1 or step.get("group"):

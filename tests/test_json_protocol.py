@@ -125,7 +125,7 @@ class JsonProtocolTests(unittest.TestCase):
         self.assertEqual(normalize(document)["measurements"], document["measurements"])
         for change in ({"calculations": [{"type": "unknown"}]},
                        {"calculations": [{"type": "recording_summary", "unused": 1}]},
-                       {"analysis": {"type": "recording_summary"}},
+                       {"analysis": {"type": "recording_summary"}},   # not a protocol field
                        {"measurements": {"mass": {"label": "Mass", "unit": "kg"}}},
                        {"measurements": {"mass": {"label": "Mass", "min": 2, "max": 1}}}):
             with self.subTest(change=change), self.assertRaises(ValueError):
@@ -259,7 +259,7 @@ class JsonProtocolTests(unittest.TestCase):
                 run_dir = Path(tmp) / "test.admetp" / "records" / "protocols" / completed["run_id"]
                 summary = json.loads((run_dir / "summary.json").read_text())
                 self.assertEqual(summary["state"], "completed")
-                self.assertTrue(Path(summary["artifacts"]["fluidics_csv"]).is_file())
+                self.assertTrue((Path(tmp) / "test.admetp" / summary["artifacts"]["fluidics_csv"]).is_file())
                 self.assertTrue((run_dir / "events.jsonl").read_text())
                 self.assertEqual(json.loads((run_dir / "protocol.json").read_text()),
                                  normalize(DOCUMENT))

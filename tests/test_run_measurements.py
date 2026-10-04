@@ -37,18 +37,11 @@ class RunMeasurementsTests(unittest.TestCase):
                 normalize(doc)
         self.assertEqual(normalize(measured_protocol())["measurements"], measured_protocol()["measurements"])
 
-    def test_historical_plan_named_run_retains_null_measurements(self):
+    def test_only_current_run_ids_are_accepted(self):
         store = self.backend.service.protocol_store()
-        plan_id = "plan_" + "a" * 32
-        plan = {"plan_id": plan_id, "normalized_settings": {"protocol": measured_protocol()}}
-        directory = store.begin(plan)
-        self.assertEqual(directory.name, plan_id)
-        values = store.measurements(plan_id)
-        self.assertEqual(values["run_id"], plan_id)
-        self.assertTrue(all(value is None for value in values["values"].values()))
-        self.assertEqual(store.measurements(plan_id, {"before_mg": 1})["values"]["before_mg"], 1)
-        with self.assertRaisesRegex(ValueError, "invalid run ID"):
-            store.measurements("plan_../../elsewhere")
+        for run_id in ("plan_" + "a" * 32, "run_../../elsewhere"):
+            with self.subTest(run_id=run_id), self.assertRaisesRegex(ValueError, "invalid run ID"):
+                store.measurements(run_id)
 
     def test_measurement_bounds_are_atomic_and_required_allows_null_until_calculation(self):
         store = self.backend.service.protocol_store()
