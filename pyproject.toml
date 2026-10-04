@@ -37,7 +37,6 @@ dev = [
 
 [project.scripts]
 admet = "admet.app:main"
-admet-qt = "admet.ui.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/admet"]
