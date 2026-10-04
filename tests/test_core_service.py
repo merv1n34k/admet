@@ -248,6 +248,19 @@ class FluidicsOnlyRecordingTests(unittest.TestCase):
         admet.do("disconnect_fluidics")
         return admet, started
 
+    def test_observation_names_the_csv_being_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            admet = Admet()
+            admet.create_project(Path(tmp) / "rig.admetp")
+            admet.do("connect_fluidics", {"simulated": True})
+            self.addCleanup(admet.do, "disconnect_fluidics")
+            started = admet.do("start_recording", {"recording_label": "observed"})
+            recording = admet.do("observe", {})["recording"]
+            admet.do("stop_recording")
+
+            self.assertTrue(recording["active"])
+            self.assertEqual(recording["fluidics_csv"], started["csv_path"])
+
     def test_a_recording_starts_with_no_camera_connected(self):
         with tempfile.TemporaryDirectory() as tmp:
             admet, started = self._recorded(tmp)

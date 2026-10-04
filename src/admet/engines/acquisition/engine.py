@@ -875,7 +875,7 @@ class AcquisitionEngine:
         return {
             "active": self.recording_active,
             "id": current.get("recording_id"),
-            "fluidics_csv": current.get("fluidics_csv_path") or current.get("csv_path"),
+            "fluidics_csv": current.get("fluidics_csv"),
             "video": current.get("video_path"),
         }
 
