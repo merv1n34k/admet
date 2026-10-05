@@ -601,8 +601,8 @@ OPERATIONS: tuple[Operation, ...] = (
             for param in (
                 Param(f"{prefix}_calibration", f"{prefix} calibration", ParamKind.TEXT, default="H2O"),
                 Param(f"{prefix}_scale", f"{prefix} scale", ParamKind.FLOAT, default=1.0),
-                Param(f"{prefix}_offset", f"{prefix} offset", ParamKind.FLOAT, default=0.0),
-                Param(f"{prefix}_quadratic", f"{prefix} quadratic", ParamKind.FLOAT, default=0.0),
+                Param(f"{prefix}_offset", f"{prefix} square term (x²)", ParamKind.FLOAT, default=0.0),
+                Param(f"{prefix}_quadratic", f"{prefix} cube term (x³)", ParamKind.FLOAT, default=0.0),
             )
         ),
         requires=("fluidics",),

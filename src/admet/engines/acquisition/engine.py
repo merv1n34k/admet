@@ -39,6 +39,9 @@ from admet.engines.acquisition.settings import CONTROL_ENGINE_SETTINGS, CORRECTI
 
 log = logging.getLogger(__name__)
 
+# How long a flow unit may take to switch calibration tables.
+TABLE_SWITCH_S = 3.0
+
 
 class TailTracker:
     """How many seconds of flow each channel delivers after a stop, learned.
@@ -428,19 +431,23 @@ class AcquisitionEngine:
     def apply_corrections(self, settings: dict[str, Any]) -> None:
         self._require_fluidics_connected()
         channels = self.channel_manager.channels
-        for index, (prefix, _label, _calibration, _scale, _offset, _quadratic) in enumerate(FLUIDIC_CHANNELS):
+        for index, (prefix, label, _calibration, _scale, _offset, _quadratic) in enumerate(FLUIDIC_CHANNELS):
             if index >= len(channels):
                 break
             channel = channels[index]
             calibration_name = settings[f"{prefix}_calibration"]
             calibration = SENSOR_CALIBRATIONS.get(calibration_name, 0)
             self.sdk.set_sensor_calibration(channel.sensor_index, calibration)
-            self.sdk.set_sensor_custom_scale(
-                channel.sensor_index,
-                settings[f"{prefix}_scale"],
-                settings[f"{prefix}_offset"],
-                settings[f"{prefix}_quadratic"],
-            )
+            self._await_table(channel.sensor_index, calibration, label, calibration_name)
+            # The unit reports scale·x + square·x² + cube·x³ (stored as offset and quadratic).
+            terms = (settings[f"{prefix}_scale"], settings[f"{prefix}_offset"], settings[f"{prefix}_quadratic"])
+            smax = None
+            if terms[1] or terms[2]:
+                # A curve would push the reported range far past the table's own, and regulation
+                # is tuned to that range, so it is capped at the table's.
+                self.sdk.set_sensor_custom_scale(channel.sensor_index, 1.0, 0.0, 0.0)
+                smax = self.sdk.get_sensor_range(channel.sensor_index)[1]
+            self.sdk.set_sensor_custom_scale(channel.sensor_index, *terms, smax=smax)
         try:
             updated = {sensor.index: sensor for sensor in self.sdk.get_sensor_channels_info()}
         except Exception:
@@ -453,6 +460,19 @@ class AcquisitionEngine:
             sensor.smax = getattr(detected, "smax", None)
         # New corrections change what the sensors report, so learned tails restart.
         self.tails.clear()
+
+    def _await_table(self, sensor_index: int, calibration: int, label: str, name: str) -> None:
+        """A unit takes a moment to switch tables and reports its old range meanwhile."""
+        if not calibration:
+            return
+        deadline = time.monotonic() + TABLE_SWITCH_S
+        while self.sdk.get_sensor_calibration(sensor_index) != calibration:
+            if time.monotonic() > deadline:
+                kept = {value: key for key, value in SENSOR_CALIBRATIONS.items()}.get(
+                    self.sdk.get_sensor_calibration(sensor_index), "an unknown")
+                raise RuntimeError(f"{label} did not switch to its {name} table and stays on {kept}; "
+                                   "the unit may not have that table")
+            time.sleep(0.05)
 
     def set_channel_flow(self, channel_index: int, flow_ul_min: float, *,
                          stop_after: str = "none", stop_value: float = 0.0) -> None:

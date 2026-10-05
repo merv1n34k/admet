@@ -3226,7 +3226,7 @@ class FluidicsMonitorTable(QFrame):
 
 
 RIG_COLUMNS = (("profile", "Liquid"), ("calibration", "Sensor table"), ("scale", "Scale"),
-               ("offset", "Offset"), ("quadratic", "Quadratic"), ("dead_volume_ul", "Dead volume, µL"))
+               ("offset", "Square (x²)"), ("quadratic", "Cube (x³)"), ("dead_volume_ul", "Dead volume, µL"))
 LIQUID_COLUMNS = ("Name", "Unit", "Sensor table", "Density, g/mL", "Viscosity, mPa.s", "From")
 
 

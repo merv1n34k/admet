@@ -58,6 +58,7 @@ class FakeControlSDK:
             PressureChannelInfo(0, 1, 10, 0, "pressure", pmin=0.0, pmax=2000.0),
             PressureChannelInfo(1, 1, 11, 1, "pressure", pmin=0.0, pmax=2000.0),
         ]
+        self.tables = {}
         self.sensor_channels = [
             SensorChannelInfo(0, 1, 20, 0, "sensor", "Flow_L_dual", smin=0.0, smax=100.0),
             SensorChannelInfo(1, 1, 21, 1, "sensor", "Flow_M_dual", smin=0.0, smax=40.0),
@@ -90,8 +91,16 @@ class FakeControlSDK:
     def set_sensor_custom_scale(self, sensor_index, a, b=0.0, c=0.0, smax=None):
         self.calls.append(("custom_scale", sensor_index, a, b, c, smax))
 
+    def get_sensor_range(self, sensor_index):
+        channel = next(c for c in self.sensor_channels if c.index == sensor_index)
+        return channel.smin, channel.smax
+
     def set_sensor_calibration(self, sensor_index, calibration):
         self.calls.append(("sensor_calibration", sensor_index, calibration))
+        self.tables[sensor_index] = calibration
+
+    def get_sensor_calibration(self, sensor_index):
+        return self.tables.get(sensor_index, 0)
 
     def set_sensor_regulation(self, sensor_index, pressure_index, setpoint):
         self.calls.append(("regulate", sensor_index, pressure_index, setpoint))
@@ -483,6 +492,20 @@ class AcquisitionEngineTests(unittest.TestCase):
         self.assertEqual(pipeline[1].pressure_setpoints, {0: 1800.0, 1: 1800.0, 2: 1800.0})
         self.assertEqual(getattr(pipeline[1].trigger, "_duration_s"), 90.0)
 
+    def test_a_unit_that_keeps_its_old_table_stops_the_corrections(self):
+        from unittest.mock import patch
+
+        sdk = FakeControlSDK()
+        engine = make_engine(sdk)
+        run_engine(engine, "connect_fluidics", {"simulated": False, "start_polling": False})
+        sdk.get_sensor_calibration = lambda sensor_index: 1        # stuck on H2O
+        settings = {f"{p}_{k}": v for p in ("oil_l", "cells_m", "beads_m")
+                    for k, v in (("calibration", "IPA"), ("scale", 1.0), ("offset", 0.0), ("quadratic", 0.0))}
+        with patch("admet.engines.acquisition.engine.TABLE_SWITCH_S", 0.1):
+            with self.assertRaisesRegex(RuntimeError, "Oil L did not switch to its IPA table and stays on H2O"):
+                engine.apply_corrections(settings)
+        self.assertFalse(any(call[0] == "custom_scale" for call in sdk.calls))
+
     def test_fluidics_control_actions_use_configured_channels(self):
         sdk = FakeControlSDK()
         engine = make_engine(sdk)
@@ -519,6 +542,17 @@ class AcquisitionEngineTests(unittest.TestCase):
         self.assertIn(("sensor_calibration", 1, 1), sdk.calls)
         self.assertIn(("custom_scale", 0, 2.25, 0.0, 0.0, None), sdk.calls)
         self.assertIn(("custom_scale", 1, 1.0, 0.0, 0.0, None), sdk.calls)
+        # A straight scale lets the unit compute its range; a curve is capped at the table's own.
+        start = len(sdk.calls)
+        run_engine(engine, "apply_corrections", {
+            "oil_l_calibration": "IPA", "oil_l_scale": 0.7391, "oil_l_offset": 0.012728, "oil_l_quadratic": 0.0,
+            "cells_m_calibration": "H2O", "cells_m_scale": 1.0, "cells_m_offset": 0.0, "cells_m_quadratic": 0.0,
+            "beads_m_calibration": "H2O", "beads_m_scale": 1.0, "beads_m_offset": 0.0, "beads_m_quadratic": 0.0,
+        })
+        scales = [call for call in sdk.calls[start:] if call[0] == "custom_scale"]
+        self.assertEqual(scales[:2], [("custom_scale", 0, 1.0, 0.0, 0.0, None),
+                                      ("custom_scale", 0, 0.7391, 0.012728, 0.0, 100.0)])
+        self.assertEqual(scales[2], ("custom_scale", 1, 1.0, 0.0, 0.0, None))
         self.assertIn(("regulate", 1, 1, 67.0), sdk.calls)
         self.assertIn(("pressure", 0, 120.0), sdk.calls)
         self.assertIn(("sensor_response", 1, 4), sdk.calls)

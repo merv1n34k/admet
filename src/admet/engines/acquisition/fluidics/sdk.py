@@ -207,6 +207,10 @@ class FluigentSDK:
     def set_sensor_regulation_response(self, sensor_index: int, response_time: int) -> None:
         self._module().fgt_set_sensorRegulationResponse(sensor_index, response_time)
 
+    def get_sensor_range(self, sensor_index: int) -> tuple[float, float]:
+        smin, smax = self._module().fgt_get_sensorRange(sensor_index)
+        return float(smin), float(smax)
+
     def set_sensor_custom_scale(
         self,
         sensor_index: int,

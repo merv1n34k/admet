@@ -83,7 +83,8 @@ class DesktopBackendTests(unittest.TestCase):
         from admet.workflows.json_protocol import template_documents
 
         self.backend.call("connect_fluidics")
-        self.backend.call("apply_corrections", {"cells_m_calibration": "IPA", "cells_m_scale": 2.25})
+        # The simulated M units are single-table (H2O); a scale alone widens their range.
+        self.backend.call("apply_corrections", {"cells_m_calibration": "H2O", "cells_m_scale": 2.25})
         reported = self.backend.engine.sdk.get_sensor_channels_info()[1].smax
         cached = self.backend.engine.hardware.state.sensor_channels[1].smax
         self.assertEqual(cached, reported)
