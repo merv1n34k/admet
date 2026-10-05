@@ -10,6 +10,7 @@ from statistics import mean, stdev
 import uuid
 
 from admet.core.protocol_store import write_json
+from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_LABELS
 from admet.workflows.fluid_density import _finite, analyze_density_run
 from admet.workflows.flow_scout import analyze_scout
 from admet.workflows.calculation_schema import declarations
@@ -193,23 +194,25 @@ def result_text(payload):
     if kind in {"gravimetry", "dead_volume", "viscosity"}:
         lines = [f"{CALCULATIONS[kind]['label']}: {result['status']}"]
         if kind == "gravimetry":
-            lines += [f"Recorded-flow multiplier: {number(result['multiplier'])}",
-                      "STEP | MASS-DERIVED (µL) | RECORDED (µL) | MULTIPLIER"]
-            lines += [f"{s['step']} | {number(s['true_volume_ul'])} | {number(s['recorded_volume_ul'])} | "
-                      f"{number(s['multiplier'])}" for s in result["samples"]]
-            if result.get("targets"):
-                fit = result.get("flow_fit") or {}
-                lines += [f"Flow-curve R²: {number(fit.get('r_squared'))}",
-                          f"True Q = {number(fit.get('slope'))} × recorded Q + {number(fit.get('intercept'))} µL/min",
-                          "TARGET | TRUE Q ± REPEAT SD (µL/min) | N | FACTOR | UP/DOWN Δ (%)"]
-                for row in result["targets"]:
-                    stats = row["true_flow"]
-                    lines.append(f"{number(row['target_ul_min'])} | {number(stats['mean'])} ± {number(stats['sd'])} | "
-                                 f"{stats['repeats']} | {number(row['multiplier'])} | "
-                                 f"{number(row['up_down_difference_percent'])}")
-                    interval = row["true_flow_repeat_ci95_ul_min"]
-                    if interval:
-                        lines.append(f"  Repeatability 95% CI: {number(interval[0])}–{number(interval[1])} µL/min")
+            for channel, unit in result["units"].items():
+                lines += ["", f"{FLUIDIC_CHANNEL_LABELS[int(channel)]} (channel {channel}): {unit['status']}",
+                          f"Recorded-flow multiplier: {number(unit['multiplier'])}",
+                          "STEP | MASS-DERIVED (µL) | RECORDED (µL) | MULTIPLIER"]
+                lines += [f"{s['step']} | {number(s['true_volume_ul'])} | {number(s['recorded_volume_ul'])} | "
+                          f"{number(s['multiplier'])}" for s in unit["samples"]]
+                if unit.get("targets"):
+                    fit = unit.get("flow_fit") or {}
+                    lines += [f"Flow-curve R²: {number(fit.get('r_squared'))}",
+                              f"True Q = {number(fit.get('slope'))} × recorded Q + {number(fit.get('intercept'))} µL/min",
+                              "TARGET | TRUE Q ± REPEAT SD (µL/min) | N | FACTOR | UP/DOWN Δ (%)"]
+                    for row in unit["targets"]:
+                        stats = row["true_flow"]
+                        lines.append(f"{number(row['target_ul_min'])} | {number(stats['mean'])} ± {number(stats['sd'])} | "
+                                     f"{stats['repeats']} | {number(row['multiplier'])} | "
+                                     f"{number(row['up_down_difference_percent'])}")
+                        interval = row["true_flow_repeat_ci95_ul_min"]
+                        if interval:
+                            lines.append(f"  Repeatability 95% CI: {number(interval[0])}–{number(interval[1])} µL/min")
         elif kind == "dead_volume":
             interval = result["ci95_ul"]
             lines += [f"Dead volume: {number(result['volume_ul'])} µL ± {number(result['sd_ul'])} SD "

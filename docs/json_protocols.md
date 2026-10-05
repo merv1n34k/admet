@@ -113,6 +113,15 @@ Use the same parameter in calculation `channel` so the selected sensor and analy
 stay aligned. Changing the channel does not automatically change the flow value:
 set both explicitly in the Parameters table.
 
+A step may carry `"units": "{units}"`, a mask read right to left: `001` L, `010` M1,
+`100` M2, `110` M1 and M2, `111` all. The step keeps only the setpoints of the units
+the mask names, so each unit can still have its own flow or pressure. Its trigger
+and timeout may use `step_min_flow`, the lowest flow the step sets after masking.
+Measurements marked `"for_each_unit": "units"` are repeated for every unit in the
+mask: `{unit}` becomes `ch0`, `ch1`… in keys, and `{unit_name}` the unit's name in
+labels. A gravimetry declaration takes `"units": "{units}"` and uses `{unit}` in its
+mass bindings.
+
 The archived `protocol.json` preserves the template and chosen values;
 `plan.json` preserves exact resolved, expanded steps and the executable digest.
 Calculations resolve archived inputs, not current GUI values. Existing plain JSON
@@ -206,10 +215,10 @@ JSON declares a list of known calculators, with one entry per calculation type:
 ```json
 "calculations": [
   {
-    "type": "gravimetry", "channel": 1, "liquid": "{oil_name}",
+    "type": "gravimetry", "units": "010", "liquid": "{liquid_name}",
     "density": "density",
     "samples": [
-      {"step": 2, "before": "before_mg", "after": "after_mg"}
+      {"step": 2, "before": "before_{unit}_mg", "after": "after_{unit}_mg"}
     ]
   },
   {"type": "recording_summary"}
@@ -225,13 +234,20 @@ accept text parameters; viscosity `settle_s` accepts numeric parameter expressio
 
 ### Gravimetry
 
-The template runs one selected channel (0 Oil-L, 1 M1, 2 M2). Set working flow to
-67 µL/min for M1/M2 or 250 µL/min for L. There are three targets: `low_flow`,
-`(low_flow + working_flow) / 2`, and `working_flow`. The lower target defaults to
-15 µL/min. Run ascending, descending, then ascending: three independent collections
-per target, nine total. Each collection is nominally 100 µL by default; time is
-`collection_ul × 60 / target`. The budget is 900 µL nominal, excluding priming and
-any separate setup runs. Actual collected volume depends on the calibration.
+The template runs the units in its `units` mask: `001` L, `010` M1, `100` M2,
+`110` M1 and M2 together, or `111` all three. Each unit has its own working flow:
+`working_flow_l` (250 µL/min) and `working_flow_m` (67 µL/min). There are three
+targets per unit: `low_flow`, the midpoint, and the working flow. The lower target
+defaults to 15 µL/min. Run ascending, descending, then ascending: three independent
+collections per target, nine total per unit. Each collection runs on time,
+`collection_ul × 60 / step_min_flow`, so the slowest unit delivers the nominal
+100 µL and faster units more. The budget is 900 µL nominal per M unit, excluding
+priming and any separate setup runs. Actual collected volume depends on the
+calibration; the calculation uses what each unit recorded.
+
+Each unit has its own vessel and mass fields per collection. One calculation
+reads every unit alone, from its own recorded flow and masses, and reports each
+unit's result; a missing or bad mass makes only that unit inconclusive.
 
 Enter only each vessel's before/after mass in the measurement table; there is no
 mass time-series requirement or new balance UI. Weigh the complete collection.

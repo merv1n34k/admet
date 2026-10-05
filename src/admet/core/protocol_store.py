@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import re
 
-from admet.workflows.json_protocol import load, normalize, validate_measurement
+from admet.workflows.json_protocol import load, normalize, resolve, validate_measurement
 from admet.core.session import write_atomic
 
 
@@ -60,7 +60,7 @@ class ProtocolStore:
         definition = plan["normalized_settings"].get("protocol")
         if definition is not None:
             write_json(directory / "protocol.json", definition)
-            fields = definition.get("measurements", {})
+            fields = resolve(definition).get("measurements", {})
             if fields:
                 write_json(directory / "measurements.json", {
                     "run_id": plan["run_id"], "revision": 0,

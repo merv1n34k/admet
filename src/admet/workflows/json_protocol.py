@@ -142,6 +142,49 @@ def expression(value, values):
         raise ValueError(f"invalid expression {value!r}: {exc}") from exc
 
 
+def unit_mask(value):
+    """The channels a units mask names, read right to left: 001 L, 010 M1, 100 M2, 110 M1 and M2."""
+    if not isinstance(value, str) or not re.fullmatch(r"[01]+", value) or "1" not in value:
+        raise ValueError(f"units must be a mask like 001, 010 or 110, got {value!r}")
+    return [channel for channel, bit in enumerate(reversed(value)) if bit == "1"]
+
+
+def _unit_parameter(values, name):
+    if name not in values:
+        raise ValueError(f"for_each_unit names an undeclared parameter: {name}")
+    return unit_mask(parameter_text(values[name]))
+
+
+def per_unit(value, channel):
+    """Fill {unit} in a field key or binding (ch1) and {unit_name} in a label (Cells M)."""
+    from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_LABELS
+
+    if isinstance(value, str):
+        name = FLUIDIC_CHANNEL_LABELS[channel] if channel < len(FLUIDIC_CHANNEL_LABELS) else f"Channel {channel}"
+        return value.replace("{unit}", f"ch{channel}").replace("{unit_name}", name)
+    if isinstance(value, list):
+        return [per_unit(item, channel) for item in value]
+    if isinstance(value, dict):
+        return {key: per_unit(item, channel) for key, item in value.items()}
+    return value
+
+
+def _measurements_per_unit(fields, values):
+    result = {}
+    for key, field in fields.items():
+        each = field.get("for_each_unit") if isinstance(field, dict) else None
+        if each is None:
+            result[key] = field
+            continue
+        field = {k: v for k, v in field.items() if k != "for_each_unit"}
+        for channel in _unit_parameter(values, each):
+            unit_key = per_unit(key, channel)
+            if unit_key in result or unit_key == key:
+                raise ValueError(f"measurement {key}: each channel needs its own key with {{unit}}")
+            result[unit_key] = per_unit(field, channel)
+    return result
+
+
 def resolve(document):
     """Compile declared arithmetic into ordinary validated protocol steps."""
     if not isinstance(document, dict):
@@ -158,21 +201,35 @@ def resolve(document):
         for step in steps:
             if not isinstance(step, dict):
                 raise ValueError("each step must be an object")
+            # "units" keeps only the setpoints of the channels its mask names.
+            units = unit_mask(interpolate(step.pop("units"), values)) if "units" in step else None
+            step_values = values
             for key in ("sensor_setpoints", "pressure_setpoints", "trigger_params"):
                 if isinstance(step.get(key), dict):
                     compiled = {}
                     for k, v in step[key].items():
                         target_key = interpolate(k, values) if key != "trigger_params" else k
+                        if (units is not None and key != "trigger_params"
+                                and target_key.isdigit() and int(target_key) not in units):
+                            continue
                         if target_key in compiled:
                             raise ValueError("channel parameters resolve to duplicate targets")
-                        compiled[target_key] = interpolate(v, values) if k in TEXT_TRIGGER_PARAMS else expression(v, values)
+                        compiled[target_key] = (interpolate(v, step_values) if k in TEXT_TRIGGER_PARAMS
+                                                else expression(v, step_values))
                     step[key] = compiled
+                if key == "pressure_setpoints":
+                    # The lowest flow this step sets, for timing it so every unit delivers enough.
+                    flows = [v for v in step.get("sensor_setpoints", {}).values() if type(v) in (int, float) and v > 0]
+                    if flows:
+                        step_values = {**values, "step_min_flow": min(flows)}
             for key in ("timeout_s", "repeat"):
                 if key in step:
-                    step[key] = expression(step[key], values)
+                    step[key] = expression(step[key], step_values)
             for key in ("name", "confirm_message", "group", "trigger_type", "on_complete"):
                 if isinstance(step.get(key), str):
                     step[key] = interpolate(step[key], values)
+        if isinstance(result.get("measurements"), dict):
+            result["measurements"] = _measurements_per_unit(result["measurements"], values)
     resolve_declarations(result, values)
     return _normalize_resolved(result)
 

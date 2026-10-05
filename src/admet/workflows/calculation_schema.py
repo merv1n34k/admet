@@ -19,7 +19,7 @@ def declarations(document):
 
 
 def resolve_declarations(document, values):
-    from admet.workflows.json_protocol import expression, interpolate
+    from admet.workflows.json_protocol import expression, interpolate, unit_mask
 
     entries = declarations(document)
     if not isinstance(entries, list):
@@ -31,6 +31,8 @@ def resolve_declarations(document, values):
             entry["liquid"] = interpolate(entry["liquid"], values)
         if "channel" in entry:
             entry["channel"] = expression(entry["channel"], values)
+        if "units" in entry:
+            entry["units"] = unit_mask(interpolate(entry["units"], values))
         if entry["type"] == "viscosity":
             entry["path_id"] = interpolate(entry.get("path_id"), values)
             samples = entry.get("samples")
@@ -83,7 +85,7 @@ def measurement_binding(fields, key, units, step=None):
         raise ValueError(f"{key}: measurement must belong to step {step}")
 
 
-def sample_steps(entry, steps, *, triggers=("time",)):
+def sample_steps(entry, steps, *, triggers=("time",), shared=False):
     from admet.engines.acquisition.pipeline import expand_protocol_steps
     from admet.workflows.operations import _step_from
 
@@ -102,9 +104,11 @@ def sample_steps(entry, steps, *, triggers=("time",)):
         seen.add(index)
         step = expanded[index - 1]
         controlled = set(step.sensor_setpoints) | set(step.pressure_setpoints)
-        if controlled != {channel} or step.sensor_setpoints.get(channel, 0) <= 0 or step.trigger_type not in triggers:
-            raise ValueError(f"sample step {index} must use positive single-channel flow control and "
-                             + " or ".join(triggers))
+        # shared: other units may flow alongside, as long as they are flow controlled too.
+        alone = controlled == {channel} or (shared and not step.pressure_setpoints)
+        if not alone or step.sensor_setpoints.get(channel, 0) <= 0 or step.trigger_type not in triggers:
+            raise ValueError(f"sample step {index} must use positive {'' if shared else 'single-channel '}flow "
+                             "control and " + " or ".join(triggers))
         if step.trigger_type == "volume" and step.trigger_params.get("sensor_index") != channel:
             raise ValueError(f"sample step {index} must count volume on channel {channel}")
         if step.on_complete != "zero":

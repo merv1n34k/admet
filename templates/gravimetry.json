@@ -1,192 +1,192 @@
 {
   "name": "gravimetry",
   "parameters": {
-    "channel": {
+    "units": {
       "type": "choice",
-      "label": "Channel: 0 Oil-L / 1 M1 / 2 M2",
-      "default": 1,
+      "label": "Flow units: 001 L / 010 M1 / 100 M2 / 110 M1+M2 / 111 all",
+      "default": "110",
       "options": [
-        0,
-        1,
-        2
+        "001",
+        "010",
+        "100",
+        "110",
+        "111"
       ]
     },
-    "oil_name": {
+    "liquid_name": {
       "type": "text",
       "label": "Liquid name",
-      "default": "oil"
+      "default": "water"
     },
     "low_flow": [
-      "Lowest flow, µL/min",
+      "Lowest flow, µL/min (all units)",
       15
     ],
-    "working_flow": [
-      "Working flow, µL/min (M: 67; L: 250)",
+    "working_flow_l": [
+      "Working flow on L, µL/min",
+      250
+    ],
+    "working_flow_m": [
+      "Working flow on M1/M2, µL/min",
       67
     ],
     "collection_ul": {
       "type": "number",
-      "label": "Nominal volume per collection, µL",
+      "label": "Nominal volume per collection on the slowest unit, µL",
       "default": 100,
       "min": 0.1
-    },
-    "volume_mode": {
-      "type": "choice",
-      "label": "Volume mode",
-      "default": "adaptive",
-      "options": [
-        "adaptive",
-        "integral"
-      ]
     }
   },
   "steps": [
     {
       "name": "Pass 1 / level 1",
+      "units": "{units}",
       "sensor_setpoints": {
-        "{channel}": "low_flow"
+        "0": "low_flow",
+        "1": "low_flow",
+        "2": "low_flow"
       },
-      "trigger_type": "volume",
+      "trigger_type": "time",
       "trigger_params": {
-        "sensor_index": "channel",
-        "target_volume_ul": "collection_ul",
-        "mode": "{volume_mode}"
+        "duration_s": "collection_ul * 60 / step_min_flow"
       },
-      "timeout_s": "1.2 * collection_ul * 60 / (low_flow) + 10",
       "on_complete": "zero",
-      "confirm_message": "Collection 1, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
+      "confirm_message": "Collection 1, units {units} (001 L, 010 M1, 100 M2): weigh one empty vessel per running unit and enter the masses. Position them before confirming. Collect each entire dispense, then weigh and enter the final masses before the next collection. Keep the filled bypass paths unchanged. This is before/after weighing; no time-series balance logging is required."
     },
     {
       "name": "Pass 1 / level 2",
+      "units": "{units}",
       "sensor_setpoints": {
-        "{channel}": "(low_flow + working_flow) / 2"
+        "0": "(low_flow + working_flow_l) / 2",
+        "1": "(low_flow + working_flow_m) / 2",
+        "2": "(low_flow + working_flow_m) / 2"
       },
-      "trigger_type": "volume",
+      "trigger_type": "time",
       "trigger_params": {
-        "sensor_index": "channel",
-        "target_volume_ul": "collection_ul",
-        "mode": "{volume_mode}"
+        "duration_s": "collection_ul * 60 / step_min_flow"
       },
-      "timeout_s": "1.2 * collection_ul * 60 / ((low_flow + working_flow) / 2) + 10",
       "on_complete": "zero",
-      "confirm_message": "Collection 2, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
+      "confirm_message": "Collection 2, units {units} (001 L, 010 M1, 100 M2): weigh one empty vessel per running unit and enter the masses. Position them before confirming. Collect each entire dispense, then weigh and enter the final masses before the next collection. Keep the filled bypass paths unchanged. This is before/after weighing; no time-series balance logging is required."
     },
     {
       "name": "Pass 1 / level 3",
+      "units": "{units}",
       "sensor_setpoints": {
-        "{channel}": "working_flow"
+        "0": "working_flow_l",
+        "1": "working_flow_m",
+        "2": "working_flow_m"
       },
-      "trigger_type": "volume",
+      "trigger_type": "time",
       "trigger_params": {
-        "sensor_index": "channel",
-        "target_volume_ul": "collection_ul",
-        "mode": "{volume_mode}"
+        "duration_s": "collection_ul * 60 / step_min_flow"
       },
-      "timeout_s": "1.2 * collection_ul * 60 / (working_flow) + 10",
       "on_complete": "zero",
-      "confirm_message": "Collection 3, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
+      "confirm_message": "Collection 3, units {units} (001 L, 010 M1, 100 M2): weigh one empty vessel per running unit and enter the masses. Position them before confirming. Collect each entire dispense, then weigh and enter the final masses before the next collection. Keep the filled bypass paths unchanged. This is before/after weighing; no time-series balance logging is required."
     },
     {
       "name": "Pass 2 / level 3",
+      "units": "{units}",
       "sensor_setpoints": {
-        "{channel}": "working_flow"
+        "0": "working_flow_l",
+        "1": "working_flow_m",
+        "2": "working_flow_m"
       },
-      "trigger_type": "volume",
+      "trigger_type": "time",
       "trigger_params": {
-        "sensor_index": "channel",
-        "target_volume_ul": "collection_ul",
-        "mode": "{volume_mode}"
+        "duration_s": "collection_ul * 60 / step_min_flow"
       },
-      "timeout_s": "1.2 * collection_ul * 60 / (working_flow) + 10",
       "on_complete": "zero",
-      "confirm_message": "Collection 4, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
+      "confirm_message": "Collection 4, units {units} (001 L, 010 M1, 100 M2): weigh one empty vessel per running unit and enter the masses. Position them before confirming. Collect each entire dispense, then weigh and enter the final masses before the next collection. Keep the filled bypass paths unchanged. This is before/after weighing; no time-series balance logging is required."
     },
     {
       "name": "Pass 2 / level 2",
+      "units": "{units}",
       "sensor_setpoints": {
-        "{channel}": "(low_flow + working_flow) / 2"
+        "0": "(low_flow + working_flow_l) / 2",
+        "1": "(low_flow + working_flow_m) / 2",
+        "2": "(low_flow + working_flow_m) / 2"
       },
-      "trigger_type": "volume",
+      "trigger_type": "time",
       "trigger_params": {
-        "sensor_index": "channel",
-        "target_volume_ul": "collection_ul",
-        "mode": "{volume_mode}"
+        "duration_s": "collection_ul * 60 / step_min_flow"
       },
-      "timeout_s": "1.2 * collection_ul * 60 / ((low_flow + working_flow) / 2) + 10",
       "on_complete": "zero",
-      "confirm_message": "Collection 5, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
+      "confirm_message": "Collection 5, units {units} (001 L, 010 M1, 100 M2): weigh one empty vessel per running unit and enter the masses. Position them before confirming. Collect each entire dispense, then weigh and enter the final masses before the next collection. Keep the filled bypass paths unchanged. This is before/after weighing; no time-series balance logging is required."
     },
     {
       "name": "Pass 2 / level 1",
+      "units": "{units}",
       "sensor_setpoints": {
-        "{channel}": "low_flow"
+        "0": "low_flow",
+        "1": "low_flow",
+        "2": "low_flow"
       },
-      "trigger_type": "volume",
+      "trigger_type": "time",
       "trigger_params": {
-        "sensor_index": "channel",
-        "target_volume_ul": "collection_ul",
-        "mode": "{volume_mode}"
+        "duration_s": "collection_ul * 60 / step_min_flow"
       },
-      "timeout_s": "1.2 * collection_ul * 60 / (low_flow) + 10",
       "on_complete": "zero",
-      "confirm_message": "Collection 6, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
+      "confirm_message": "Collection 6, units {units} (001 L, 010 M1, 100 M2): weigh one empty vessel per running unit and enter the masses. Position them before confirming. Collect each entire dispense, then weigh and enter the final masses before the next collection. Keep the filled bypass paths unchanged. This is before/after weighing; no time-series balance logging is required."
     },
     {
       "name": "Pass 3 / level 1",
+      "units": "{units}",
       "sensor_setpoints": {
-        "{channel}": "low_flow"
+        "0": "low_flow",
+        "1": "low_flow",
+        "2": "low_flow"
       },
-      "trigger_type": "volume",
+      "trigger_type": "time",
       "trigger_params": {
-        "sensor_index": "channel",
-        "target_volume_ul": "collection_ul",
-        "mode": "{volume_mode}"
+        "duration_s": "collection_ul * 60 / step_min_flow"
       },
-      "timeout_s": "1.2 * collection_ul * 60 / (low_flow) + 10",
       "on_complete": "zero",
-      "confirm_message": "Collection 7, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
+      "confirm_message": "Collection 7, units {units} (001 L, 010 M1, 100 M2): weigh one empty vessel per running unit and enter the masses. Position them before confirming. Collect each entire dispense, then weigh and enter the final masses before the next collection. Keep the filled bypass paths unchanged. This is before/after weighing; no time-series balance logging is required."
     },
     {
       "name": "Pass 3 / level 2",
+      "units": "{units}",
       "sensor_setpoints": {
-        "{channel}": "(low_flow + working_flow) / 2"
+        "0": "(low_flow + working_flow_l) / 2",
+        "1": "(low_flow + working_flow_m) / 2",
+        "2": "(low_flow + working_flow_m) / 2"
       },
-      "trigger_type": "volume",
+      "trigger_type": "time",
       "trigger_params": {
-        "sensor_index": "channel",
-        "target_volume_ul": "collection_ul",
-        "mode": "{volume_mode}"
+        "duration_s": "collection_ul * 60 / step_min_flow"
       },
-      "timeout_s": "1.2 * collection_ul * 60 / ((low_flow + working_flow) / 2) + 10",
       "on_complete": "zero",
-      "confirm_message": "Collection 8, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
+      "confirm_message": "Collection 8, units {units} (001 L, 010 M1, 100 M2): weigh one empty vessel per running unit and enter the masses. Position them before confirming. Collect each entire dispense, then weigh and enter the final masses before the next collection. Keep the filled bypass paths unchanged. This is before/after weighing; no time-series balance logging is required."
     },
     {
       "name": "Pass 3 / level 3",
+      "units": "{units}",
       "sensor_setpoints": {
-        "{channel}": "working_flow"
+        "0": "working_flow_l",
+        "1": "working_flow_m",
+        "2": "working_flow_m"
       },
-      "trigger_type": "volume",
+      "trigger_type": "time",
       "trigger_params": {
-        "sensor_index": "channel",
-        "target_volume_ul": "collection_ul",
-        "mode": "{volume_mode}"
+        "duration_s": "collection_ul * 60 / step_min_flow"
       },
-      "timeout_s": "1.2 * collection_ul * 60 / (working_flow) + 10",
       "on_complete": "zero",
-      "confirm_message": "Collection 9, channel {channel} only: weigh the empty vessel and enter its mass. Position it before confirming. Collect the entire dispense, then weigh and enter the final mass before the next collection. Keep the filled bypass path unchanged. This is before/after weighing; no time-series balance logging is required."
+      "confirm_message": "Collection 9, units {units} (001 L, 010 M1, 100 M2): weigh one empty vessel per running unit and enter the masses. Position them before confirming. Collect each entire dispense, then weigh and enter the final masses before the next collection. Keep the filled bypass paths unchanged. This is before/after weighing; no time-series balance logging is required."
     },
     {
       "name": "Record final mass",
+      "units": "{units}",
       "sensor_setpoints": {
-        "{channel}": 0
+        "0": 0,
+        "1": 0,
+        "2": 0
       },
       "trigger_type": "time",
       "trigger_params": {
         "duration_s": 0
       },
       "on_complete": "zero",
-      "confirm_message": "Enter the final collected mass before confirming completion. Calculate the flow calibration afterwards; no correction is applied automatically."
+      "confirm_message": "Enter the final collected masses before confirming completion. Calculate the flow calibration afterwards; each unit gets its own result and no correction is applied automatically."
     }
   ],
   "measurements": {
@@ -195,175 +195,175 @@
       "unit": "g/mL",
       "min": 0
     },
-    "mass_before_1": {
-      "label": "Collection 1: mass before",
+    "mass_before_{unit}_1": {
+      "label": "Collection 1 · {unit_name}: mass before",
       "unit": "mg",
       "step": 1,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_after_1": {
-      "label": "Collection 1: mass after",
+    "mass_after_{unit}_1": {
+      "label": "Collection 1 · {unit_name}: mass after",
       "unit": "mg",
       "step": 1,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_before_2": {
-      "label": "Collection 2: mass before",
+    "mass_before_{unit}_2": {
+      "label": "Collection 2 · {unit_name}: mass before",
       "unit": "mg",
       "step": 2,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_after_2": {
-      "label": "Collection 2: mass after",
+    "mass_after_{unit}_2": {
+      "label": "Collection 2 · {unit_name}: mass after",
       "unit": "mg",
       "step": 2,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_before_3": {
-      "label": "Collection 3: mass before",
+    "mass_before_{unit}_3": {
+      "label": "Collection 3 · {unit_name}: mass before",
       "unit": "mg",
       "step": 3,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_after_3": {
-      "label": "Collection 3: mass after",
+    "mass_after_{unit}_3": {
+      "label": "Collection 3 · {unit_name}: mass after",
       "unit": "mg",
       "step": 3,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_before_4": {
-      "label": "Collection 4: mass before",
+    "mass_before_{unit}_4": {
+      "label": "Collection 4 · {unit_name}: mass before",
       "unit": "mg",
       "step": 4,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_after_4": {
-      "label": "Collection 4: mass after",
+    "mass_after_{unit}_4": {
+      "label": "Collection 4 · {unit_name}: mass after",
       "unit": "mg",
       "step": 4,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_before_5": {
-      "label": "Collection 5: mass before",
+    "mass_before_{unit}_5": {
+      "label": "Collection 5 · {unit_name}: mass before",
       "unit": "mg",
       "step": 5,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_after_5": {
-      "label": "Collection 5: mass after",
+    "mass_after_{unit}_5": {
+      "label": "Collection 5 · {unit_name}: mass after",
       "unit": "mg",
       "step": 5,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_before_6": {
-      "label": "Collection 6: mass before",
+    "mass_before_{unit}_6": {
+      "label": "Collection 6 · {unit_name}: mass before",
       "unit": "mg",
       "step": 6,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_after_6": {
-      "label": "Collection 6: mass after",
+    "mass_after_{unit}_6": {
+      "label": "Collection 6 · {unit_name}: mass after",
       "unit": "mg",
       "step": 6,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_before_7": {
-      "label": "Collection 7: mass before",
+    "mass_before_{unit}_7": {
+      "label": "Collection 7 · {unit_name}: mass before",
       "unit": "mg",
       "step": 7,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_after_7": {
-      "label": "Collection 7: mass after",
+    "mass_after_{unit}_7": {
+      "label": "Collection 7 · {unit_name}: mass after",
       "unit": "mg",
       "step": 7,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_before_8": {
-      "label": "Collection 8: mass before",
+    "mass_before_{unit}_8": {
+      "label": "Collection 8 · {unit_name}: mass before",
       "unit": "mg",
       "step": 8,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_after_8": {
-      "label": "Collection 8: mass after",
+    "mass_after_{unit}_8": {
+      "label": "Collection 8 · {unit_name}: mass after",
       "unit": "mg",
       "step": 8,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_before_9": {
-      "label": "Collection 9: mass before",
+    "mass_before_{unit}_9": {
+      "label": "Collection 9 · {unit_name}: mass before",
       "unit": "mg",
       "step": 9,
-      "required": true
+      "for_each_unit": "units"
     },
-    "mass_after_9": {
-      "label": "Collection 9: mass after",
+    "mass_after_{unit}_9": {
+      "label": "Collection 9 · {unit_name}: mass after",
       "unit": "mg",
       "step": 9,
-      "required": true
+      "for_each_unit": "units"
     }
   },
   "calculations": [
     {
       "type": "gravimetry",
-      "channel": "channel",
-      "liquid": "{oil_name}",
+      "units": "{units}",
+      "liquid": "{liquid_name}",
       "density": "density_g_ml",
       "samples": [
         {
           "step": 1,
           "pass": 1,
-          "before": "mass_before_1",
-          "after": "mass_after_1"
+          "before": "mass_before_{unit}_1",
+          "after": "mass_after_{unit}_1"
         },
         {
           "step": 2,
           "pass": 1,
-          "before": "mass_before_2",
-          "after": "mass_after_2"
+          "before": "mass_before_{unit}_2",
+          "after": "mass_after_{unit}_2"
         },
         {
           "step": 3,
           "pass": 1,
-          "before": "mass_before_3",
-          "after": "mass_after_3"
+          "before": "mass_before_{unit}_3",
+          "after": "mass_after_{unit}_3"
         },
         {
           "step": 4,
           "pass": 2,
-          "before": "mass_before_4",
-          "after": "mass_after_4"
+          "before": "mass_before_{unit}_4",
+          "after": "mass_after_{unit}_4"
         },
         {
           "step": 5,
           "pass": 2,
-          "before": "mass_before_5",
-          "after": "mass_after_5"
+          "before": "mass_before_{unit}_5",
+          "after": "mass_after_{unit}_5"
         },
         {
           "step": 6,
           "pass": 2,
-          "before": "mass_before_6",
-          "after": "mass_after_6"
+          "before": "mass_before_{unit}_6",
+          "after": "mass_after_{unit}_6"
         },
         {
           "step": 7,
           "pass": 3,
-          "before": "mass_before_7",
-          "after": "mass_after_7"
+          "before": "mass_before_{unit}_7",
+          "after": "mass_after_{unit}_7"
         },
         {
           "step": 8,
           "pass": 3,
-          "before": "mass_before_8",
-          "after": "mass_after_8"
+          "before": "mass_before_{unit}_8",
+          "after": "mass_after_{unit}_8"
         },
         {
           "step": 9,
           "pass": 3,
-          "before": "mass_before_9",
-          "after": "mass_after_9"
+          "before": "mass_before_{unit}_9",
+          "after": "mass_after_{unit}_9"
         }
       ]
     },

@@ -17,7 +17,7 @@ from admet.ui.tables import GridTable, SummaryLabel, fit_table_height
 from admet.core.engine import Param, ParamKind
 from admet.engines.acquisition.fluidics.config import STABILITY_DURATION_S, STABILITY_TOLERANCE_UL_MIN
 from admet.workflows.control import builtin_document
-from admet.workflows.json_protocol import loads, parameter_declarations, parameter_text, template_documents
+from admet.workflows.json_protocol import loads, parameter_declarations, parameter_text, resolve, template_documents
 
 
 def value_text(value, unit=""):
@@ -389,7 +389,7 @@ class ProtocolEditor(QWidget):
         self.edited()
         self.refresh_parameters()
         try:
-            fields = loads(self.editor.toPlainText()).get("measurements", {})
+            fields = resolve(loads(self.editor.toPlainText())).get("measurements", {})
         except (ValueError, TypeError):
             fields = {}
         self.measurements.preview(fields)
@@ -523,7 +523,7 @@ class ProtocolEditor(QWidget):
         self.plan = plan
         self.dirty = False
         self._table_digest = None
-        self.measurements.preview(plan["normalized_settings"]["protocol"].get("measurements", {}))
+        self.measurements.preview(resolve(plan["normalized_settings"]["protocol"]).get("measurements", {}))
         self.show_plan()
         self.editor.setVisible(not bool(self.builtin))
         self.window._append_log("Preview ready — nothing recorded or actuated")

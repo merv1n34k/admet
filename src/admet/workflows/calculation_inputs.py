@@ -59,17 +59,15 @@ def load_context(directory, calculation_id, entry, references=None):
         document = read_json(directory / "protocol.json")
         paths.append(directory / "protocol.json")
     paths.extend(directory / name for name in entry["files"])
-    config = next((item for item in declarations(document or {}) if item.get("type") == calculation_id), {})
-    if document and "parameters" in document:
-        resolved = resolve(document)
-        config = next((item for item in declarations(resolved) if item["type"] == calculation_id), config)
+    resolved = resolve(document) if document and "parameters" in document else document
+    config = next((item for item in declarations(resolved or {}) if item.get("type") == calculation_id), {})
     if calculation_id in {"gravimetry", "dead_volume", "viscosity"}:
         verify_execution(document, summary)
     measurements = {"values": {}, "fields": {}, "revision": None}
     measurement_path = directory / "measurements.json"
     if document and document.get("measurements"):
         measurements = read_json(measurement_path)
-        if measurements["fields"] != document["measurements"]:
+        if measurements["fields"] != resolved.get("measurements"):
             raise ValueError("Saved measurement declarations disagree with executed protocol")
         paths.append(measurement_path)
         for key, field in measurements["fields"].items():

@@ -4,25 +4,34 @@ from copy import deepcopy
 import math
 from statistics import mean, stdev
 
+from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_LABELS
 from admet.workflows.calculation_schema import measurement_binding, sample_steps, three_flow_passes
 from admet.workflows.calculation_inputs import settled_after, step_window, trace, volume_ul
+from admet.workflows.json_protocol import per_unit
+
+
+def unit_configs(config):
+    """One configuration per unit the run used; {unit} in mass bindings names that unit."""
+    return [per_unit({**{k: v for k, v in config.items() if k != "units"}, "channel": channel}, channel)
+            for channel in config["units"]]
 
 
 def normalize_calculation(entry, steps, fields):
-    if set(entry) != {"type", "channel", "liquid", "density", "samples"}:
-        raise ValueError("gravimetry requires type, channel, liquid, density and samples")
+    if set(entry) != {"type", "units", "liquid", "density", "samples"}:
+        raise ValueError("gravimetry requires type, units, liquid, density and samples")
     if not isinstance(entry["liquid"], str) or not entry["liquid"].strip():
         raise ValueError("liquid must identify the measured fluid")
-    expanded = sample_steps(entry, steps, triggers=("time", "volume"))
     measurement_binding(fields, entry["density"], {"g/mL"})
-    for sample in entry["samples"]:
-        if set(sample) != {"step", "pass", "before", "after"}:
-            raise ValueError("gravimetry sample requires step, pass, before and after")
-        for key in ("before", "after"):
-            measurement_binding(fields, sample[key], {"mg", "g"}, sample["step"])
-        if sample["before"] == sample["after"]:
-            raise ValueError("before and after masses must be distinct measurements")
-    three_flow_passes(entry, expanded)
+    for unit in unit_configs(entry):
+        expanded = sample_steps(unit, steps, triggers=("time", "volume"), shared=True)
+        for sample in unit["samples"]:
+            if set(sample) != {"step", "pass", "before", "after"}:
+                raise ValueError("gravimetry sample requires step, pass, before and after")
+            for key in ("before", "after"):
+                measurement_binding(fields, sample[key], {"mg", "g"}, sample["step"])
+            if sample["before"] == sample["after"]:
+                raise ValueError("before and after masses must be distinct measurements")
+        three_flow_passes(unit, expanded)
     return deepcopy(entry)
 
 
@@ -47,9 +56,17 @@ def check(context):
     if context["config"].get("type") != "gravimetry":
         raise ValueError("Gravimetry is not declared for this run")
     density(context)
-    for sample in context["config"]["samples"]:
-        for key in ("before", "after"):
-            measurement(context, sample[key])
+    # Each unit is calculated on its own; one unit with all its masses is enough to start.
+    missing = []
+    for unit in unit_configs(context["config"]):
+        try:
+            for sample in unit["samples"]:
+                for key in ("before", "after"):
+                    measurement(context, sample[key])
+            return
+        except ValueError as exc:
+            missing.append(exc)
+    raise missing[0]
 
 
 def repeat_statistics(values):
@@ -63,10 +80,9 @@ def calibration_context(context):
     return deepcopy(context["summary"].get("rig_fingerprint", {}).get("correction_settings"))
 
 
-def calibration_identity(context):
+def calibration_identity(context, channel):
     from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNELS
 
-    channel = context["config"]["channel"]
     rig = context["summary"].get("rig_fingerprint", {})
     mapping = rig.get("channel_mapping", [])
     if channel >= len(mapping) or channel >= len(FLUIDIC_CHANNELS) or not mapping[channel]:
@@ -135,7 +151,24 @@ def flow_curve(rows, issues):
 def calculate(context):
     check(context)
     rho = density(context)
-    config = context["config"]
+    units = {str(config["channel"]): unit_result(context, config, rho) for config in unit_configs(context["config"])}
+    return {"status": "usable" if all(u["status"] == "usable" for u in units.values()) else "inconclusive",
+            "liquid": context["config"]["liquid"], "density_g_ml": rho, "units": units,
+            "issues": [f"{FLUIDIC_CHANNEL_LABELS[int(ch)]}: {issue}" for ch, u in units.items() for issue in u["issues"]],
+            "uncertainty": None,
+            "thresholds": {"repeat_cv_max": 0.05, "minimum_repeats": 3, "flow_fit_r_squared_min": 0.95},
+            "correction_settings": calibration_context(context),
+            "note": "Each unit is calculated alone from its own recorded flow and vessels. "
+                    "Multiplier applies to recorded flow, not raw sensor readings. No hardware changes. "
+                    "Before/after weights characterize complete dispenses, including startup and the flow that "
+                    "settles after the stop. R² describes the "
+                    "recorded-versus-true flow curve, not mass versus time. Per-target 95% intervals use three "
+                    "independent normally distributed collections, not sensor sample count. Direction differences "
+                    "are exploratory (two ascending passes, one descending). Density, balance, evaporation and "
+                    "retained droplets add uncertainty. A flow-dependent correction must not be averaged away."}
+
+
+def unit_result(context, config, rho):
     rows, issues, factors = [], [], []
     for sample in config["samples"]:
         step = context["summary"]["steps"][sample["step"] - 1]
@@ -173,16 +206,6 @@ def calculate(context):
     curve = flow_curve(rows, issues)
     scalar_ok = factors and max(factors) - min(factors) <= 0.05 * stats["mean"]
     return {"status": "usable" if len(factors) >= 2 and not issues else "inconclusive",
-            "channel": config["channel"], "liquid": config["liquid"], "density_g_ml": rho, "samples": rows,
+            "channel": config["channel"], "samples": rows,
             "multiplier": stats["mean"] if len(factors) >= 2 and not issues and scalar_ok else None,
-            **curve, "uncertainty": None, "issues": issues,
-            "thresholds": {"repeat_cv_max": 0.05, "minimum_repeats": 3, "flow_fit_r_squared_min": 0.95},
-            "correction_settings": calibration_context(context),
-            "calibration_identity": calibration_identity(context),
-            "note": "Multiplier applies to recorded flow, not raw sensor readings. No hardware changes. "
-                    "Before/after weights characterize complete dispenses, including startup and the flow that "
-                    "settles after the stop. R² describes the "
-                    "recorded-versus-true flow curve, not mass versus time. Per-target 95% intervals use three "
-                    "independent normally distributed collections, not sensor sample count. Direction differences "
-                    "are exploratory (two ascending passes, one descending). Density, balance, evaporation and "
-                    "retained droplets add uncertainty. A flow-dependent correction must not be averaged away."}
+            **curve, "issues": issues, "calibration_identity": calibration_identity(context, config["channel"])}

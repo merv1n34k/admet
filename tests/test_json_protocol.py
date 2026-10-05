@@ -67,10 +67,12 @@ class JsonProtocolTests(unittest.TestCase):
                               for key in data["values"]}
                     backend.measurements(current["run_id"], {k: v for k, v in values.items() if v is not None})
                     directory = Path(backend.workdir) / "records" / "protocols" / current["run_id"]
+                    self.assertIn("mass_after_ch2_9", data["values"])      # M1 and M2 ran together
                     with patch.object(backend.engine, "run", side_effect=AssertionError("calculation actuated")):
                         result = calculate_run(directory, "gravimetry")
                     self.assertTrue(Path(result["path"]).is_file())
                     self.assertEqual(result["measurement_revision"], 1)
+                    self.assertEqual(list(result["result"]["units"]), ["1", "2"])
                     self.assertIn(result["result"]["status"], {"usable", "inconclusive"})
                     self.assertTrue((directory / "events.jsonl").read_text())
                 finally:
