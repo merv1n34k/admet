@@ -197,6 +197,9 @@ class PipelineEngine(threading.Thread):
         self._pause_event.set()
         self._skip_event = threading.Event()
         self._confirm_event = threading.Event()
+        # The prompt of a gate still waiting; every event carries it, so a pause or resume
+        # at the gate does not hide it.
+        self._gate_message = ""
         self._flowing_step: PipelineStep | None = None
         self._flowing_lock = threading.Lock()
 
@@ -291,11 +294,12 @@ class PipelineEngine(threading.Thread):
 
         if isinstance(step.trigger, ConfirmationTrigger):
             self._confirm_event.clear()
-            message = step.confirm_message or step.trigger.message
-            self._emit_event(confirmation_message=message)
+            self._gate_message = step.confirm_message or step.trigger.message
+            self._emit_event()
             while not self._stop_event.is_set() and not self._skip_event.is_set():
                 if self._confirm_event.wait(timeout=self._tick_s):
                     break
+            self._gate_message = ""
             if self._stop_event.is_set():
                 step.status = StepStatus.CANCELLED
                 self._emit_event(outcome=StepOutcome.CANCELLED)
@@ -312,10 +316,12 @@ class PipelineEngine(threading.Thread):
 
         if step.confirm_message:
             self._confirm_event.clear()
-            self._emit_event(confirmation_message=step.confirm_message)
+            self._gate_message = step.confirm_message
+            self._emit_event()
             while not self._stop_event.is_set() and not self._skip_event.is_set():
                 if self._confirm_event.wait(timeout=self._tick_s):
                     break
+            self._gate_message = ""
             if self._stop_event.is_set():
                 step.status = StepStatus.CANCELLED
                 self._emit_event(outcome=StepOutcome.CANCELLED)
@@ -471,10 +477,12 @@ class PipelineEngine(threading.Thread):
         progress: float = 0.0,
         error_msg: str = "",
         step_volumes: dict[int, float] | None = None,
-        confirmation_message: str = "",
+        confirmation_message: str | None = None,
         outcome: StepOutcome = StepOutcome.RUNNING,
         about_the_run: bool = False,
     ) -> None:
+        if confirmation_message is None:
+            confirmation_message = self._gate_message
         # A terminal event is about the run, so it carries no step name. Left
         # with the last step's name, a run that completed after that step timed
         # out would read as the step having completed.

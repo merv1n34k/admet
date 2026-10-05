@@ -151,6 +151,29 @@ class PipelineEngineTests(unittest.TestCase):
                 engine.stop()
                 engine.join(timeout=1.0)
 
+    def test_a_gate_keeps_its_prompt_through_pause_and_resume(self):
+        manager = FakeChannelManager()
+        events: Queue[PipelineEvent] = Queue()
+        step = PipelineStep("collect", {0: 5.0}, TimeTrigger(0.0), confirm_message="Place tube 2")
+        engine = PipelineEngine([step], manager, FakeAcquisition(), events, {0: 0}, tick_s=0.001)
+        engine.start()
+        self.assertTrue(_wait_for_confirmation(events, "Place tube 2"))
+
+        engine.pause()
+        self.assertEqual((str(engine.latest_event().state), engine.latest_event().confirmation_message),
+                         ("paused", "Place tube 2"))
+        engine.resume()
+        self.assertEqual((str(engine.latest_event().state), engine.latest_event().confirmation_message),
+                         ("running", "Place tube 2"))
+        self.assertNotIn(("set", 0, 5.0), manager.calls)          # still waiting at the gate
+
+        engine.confirm_pending()
+        engine.join(timeout=1.0)
+        self.assertIn(("set", 0, 5.0), manager.calls)
+        # Once the gate is passed, the flow start is no longer marked as a prompt.
+        flowing = [e for e in _drain(events) if e.confirmation_message == "" and str(e.outcome) == "running"]
+        self.assertTrue(flowing)
+
     def test_proceed_while_paused_cannot_apply_setpoints_until_resumed(self):
         manager = FakeChannelManager()
         events: Queue[PipelineEvent] = Queue()
@@ -279,6 +302,13 @@ def _last_event(events: Queue[PipelineEvent]) -> PipelineEvent:
     if last is None:
         raise AssertionError("no events emitted")
     return last
+
+
+def _drain(events: Queue[PipelineEvent]) -> list[PipelineEvent]:
+    drained = []
+    while not events.empty():
+        drained.append(events.get())
+    return drained
 
 
 def _wait_for_confirmation(events: Queue[PipelineEvent], message: str) -> bool:
