@@ -299,7 +299,7 @@ class DesktopBackendTests(unittest.TestCase):
         self.assertTrue((Path(self.backend.workdir) / "records" / "protocols" / result["run_id"] / "summary.json").exists())
 
     def test_density_completion_closes_recording_without_running_calculations(self):
-        from tests.test_oil_density import recorded_density
+        from tests.test_fluid_density import recorded_density
 
         document, csv_path, events_path, origin = recorded_density(self.backend.workdir)
         plan = self.plan(document)
@@ -315,7 +315,7 @@ class DesktopBackendTests(unittest.TestCase):
         }
         stored["state"] = "completed"
         with patch.object(service, "do") as stop, patch(
-            "admet.workflows.oil_density.analyze_density_run", side_effect=AssertionError("automatic analysis"),
+            "admet.workflows.fluid_density.analyze_density_run", side_effect=AssertionError("automatic analysis"),
         ):
             service._finish_plan(stored)
         stop.assert_called_once_with("stop_recording")
@@ -365,7 +365,7 @@ class DesktopBackendTests(unittest.TestCase):
         from admet.workflows.calculations import calculate_run
 
         directory = Path(self.backend.workdir) / "records" / "protocols" / completed["run_id"]
-        calculation = calculate_run(directory, "oil_density")
+        calculation = calculate_run(directory, "fluid_density")
         self.assertEqual(calculation["result"]["status"], "inconclusive")
         self.assertIsNone(calculation["result"]["density_g_ml"])
         observed = self.backend.call("observe")

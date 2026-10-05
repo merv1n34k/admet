@@ -194,7 +194,7 @@ liquid properties are calculated from the currently selected liquid profiles.
 ### Calculations
 
 The separate **Calculations** TOC page reads finished runs from the current
-project. Choose **Oil density** or **Recording summary**, select the recorded run,
+project. Choose **Fluid density** or **Recording summary**, select the recorded run,
 then click **Calculate**. It requires no device connection and makes no hardware
 calls. **Refresh** finds newly finished runs. The saved-result selector restores
 previous calculations after reopening the project; recalculation adds a new result.

@@ -81,8 +81,8 @@ def scout_context(directory, *, drift=0, missing=False, short=False, curved=Fals
 
 
 def density_recovery(directory, *, seed=16000, drift=0):
-    from admet.workflows.oil_density import analyze_density_run
-    from tests.test_oil_density import density_document
+    from admet.workflows.fluid_density import analyze_density_run
+    from tests.test_fluid_density import density_document
 
     document = density_document("simulation_16000")
     plant = ImperfectOil(seed=seed, drift=drift)

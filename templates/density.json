@@ -1,64 +1,464 @@
 {
   "name": "density",
   "steps": [
-    {"name":"M1 zero flow","sensor_setpoints":{"1":0},"trigger_type":"time","trigger_params":{"duration_s":0},"on_complete":"zero"},
-    {"name":"Pass 1 / {height_low_cm} cm / 1x flow","sensor_setpoints":{"1":"oil_base_flow * 1"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 1 / {height_low_cm} cm / 2x flow","sensor_setpoints":{"1":"oil_base_flow * 2"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 1 / {height_low_cm} cm / 3x flow","sensor_setpoints":{"1":"oil_base_flow * 3"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"M1 zero flow","sensor_setpoints":{"1":0},"trigger_type":"time","trigger_params":{"duration_s":0},"on_complete":"zero"},
-    {"name":"Pass 1 / {height_mid_cm} cm / 1x flow","sensor_setpoints":{"1":"oil_base_flow * 1"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 1 / {height_mid_cm} cm / 2x flow","sensor_setpoints":{"1":"oil_base_flow * 2"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 1 / {height_mid_cm} cm / 3x flow","sensor_setpoints":{"1":"oil_base_flow * 3"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"M1 zero flow","sensor_setpoints":{"1":0},"trigger_type":"time","trigger_params":{"duration_s":0},"on_complete":"zero"},
-    {"name":"Pass 1 / {height_high_cm} cm / 1x flow","sensor_setpoints":{"1":"oil_base_flow * 1"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 1 / {height_high_cm} cm / 2x flow","sensor_setpoints":{"1":"oil_base_flow * 2"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 1 / {height_high_cm} cm / 3x flow","sensor_setpoints":{"1":"oil_base_flow * 3"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"M1 zero flow","sensor_setpoints":{"1":0},"trigger_type":"time","trigger_params":{"duration_s":0},"on_complete":"zero"},
-    {"name":"Pass 2 / {height_high_cm} cm / 3x flow","sensor_setpoints":{"1":"oil_base_flow * 3"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 2 / {height_high_cm} cm / 2x flow","sensor_setpoints":{"1":"oil_base_flow * 2"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 2 / {height_high_cm} cm / 1x flow","sensor_setpoints":{"1":"oil_base_flow * 1"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"M1 zero flow","sensor_setpoints":{"1":0},"trigger_type":"time","trigger_params":{"duration_s":0},"on_complete":"zero"},
-    {"name":"Pass 2 / {height_mid_cm} cm / 3x flow","sensor_setpoints":{"1":"oil_base_flow * 3"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 2 / {height_mid_cm} cm / 2x flow","sensor_setpoints":{"1":"oil_base_flow * 2"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 2 / {height_mid_cm} cm / 1x flow","sensor_setpoints":{"1":"oil_base_flow * 1"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"M1 zero flow","sensor_setpoints":{"1":0},"trigger_type":"time","trigger_params":{"duration_s":0},"on_complete":"zero"},
-    {"name":"Pass 2 / {height_low_cm} cm / 3x flow","sensor_setpoints":{"1":"oil_base_flow * 3"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 2 / {height_low_cm} cm / 2x flow","sensor_setpoints":{"1":"oil_base_flow * 2"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"Pass 2 / {height_low_cm} cm / 1x flow","sensor_setpoints":{"1":"oil_base_flow * 1"},"trigger_type":"time","trigger_params":{"duration_s":"settling_s + averaging_s"},"timeout_s":"settling_s + averaging_s + 10","on_complete":"zero"},
-    {"name":"M1 zero flow","sensor_setpoints":{"1":0},"trigger_type":"time","trigger_params":{"duration_s":0},"on_complete":"zero"}
+    {
+      "name": "Zero flow",
+      "sensor_setpoints": {
+        "{channel}": 0
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": 0
+      },
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 1 / {height_low_cm} cm / 1x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 1"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 1 / {height_low_cm} cm / 2x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 2"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 1 / {height_low_cm} cm / 3x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 3"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Zero flow",
+      "sensor_setpoints": {
+        "{channel}": 0
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": 0
+      },
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 1 / {height_mid_cm} cm / 1x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 1"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 1 / {height_mid_cm} cm / 2x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 2"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 1 / {height_mid_cm} cm / 3x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 3"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Zero flow",
+      "sensor_setpoints": {
+        "{channel}": 0
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": 0
+      },
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 1 / {height_high_cm} cm / 1x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 1"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 1 / {height_high_cm} cm / 2x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 2"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 1 / {height_high_cm} cm / 3x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 3"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Zero flow",
+      "sensor_setpoints": {
+        "{channel}": 0
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": 0
+      },
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 2 / {height_high_cm} cm / 3x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 3"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 2 / {height_high_cm} cm / 2x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 2"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 2 / {height_high_cm} cm / 1x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 1"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Zero flow",
+      "sensor_setpoints": {
+        "{channel}": 0
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": 0
+      },
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 2 / {height_mid_cm} cm / 3x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 3"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 2 / {height_mid_cm} cm / 2x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 2"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 2 / {height_mid_cm} cm / 1x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 1"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Zero flow",
+      "sensor_setpoints": {
+        "{channel}": 0
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": 0
+      },
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 2 / {height_low_cm} cm / 3x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 3"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 2 / {height_low_cm} cm / 2x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 2"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Pass 2 / {height_low_cm} cm / 1x flow",
+      "sensor_setpoints": {
+        "{channel}": "fluid_base_flow * 1"
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": "settling_s + averaging_s"
+      },
+      "timeout_s": "settling_s + averaging_s + 10",
+      "on_complete": "zero"
+    },
+    {
+      "name": "Zero flow",
+      "sensor_setpoints": {
+        "{channel}": 0
+      },
+      "trigger_type": "time",
+      "trigger_params": {
+        "duration_s": 0
+      },
+      "on_complete": "zero"
+    }
   ],
-  "calculations": [{
-    "type": "oil_density",
-    "oil_id": "{oil_name}",
-    "points": [
-      {"step":2,"pass":1,"height_cm":"height_low_cm","settle_s":"settling_s"},
-      {"step":3,"pass":1,"height_cm":"height_low_cm","settle_s":"settling_s"},
-      {"step":4,"pass":1,"height_cm":"height_low_cm","settle_s":"settling_s"},
-      {"step":6,"pass":1,"height_cm":"height_mid_cm","settle_s":"settling_s"},
-      {"step":7,"pass":1,"height_cm":"height_mid_cm","settle_s":"settling_s"},
-      {"step":8,"pass":1,"height_cm":"height_mid_cm","settle_s":"settling_s"},
-      {"step":10,"pass":1,"height_cm":"height_high_cm","settle_s":"settling_s"},
-      {"step":11,"pass":1,"height_cm":"height_high_cm","settle_s":"settling_s"},
-      {"step":12,"pass":1,"height_cm":"height_high_cm","settle_s":"settling_s"},
-      {"step":14,"pass":2,"height_cm":"height_high_cm","settle_s":"settling_s"},
-      {"step":15,"pass":2,"height_cm":"height_high_cm","settle_s":"settling_s"},
-      {"step":16,"pass":2,"height_cm":"height_high_cm","settle_s":"settling_s"},
-      {"step":18,"pass":2,"height_cm":"height_mid_cm","settle_s":"settling_s"},
-      {"step":19,"pass":2,"height_cm":"height_mid_cm","settle_s":"settling_s"},
-      {"step":20,"pass":2,"height_cm":"height_mid_cm","settle_s":"settling_s"},
-      {"step":22,"pass":2,"height_cm":"height_low_cm","settle_s":"settling_s"},
-      {"step":23,"pass":2,"height_cm":"height_low_cm","settle_s":"settling_s"},
-      {"step":24,"pass":2,"height_cm":"height_low_cm","settle_s":"settling_s"}
-    ]
-  }],
+  "calculations": [
+    {
+      "type": "fluid_density",
+      "fluid_id": "{fluid_name}",
+      "channel": "channel",
+      "points": [
+        {
+          "step": 2,
+          "pass": 1,
+          "height_cm": "height_low_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 3,
+          "pass": 1,
+          "height_cm": "height_low_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 4,
+          "pass": 1,
+          "height_cm": "height_low_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 6,
+          "pass": 1,
+          "height_cm": "height_mid_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 7,
+          "pass": 1,
+          "height_cm": "height_mid_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 8,
+          "pass": 1,
+          "height_cm": "height_mid_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 10,
+          "pass": 1,
+          "height_cm": "height_high_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 11,
+          "pass": 1,
+          "height_cm": "height_high_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 12,
+          "pass": 1,
+          "height_cm": "height_high_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 14,
+          "pass": 2,
+          "height_cm": "height_high_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 15,
+          "pass": 2,
+          "height_cm": "height_high_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 16,
+          "pass": 2,
+          "height_cm": "height_high_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 18,
+          "pass": 2,
+          "height_cm": "height_mid_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 19,
+          "pass": 2,
+          "height_cm": "height_mid_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 20,
+          "pass": 2,
+          "height_cm": "height_mid_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 22,
+          "pass": 2,
+          "height_cm": "height_low_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 23,
+          "pass": 2,
+          "height_cm": "height_low_cm",
+          "settle_s": "settling_s"
+        },
+        {
+          "step": 24,
+          "pass": 2,
+          "height_cm": "height_low_cm",
+          "settle_s": "settling_s"
+        }
+      ]
+    }
+  ],
   "parameters": {
-    "oil_name": {"type":"text","label":"Oil name","default":"dSurf"},
-    "oil_base_flow": ["Oil base flow, µL/min (1x / 2x / 3x)",15],
-    "settling_s": ["Settling time, s",10],
-    "averaging_s": ["Measurement time, s",20],
-    "height_low_cm": ["Low outlet height, cm",5],
-    "height_mid_cm": ["Middle outlet height, cm",15],
-    "height_high_cm": ["High outlet height, cm",25]
+    "channel": {
+      "type": "choice",
+      "label": "Channel: 0 Oil-L / 1 M1 / 2 M2",
+      "default": 1,
+      "options": [
+        0,
+        1,
+        2
+      ]
+    },
+    "fluid_name": {
+      "type": "text",
+      "label": "Fluid name",
+      "default": "dSurf"
+    },
+    "fluid_base_flow": [
+      "Base flow, µL/min (1x / 2x / 3x)",
+      15
+    ],
+    "settling_s": [
+      "Settling time, s",
+      10
+    ],
+    "averaging_s": [
+      "Measurement time, s",
+      20
+    ],
+    "height_low_cm": [
+      "Low outlet height, cm",
+      5
+    ],
+    "height_mid_cm": [
+      "Middle outlet height, cm",
+      15
+    ],
+    "height_high_cm": [
+      "High outlet height, cm",
+      25
+    ]
   },
-  "parameter_values": {"oil_base_flow":15,"settling_s":10,"averaging_s":20,"height_low_cm":5,"height_mid_cm":15,"height_high_cm":25}
+  "parameter_values": {
+    "fluid_base_flow": 15,
+    "settling_s": 10,
+    "averaging_s": 20,
+    "height_low_cm": 5,
+    "height_mid_cm": 15,
+    "height_high_cm": 25
+  }
 }

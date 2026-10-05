@@ -10,7 +10,7 @@ from statistics import mean, stdev
 import uuid
 
 from admet.core.protocol_store import write_json
-from admet.workflows.oil_density import _finite, analyze_density_run
+from admet.workflows.fluid_density import _finite, analyze_density_run
 from admet.workflows.flow_scout import analyze_scout
 from admet.workflows.calculation_schema import declarations
 from admet.workflows.calculation_inputs import load_context, fingerprint, result_current, read_json
@@ -74,7 +74,7 @@ def _density(context):
                     or expected.get("trigger_params") != step["trigger_params"]
                     or (expected.get("confirmation") or "") != step.get("confirm_message", "")):
                 raise ValueError("Recorded density execution and protocol parameters disagree")
-    mapping = next(item for item in declarations(document) if item["type"] == "oil_density")["points"]
+    mapping = next(item for item in declarations(document) if item["type"] == "fluid_density")["points"]
     previous = None
     for point in mapping:
         group = (point["pass"], point["height_cm"])
@@ -125,9 +125,9 @@ CALCULATIONS = {
                     "description": "Mean and spread of the dead volumes measured by hand."},
     "gravimetry": {"label": "Gravimetry", "version": 2, "calculate": gravimetry.calculate,
                    "check": gravimetry.check, "files": ("protocol.json", "events.jsonl"),
-                   "references": {"density": "oil_density"},
+                   "references": {"density": "fluid_density"},
                    "description": "Before/after weights: calibration curve, per-rate repeatability and direction differences."},
-    "oil_density": {"label": "Oil density", "version": 2, "calculate": _density,
+    "fluid_density": {"label": "Fluid density", "version": 2, "calculate": _density,
                     "files": ("protocol.json", "events.jsonl"),
                     "description": "Two height passes from a density protocol; excludes scout and settling."},
     "recording_summary": {"label": "Recording summary", "version": 1, "calculate": _recording_summary,
@@ -230,7 +230,7 @@ def result_text(payload):
         if result.get("thresholds"):
             lines.append("Thresholds: " + json.dumps(result["thresholds"]))
         lines += ["Warning: " + warning for warning in result.get("warnings", [])]
-    elif kind == "oil_density":
+    elif kind == "fluid_density":
         value = result.get("density_g_ml")
         lines = [f"Density: {value:.4f} g/mL" if value is not None else "Density: inconclusive"]
         for entry in result.get("passes", []):

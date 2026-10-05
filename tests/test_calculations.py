@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from admet.core.protocol_store import write_json
 from admet.workflows.calculations import calculate_run, recorded_runs, saved_results
-from tests.test_oil_density import recorded_density
+from tests.test_fluid_density import recorded_density
 
 
 RUN_ID = "run_" + "0" * 32
@@ -35,8 +35,8 @@ class CalculationTests(unittest.TestCase):
     def test_plain_protocol_calculates_and_preserves_sources_and_history(self):
         before = {path: path.read_bytes() for path in self.directory.iterdir() if path.is_file()}
         with patch("admet.core.service.Admet.engine_action", side_effect=AssertionError("hardware")):
-            first = calculate_run(self.directory, "oil_density")
-            second = calculate_run(self.directory, "oil_density")
+            first = calculate_run(self.directory, "fluid_density")
+            second = calculate_run(self.directory, "fluid_density")
             overview = calculate_run(self.directory, "recording_summary")
         self.assertEqual(first["result"]["status"], "consistent", first["result"]["issues"])
         self.assertAlmostEqual(first["result"]["density_g_ml"], 1.2)
@@ -55,7 +55,7 @@ class CalculationTests(unittest.TestCase):
 
         moved = Path(self.tmp.name) / "moved"
         shutil.copytree(Path(self.tmp.name) / "records", moved / "records")
-        result = calculate_run(moved / "records" / "protocols" / RUN_ID, "oil_density")
+        result = calculate_run(moved / "records" / "protocols" / RUN_ID, "fluid_density")
         self.assertAlmostEqual(result["result"]["density_g_ml"], 1.2)
 
     def test_active_or_unclosed_recording_is_refused(self):
@@ -65,19 +65,19 @@ class CalculationTests(unittest.TestCase):
         write_json(path, summary)
         self.assertEqual(recorded_runs(self.tmp.name), [])
         with self.assertRaisesRegex(ValueError, "finished"):
-            calculate_run(self.directory, "oil_density")
+            calculate_run(self.directory, "fluid_density")
         summary["state"] = "completed"
         summary["artifacts"]["recording_closed"] = False
         write_json(path, summary)
         with self.assertRaisesRegex(ValueError, "closed"):
-            calculate_run(self.directory, "oil_density")
+            calculate_run(self.directory, "fluid_density")
 
     def test_missing_origin_produces_inconclusive_not_invented_alignment(self):
         path = self.directory / "summary.json"
         summary = json.loads(path.read_text())
         summary["artifacts"].pop("polling_origin_monotonic")
         write_json(path, summary)
-        result = calculate_run(self.directory, "oil_density")["result"]
+        result = calculate_run(self.directory, "fluid_density")["result"]
         self.assertIsNone(result["density_g_ml"])
         self.assertIn("missing recording clock origin", result["issues"])
 
@@ -87,7 +87,7 @@ class CalculationTests(unittest.TestCase):
         document["steps"][1]["confirm_message"] = "Set outlet 8 cm ABOVE the oil"
         write_json(path, document)
         with self.assertRaisesRegex(ValueError, "height.*disagree"):
-            calculate_run(self.directory, "oil_density")
+            calculate_run(self.directory, "fluid_density")
 
     def test_summary_missing_values_remain_null(self):
         (self.directory / "fluidics.csv").write_text("elapsed_s,pressure_1_mbar,flow_1_ul_min\n0,,\n1,nan,\n")
@@ -123,9 +123,9 @@ class CalculationTests(unittest.TestCase):
         measured = self.directory / "measurements.json"
         write_json(measured, {"fields": fields, "values": {"mass": None}, "revision": 0})
         with self.assertRaisesRegex(ValueError, "Missing measurement"):
-            calculate_run(self.directory, "oil_density")
+            calculate_run(self.directory, "fluid_density")
         write_json(measured, {"fields": fields, "values": {"mass": 10}, "revision": 1})
-        result = calculate_run(self.directory, "oil_density")
+        result = calculate_run(self.directory, "fluid_density")
         self.assertEqual(result["measurement_revision"], 1)
         self.assertFalse(saved_results(self.directory)[0]["outdated"])
         write_json(measured, {"fields": fields, "values": {"mass": 11}, "revision": 2})

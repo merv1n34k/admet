@@ -7,7 +7,7 @@ from pathlib import Path
 import random
 from statistics import mean, stdev
 
-from admet.workflows.oil_density import _finite, _linear_fit
+from admet.workflows.fluid_density import _finite, _linear_fit
 
 
 WINDOWS_S = (5, 10, 20, 30)

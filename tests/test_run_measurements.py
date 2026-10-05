@@ -14,7 +14,7 @@ def measured_protocol():
     document["measurements"] = {
         "before_mg": {"label": "Vessel before (mg)", "step": 1},
         "after_mg": {"label": "Vessel after (mg)", "step": 1},
-        "density": {"label": "Oil density (g/mL)"},
+        "density": {"label": "Fluid density (g/mL)"},
     }
     return document
 

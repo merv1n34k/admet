@@ -12,7 +12,7 @@ def normalize_calculation(entry, steps, fields):
     if set(entry) != {"type", "channel", "liquid", "density", "samples"}:
         raise ValueError("gravimetry requires type, channel, liquid, density and samples")
     if not isinstance(entry["liquid"], str) or not entry["liquid"].strip():
-        raise ValueError("liquid must identify the measured oil")
+        raise ValueError("liquid must identify the measured fluid")
     expanded = sample_steps(entry, steps, triggers=("time", "volume"))
     measurement_binding(fields, entry["density"], {"g/mL"})
     for sample in entry["samples"]:
@@ -35,11 +35,11 @@ def measurement(context, key):
 
 def density(context):
     reference = context["references"].get("density")
-    if reference and reference["result"].get("oil_id") != context["config"]["liquid"]:
-        raise ValueError("Density reference must identify the same oil")
+    if reference and reference["result"].get("fluid_id") != context["config"]["liquid"]:
+        raise ValueError("Density reference must identify the same fluid")
     value = reference["result"].get("density_g_ml") if reference else measurement(context, context["config"]["density"])
     if type(value) not in (float, int) or not math.isfinite(value) or value <= 0:
-        raise ValueError("A positive oil density or usable density reference is required")
+        raise ValueError("A positive fluid density or usable density reference is required")
     return value
 
 

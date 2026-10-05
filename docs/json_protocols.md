@@ -26,7 +26,7 @@ Declare measurements separately from parameters:
 "measurements": {
   "before_mg": {"label": "Vessel before", "unit": "mg", "step": 2, "required": true},
   "after_mg": {"label": "Vessel after", "unit": "mg", "step": 2, "required": true},
-  "density": {"label": "Oil density", "unit": "g/mL", "min": 0}
+  "density": {"label": "Fluid density", "unit": "g/mL", "min": 0}
 }
 ```
 
@@ -101,7 +101,7 @@ no functions, Python evaluation, attributes, imports or dependency chains betwee
 parameters. Unknown names, division by zero, invalid results and hardware-range
 violations are refused. Only numeric parameters can enter arithmetic; booleans are
 not converted to 0/1. `{parameter_name}` substitutes text in protocol/step names,
-confirmation messages, groups, trigger type, completion action and density oil ID.
+confirmation messages, groups, trigger type, completion action and density fluid name.
 Resolved fields still pass their ordinary validation (including filename-safe
 protocol names and valid trigger/completion choices). Substitution is single-pass;
 inserted text is never evaluated. Booleans can label a run but do not conditionally
@@ -236,7 +236,7 @@ any separate setup runs. Actual collected volume depends on the calibration.
 Enter only each vessel's before/after mass in the measurement table; there is no
 mass time-series requirement or new balance UI. Weigh the complete collection.
 Supply liquid density manually, or explicitly
-select a saved usable density result identifying the same oil in Calculations.
+select a saved usable density result identifying the same fluid in Calculations.
 
 - True volume (µL) = mass gain (mg) / density (g/mL).
 - Recorded volume = trapezoidal integral of recorded flow over the collection step.

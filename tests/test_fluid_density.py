@@ -6,10 +6,10 @@ import unittest
 from copy import deepcopy
 from unittest.mock import patch
 
-from admet.workflows.oil_density import (
+from admet.workflows.fluid_density import (
     GRAVITY_CONVERSION_MBAR_PER_CM_PER_G_ML,
-    OilDensityMeasurement,
-    analyze_oil_density,
+    FluidDensityMeasurement,
+    analyze_fluid_density,
     relative_density,
     analyze_density_run,
 )
@@ -17,16 +17,16 @@ from admet.workflows.json_protocol import normalize, resolve, template_documents
 from admet.workflows.calculation_schema import declarations
 
 
-def density_document(oil="dsurf", *, parameterized=False):
+def density_document(fluid="dsurf", *, parameterized=False, channel=1):
     """The density template, as is or with its parameters already filled in."""
     document = template_documents()["density"]
-    document["parameter_values"]["oil_name"] = oil
+    document["parameter_values"].update(fluid_name=fluid, channel=channel)
     return normalize(document if parameterized else resolve(document))
 
 
 def recorded_density(directory, *, densities=(1.2, 1.2), missing=False, unsettled=False, parameterized=False,
-                     curvature=0):
-    document = density_document(parameterized=parameterized)
+                     curvature=0, channel=1):
+    document = density_document(parameterized=parameterized, channel=channel)
     resolved = resolve(document)
     rows, events = [], []
     origin = 100.0
@@ -34,7 +34,7 @@ def recorded_density(directory, *, densities=(1.2, 1.2), missing=False, unsettle
         start = index * 50 + 30
         step = resolved["steps"][point["step"] - 1]
         duration = step["trigger_params"]["duration_s"]
-        flow = step["sensor_setpoints"]["1"]
+        flow = step["sensor_setpoints"][str(channel)]
         density = densities[max(0, point["pass"] - 1)]
         pressure = 7 + density * 0.980665 * point["height_cm"] + (flow - 2) * 0.4 + curvature * flow**2
         events.extend([
@@ -56,7 +56,7 @@ def recorded_density(directory, *, densities=(1.2, 1.2), missing=False, unsettle
     csv_path = Path(directory) / "fluidics.csv"
     with csv_path.open("w", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["elapsed_s", "pressure_1_mbar", "flow_1_ul_min"])
+        writer.writerow(["elapsed_s", f"pressure_{channel}_mbar", f"flow_{channel}_ul_min"])
         writer.writerows(rows)
     events_path = Path(directory) / "events.jsonl"
     events_path.write_text("".join(json.dumps(event) + "\n" for event in events))
@@ -68,10 +68,10 @@ class RecordedDensityTests(unittest.TestCase):
         from admet.core.service import Admet
 
         admet = Admet()
-        for oil in ("dSurf", "EvaGreen", "custom mix"):
+        for fluid in ("dSurf", "EvaGreen", "custom mix"):
             document = template_documents()["density"]
-            document["parameter_values"]["oil_name"] = oil
-            self.assertEqual(declarations(resolve(document))[0]["oil_id"], oil)
+            document["parameter_values"]["fluid_name"] = fluid
+            self.assertEqual(declarations(resolve(document))[0]["fluid_id"], fluid)
             self.assertEqual(normalize(document), document)
             self.assertNotIn("temperature", json.dumps(document))
             self.assertNotIn("pressure_limits_mbar", document)
@@ -87,7 +87,7 @@ class RecordedDensityTests(unittest.TestCase):
 
     def test_density_parameters_gates_and_curved_pressure_response(self):
         source = density_document(parameterized=True)
-        source["parameter_values"].update(oil_base_flow=10, height_low_cm=6, settling_s=12)
+        source["parameter_values"].update(fluid_base_flow=10, height_low_cm=6, settling_s=12)
         resolved = resolve(source)
         self.assertEqual(resolved["steps"][1]["sensor_setpoints"], {"1": 10})
         self.assertEqual(resolved["steps"][1]["trigger_params"]["duration_s"], 32)
@@ -103,7 +103,7 @@ class RecordedDensityTests(unittest.TestCase):
         self.assertEqual(result["status"], "consistent", result["issues"])
         self.assertAlmostEqual(result["density_g_ml"], 1.6)
         self.assertEqual(len(result["points"]), 18)
-        source["steps"][2]["sensor_setpoints"]["1"] = 25
+        source["steps"][2]["sensor_setpoints"]["{channel}"] = 25
         with self.assertRaisesRegex(ValueError, "identical flow targets"):
             normalize(source)
 
@@ -136,6 +136,17 @@ class RecordedDensityTests(unittest.TestCase):
         normalized = normalize(normalized)
         first_measurement = normalized["calculations"][0]["points"][0]["step"] - 1
         self.assertIn("6 cm ABOVE", normalized["steps"][first_measurement]["confirm_message"])
+
+    def test_density_runs_on_the_chosen_channel_with_any_fluid(self):
+        document = density_document("water", channel=2)
+        self.assertEqual({key for step in document["steps"] for key in step["sensor_setpoints"]}, {"2"})
+        gates = [step["confirm_message"] for step in document["steps"] if step.get("confirm_message")]
+        self.assertTrue(all("water: confirm the fluid is routed through Beads M (channel 2)" in gate for gate in gates))
+        self.assertNotIn("oil", " ".join(gates).lower())
+        with tempfile.TemporaryDirectory() as directory:
+            result = analyze_density_run(*recorded_density(directory, channel=2), completed=True)
+        self.assertEqual(result["status"], "consistent", result["issues"])
+        self.assertAlmostEqual(result["density_g_ml"], 1.2)
 
     def test_density_never_targets_other_channels(self):
         document = density_document()
@@ -181,7 +192,7 @@ class RecordedDensityTests(unittest.TestCase):
             self.assertIsNone(analyze_density_run(*args[:3], None, completed=True)["density_g_ml"])
 
 
-def synthetic_oil(oil_id: str, role: str, density: float):
+def synthetic_fluid(fluid_id: str, role: str, density: float):
     slope = density * GRAVITY_CONVERSION_MBAR_PER_CM_PER_G_ML
     rows = []
     for height in (-20.0, 0.0, 20.0):
@@ -189,8 +200,8 @@ def synthetic_oil(oil_id: str, role: str, density: float):
         for offset, direction in ((-2.0, "up"), (-1.0, "up"), (1.0, "down"), (2.0, "down")):
             pressure = zero_pressure + offset
             rows.append(
-                OilDensityMeasurement(
-                    oil_id=oil_id,
+                FluidDensityMeasurement(
+                    fluid_id=fluid_id,
                     role=role,
                     height_cm=height,
                     pressure_mbar=pressure,
@@ -201,9 +212,9 @@ def synthetic_oil(oil_id: str, role: str, density: float):
     return rows
 
 
-class OilDensityAnalysisTests(unittest.TestCase):
+class FluidDensityAnalysisTests(unittest.TestCase):
     def test_recovers_density_from_two_stage_regression(self):
-        result = analyze_oil_density(synthetic_oil("oil-a", "candidate", 1.2))[0]
+        result = analyze_fluid_density(synthetic_fluid("fluid-a", "candidate", 1.2))[0]
 
         self.assertAlmostEqual(result.density_g_ml, 1.2)
         self.assertAlmostEqual(result.intercept_mbar, 5.0)
@@ -212,9 +223,9 @@ class OilDensityAnalysisTests(unittest.TestCase):
         self.assertEqual(result.warnings, ())
 
     def test_compares_candidate_with_reference(self):
-        results = analyze_oil_density(
-            synthetic_oil("candidate", "candidate", 1.2)
-            + synthetic_oil("reference", "reference", 0.8)
+        results = analyze_fluid_density(
+            synthetic_fluid("candidate", "candidate", 1.2)
+            + synthetic_fluid("reference", "reference", 0.8)
         )
         by_role = {result.role: result for result in results}
 
@@ -224,21 +235,21 @@ class OilDensityAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(uncertainty or 0.0, 0.0)
 
     def test_excludes_unfittable_height_and_requires_three_valid_heights(self):
-        rows = synthetic_oil("oil-a", "candidate", 1.0)
+        rows = synthetic_fluid("fluid-a", "candidate", 1.0)
         rows = [row for row in rows if row.height_cm != 20.0]
         rows.extend(
             [
-                OilDensityMeasurement("oil-a", "candidate", 20.0, 4.0, 1.0),
-                OilDensityMeasurement("oil-a", "candidate", 20.0, 4.0, 2.0),
+                FluidDensityMeasurement("fluid-a", "candidate", 20.0, 4.0, 1.0),
+                FluidDensityMeasurement("fluid-a", "candidate", 20.0, 4.0, 2.0),
             ]
         )
 
-        self.assertEqual(analyze_oil_density(rows), ())
+        self.assertEqual(analyze_fluid_density(rows), ())
 
-    def test_rejects_missing_oil_identity(self):
-        with self.assertRaisesRegex(ValueError, "oil ID"):
-            analyze_oil_density(
-                [OilDensityMeasurement("", "candidate", 0.0, 1.0, 2.0)]
+    def test_rejects_missing_fluid_identity(self):
+        with self.assertRaisesRegex(ValueError, "fluid name"):
+            analyze_fluid_density(
+                [FluidDensityMeasurement("", "candidate", 0.0, 1.0, 2.0)]
             )
 
 

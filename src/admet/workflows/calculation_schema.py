@@ -5,7 +5,7 @@ from importlib import import_module
 
 
 SCHEMAS = {
-    "oil_density": ("admet.workflows.oil_density", "normalize_analysis"),
+    "fluid_density": ("admet.workflows.fluid_density", "normalize_analysis"),
     "flow_scout": ("admet.workflows.flow_scout", "normalize_analysis"),
     "recording_summary": (None, None),
     "gravimetry": ("admet.workflows.gravimetry", "normalize_calculation"),
@@ -40,8 +40,8 @@ def resolve_declarations(document, values):
                 sample["settle_s"] = expression(sample.get("settle_s"), values)
         if entry["type"] == "flow_scout":
             entry["height_cm"] = expression(entry.get("height_cm"), values)
-        elif entry["type"] == "oil_density":
-            entry["oil_id"] = interpolate(entry.get("oil_id"), values)
+        elif entry["type"] == "fluid_density":
+            entry["fluid_id"] = interpolate(entry.get("fluid_id"), values)
             points = entry.get("points")
             if not isinstance(points, list) or any(not isinstance(p, dict) for p in points):
                 raise ValueError("density analysis points must be a list of objects")

@@ -1,4 +1,4 @@
-"""Offline analysis for hydrostatic oil-density measurements."""
+"""Offline analysis for hydrostatic density measurements of a fluid (oil, water, ...)."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ GRAVITY_CONVERSION_MBAR_PER_CM_PER_G_ML = 0.980665
 
 
 @dataclass(frozen=True)
-class OilDensityMeasurement:
-    oil_id: str
+class FluidDensityMeasurement:
+    fluid_id: str
     role: str
     height_cm: float
     pressure_mbar: float
@@ -47,8 +47,8 @@ class BalancePressure:
 
 
 @dataclass(frozen=True)
-class OilDensityResult:
-    oil_id: str
+class FluidDensityResult:
+    fluid_id: str
     role: str
     density_g_ml: float
     density_standard_error_g_ml: float | None
@@ -96,7 +96,7 @@ def _linear_fit(xs: list[float], ys: list[float]) -> LinearFit:
     )
 
 
-def _balance_pressure(measurements: list[OilDensityMeasurement]) -> BalancePressure:
+def _balance_pressure(measurements: list[FluidDensityMeasurement]) -> BalancePressure:
     fit = _linear_fit(
         [measurement.pressure_mbar for measurement in measurements],
         [measurement.flow_ul_min for measurement in measurements],
@@ -128,22 +128,22 @@ def _balance_pressure(measurements: list[OilDensityMeasurement]) -> BalancePress
     )
 
 
-def analyze_oil_density(
-    measurements: Iterable[OilDensityMeasurement],
-) -> tuple[OilDensityResult, ...]:
-    grouped: dict[tuple[str, str], dict[float, list[OilDensityMeasurement]]] = {}
+def analyze_fluid_density(
+    measurements: Iterable[FluidDensityMeasurement],
+) -> tuple[FluidDensityResult, ...]:
+    grouped: dict[tuple[str, str], dict[float, list[FluidDensityMeasurement]]] = {}
     for item in measurements:
-        if not item.oil_id.strip():
-            raise ValueError("oil ID cannot be blank")
+        if not item.fluid_id.strip():
+            raise ValueError("fluid name cannot be blank")
         values = (item.height_cm, item.pressure_mbar, item.flow_ul_min)
         if not all(math.isfinite(value) for value in values):
             raise ValueError("height, pressure, and flow must be finite")
-        grouped.setdefault((item.oil_id.strip(), item.role.strip()), {}).setdefault(
+        grouped.setdefault((item.fluid_id.strip(), item.role.strip()), {}).setdefault(
             item.height_cm, []
         ).append(item)
 
-    results: list[OilDensityResult] = []
-    for (oil_id, role), height_groups in sorted(grouped.items()):
+    results: list[FluidDensityResult] = []
+    for (fluid_id, role), height_groups in sorted(grouped.items()):
         warnings: list[str] = []
         balances: list[BalancePressure] = []
         for height, rows in sorted(height_groups.items()):
@@ -180,8 +180,8 @@ def analyze_oil_density(
         if density <= 0:
             warnings.append("density is non-positive; check the signed-height convention")
         results.append(
-            OilDensityResult(
-                oil_id=oil_id,
+            FluidDensityResult(
+                fluid_id=fluid_id,
                 role=role,
                 density_g_ml=density,
                 density_standard_error_g_ml=density_se,
@@ -197,7 +197,7 @@ def analyze_oil_density(
 
 
 def relative_density(
-    candidate: OilDensityResult, reference: OilDensityResult
+    candidate: FluidDensityResult, reference: FluidDensityResult
 ) -> tuple[float, float | None]:
     if reference.density_g_ml == 0:
         raise ValueError("reference density is zero")
@@ -220,21 +220,27 @@ def normalize_analysis(value, steps):
     from copy import deepcopy
     from admet.workflows.json_protocol import number
 
-    if not isinstance(value, dict) or set(value) != {"type", "oil_id", "points"}:
-        raise ValueError("analysis requires only type, oil_id and points")
+    from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_LABELS
+
+    if not isinstance(value, dict) or set(value) != {"type", "fluid_id", "channel", "points"}:
+        raise ValueError("density requires only type, fluid_id, channel and points")
     result = deepcopy(value)
-    if result["type"] != "oil_density":
+    if result["type"] != "fluid_density":
         raise ValueError("unsupported analysis type")
-    oil = result["oil_id"]
-    if not isinstance(oil, str) or not oil.strip() or len(oil) > 80:
-        raise ValueError("oil_id must contain 1–80 characters")
+    fluid = result["fluid_id"]
+    if not isinstance(fluid, str) or not fluid.strip() or len(fluid) > 80:
+        raise ValueError("the fluid name must contain 1–80 characters")
+    channel = result["channel"]
+    if type(channel) is not int or not 0 <= channel < len(FLUIDIC_CHANNEL_LABELS):
+        raise ValueError("density channel must be one of the fluidic channels")
+    c, label = str(channel), FLUIDIC_CHANNEL_LABELS[channel]
     points = result["points"]
     if not isinstance(points, list) or len(points) != 18:
         raise ValueError("density needs two passes of 3 heights × 3 points")
 
     def zero_step(step):
         return (step["trigger_params"].get("duration_s") == 0
-                and step["sensor_setpoints"] == {"1": 0} and not step["pressure_setpoints"])
+                and step["sensor_setpoints"] == {c: 0} and not step["pressure_setpoints"])
 
     for step in steps:
         if step.get("repeat", 1) != 1 or step.get("group"):
@@ -242,16 +248,16 @@ def normalize_analysis(value, steps):
         if step.get("on_complete") != "zero" or step.get("trigger_type") != "time":
             raise ValueError("density steps must use time and end with zero")
         if step["sensor_setpoints"]:
-            if set(step["sensor_setpoints"]) != {"1"} or step["pressure_setpoints"]:
-                raise ValueError("density may control channel 1 only")
+            if set(step["sensor_setpoints"]) != {c} or step["pressure_setpoints"]:
+                raise ValueError(f"density may control channel {c} only")
         elif not zero_step(step):
-            raise ValueError("density non-sampling steps must zero only M1")
+            raise ValueError(f"density non-sampling steps must zero only channel {c}")
     first = steps[0]
     if not zero_step(first):
         raise ValueError("density must start with a zero-output step")
     acquisition_steps = [i + 1 for i, step in enumerate(steps) if not zero_step(step)]
     if len(acquisition_steps) != len(points) or not zero_step(steps[-1]):
-        raise ValueError("density must map every sample and finish with M1 zero")
+        raise ValueError(f"density must map every sample and finish with channel {c} at zero")
     for index, point in enumerate(points):
         if not isinstance(point, dict) or set(point) != {"step", "pass", "height_cm", "settle_s"}:
             raise ValueError("density point requires step, pass, height_cm and settle_s")
@@ -263,9 +269,9 @@ def normalize_analysis(value, steps):
         point["height_cm"] = number(point["height_cm"], "height_cm")
         point["settle_s"] = number(point["settle_s"], "settle_s", minimum=1)
         step = steps[point["step"] - 1]
-        if (set(step["sensor_setpoints"]) != {"1"} or step["sensor_setpoints"]["1"] <= 0
+        if (set(step["sensor_setpoints"]) != {c} or step["sensor_setpoints"][c] <= 0
                 or step["pressure_setpoints"]):
-            raise ValueError("density uses positive M1 flow only; no other channel is controlled")
+            raise ValueError(f"density uses positive flow on channel {c} only; no other channel is controlled")
         duration = step["trigger_params"].get("duration_s", 0)
         if duration - point["settle_s"] < 5:
             raise ValueError("density needs at least 5 seconds of sampling after settling")
@@ -276,7 +282,7 @@ def normalize_analysis(value, steps):
     for group in groups:
         if len({p["height_cm"] for p in group}) != 1:
             raise ValueError("each density sweep must have one confirmed height")
-        targets = [steps[p["step"] - 1]["sensor_setpoints"]["1"] for p in group]
+        targets = [steps[p["step"] - 1]["sensor_setpoints"][c] for p in group]
         if len(set(targets)) != 3 or targets != sorted(targets, reverse=group[0]["pass"] == 2):
             raise ValueError("density sweep needs three distinct ordered flow targets")
         if reference_targets is not None and sorted(targets) != reference_targets:
@@ -284,14 +290,14 @@ def normalize_analysis(value, steps):
         reference_targets = sorted(targets)
         point = group[0]
         if not zero_step(steps[point["step"] - 2]):
-            raise ValueError("density height gates require M1 zero immediately beforehand")
+            raise ValueError(f"density height gates require channel {c} at zero immediately beforehand")
         steps[point["step"] - 1]["confirm_message"] = (
-            f"{oil}: confirm oil is routed through M1 (channel 1). "
-            f"Set outlet {point['height_cm']:g} cm ABOVE the current reservoir oil surface "
+            f"{fluid}: confirm the fluid is routed through {label} (channel {c}). "
+            f"Set outlet {point['height_cm']:g} cm ABOVE the current reservoir fluid surface "
             f"(pass {point['pass']}). "
             "Confirm only when this height is measured and correct; keep it constant during this sweep. "
             "Keep the receiving container open to atmosphere and the outlet above collected liquid. "
-            "Abort for unexpected pressure or unstable flow. Zero flow may retain pressure; verify no oil-column retreat."
+            "Abort for unexpected pressure or unstable flow. Zero flow may retain pressure; verify no fluid-column retreat."
         )
     forward = [group[0]["height_cm"] for group in groups[:3]]
     reverse = [group[0]["height_cm"] for group in groups[3:]]
@@ -308,7 +314,7 @@ def _finite(value):
     return number if math.isfinite(number) else None
 
 
-def _point_statistics(point, step, rows, events, origin):
+def _point_statistics(point, step, rows, events, origin, channel):
     result = {**point, "samples": 0, "flow_mean_ul_min": None, "flow_std_ul_min": None,
               "pressure_mean_mbar": None, "pressure_std_mbar": None, "issues": []}
     relevant = [e for e in events if e.get("step_name") and e.get("step_index") == point["step"] - 1]
@@ -350,7 +356,7 @@ def _point_statistics(point, step, rows, events, origin):
         result[f"{name}_drift_{unit}"] = drift
         if deviation > tolerance or drift is None or drift > tolerance:
             result["issues"].append(f"unsettled {name}")
-    target = step["sensor_setpoints"]["1"]
+    target = step["sensor_setpoints"][str(channel)]
     if abs(result["flow_mean_ul_min"] - target) > max(1, 0.2 * target):
         result["issues"].append("requested flow not reached")
     result["window_elapsed_s"] = [lower, upper]
@@ -363,8 +369,8 @@ def analyze_density_run(document, csv_path, events_path, polling_origin, *, comp
     from admet.workflows.calculation_schema import declarations
 
     document = resolve(document)
-    config = next(item for item in declarations(document) if item["type"] == "oil_density")
-    result = {"type": "oil_density", "oil_id": config["oil_id"], "status": "inconclusive",
+    config = next(item for item in declarations(document) if item["type"] == "fluid_density")
+    result = {"type": "fluid_density", "fluid_id": config["fluid_id"], "status": "inconclusive",
               "density_g_ml": None, "repeat_difference_percent": None, "ci95_g_ml": None,
               "passes": [], "points": [], "issues": [], "warnings": [],
               "thresholds": {"pressure_flow_r_squared_min": 0.95, "pressure_height_r_squared_min": 0.95,
@@ -378,8 +384,9 @@ def analyze_density_run(document, csv_path, events_path, polling_origin, *, comp
         return result
     try:
         with Path(csv_path).open(newline="", encoding="utf-8") as handle:
+            channel = config["channel"]
             rows = [tuple(_finite(row.get(key)) for key in
-                          ("elapsed_s", "pressure_1_mbar", "flow_1_ul_min"))
+                          ("elapsed_s", f"pressure_{channel}_mbar", f"flow_{channel}_ul_min"))
                     for row in csv.DictReader(handle)]
         events = [json.loads(line) for line in Path(events_path).read_text().splitlines() if line.strip()]
     except (OSError, ValueError, TypeError) as exc:
@@ -393,7 +400,8 @@ def analyze_density_run(document, csv_path, events_path, polling_origin, *, comp
            {"skipped", "timed_out", "cancelled", "error"} for e in events):
         result["issues"].append("run contains a pause, skip or failed step; repeat the run")
     for point in config["points"]:
-        stats = _point_statistics(point, document["steps"][point["step"] - 1], rows, events, origin)
+        stats = _point_statistics(point, document["steps"][point["step"] - 1], rows, events, origin,
+                                  config["channel"])
         result["points"].append(stats)
         result["issues"].extend(f"step {point['step']}: {issue}" for issue in stats["issues"])
     for repeat in (1, 2):
