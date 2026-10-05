@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass
 
 from .sdk import FluigentSDK
@@ -19,6 +20,8 @@ class ChannelState:
     regulation_active: bool = False
     mode: str = "off"
     pressure_setpoint: float = 0.0
+    # When the channel was last told what to do, by hand or by a protocol.
+    command_started: float = 0.0
 
 
 class ChannelManager:
@@ -62,6 +65,7 @@ class ChannelManager:
                     channel.pressure_index,
                     setpoint,
                 )
+                channel.command_started = time.monotonic()
 
     def user_set_pressure(self, channel_idx: int, pressure_mbar: float) -> None:
         with self._lock:
@@ -74,6 +78,7 @@ class ChannelManager:
             channel.active_setpoint = 0.0
             channel.regulation_active = False
             self._sdk.set_pressure(channel.pressure_index, pressure_mbar)
+            channel.command_started = time.monotonic()
 
     def user_zero(self, channel_idx: int) -> None:
         """Stop a channel by what controls it: flow regulated to 0, or pressure to 0."""
@@ -84,9 +89,11 @@ class ChannelManager:
             if channel.mode == "flow":
                 channel.regulation_active = True
                 self._sdk.set_sensor_regulation(channel.sensor_index, channel.pressure_index, 0.0)
+                channel.command_started = time.monotonic()
             else:
                 channel.pressure_setpoint = 0.0
                 self._sdk.set_pressure(channel.pressure_index, 0.0)
+                channel.command_started = time.monotonic()
 
     def user_stop_regulation(self, channel_idx: int) -> None:
         with self._lock:
@@ -99,6 +106,7 @@ class ChannelManager:
             channel.mode = "off"
             channel.pressure_setpoint = 0.0
             self._sdk.set_pressure(channel.pressure_index, 0.0)
+            channel.command_started = time.monotonic()
 
     def _require_user_control(self, channel):
         if channel.owner != "user" and not self._pipeline_paused:
@@ -117,6 +125,7 @@ class ChannelManager:
                 channel.pressure_index,
                 setpoint,
             )
+            channel.command_started = time.monotonic()
 
     def pipeline_set_pressure(self, channel_idx: int, pressure_mbar: float) -> None:
         with self._lock:
@@ -127,6 +136,7 @@ class ChannelManager:
             channel.mode = "pressure"
             channel.pressure_setpoint = pressure_mbar
             self._sdk.set_pressure(channel.pressure_index, pressure_mbar)
+            channel.command_started = time.monotonic()
 
     def pipeline_release_channel(self, channel_idx: int) -> None:
         with self._lock:
@@ -136,6 +146,7 @@ class ChannelManager:
 
             if channel.mode == "pressure":
                 self._sdk.set_pressure(channel.pressure_index, 0.0)
+                channel.command_started = time.monotonic()
             channel.owner = "user"
             channel.active_setpoint = channel.base_setpoint
             if channel.base_setpoint > 0 or channel.regulation_active:
@@ -145,6 +156,7 @@ class ChannelManager:
                     channel.pressure_index,
                     channel.base_setpoint,
                 )
+                channel.command_started = time.monotonic()
             else:
                 channel.regulation_active = False
                 channel.mode = "off"
@@ -159,12 +171,14 @@ class ChannelManager:
                     if channel.mode == "pressure":
                         channel.pressure_setpoint = 0.0
                         self._sdk.set_pressure(channel.pressure_index, 0.0)
+                        channel.command_started = time.monotonic()
                     else:
                         self._sdk.set_sensor_regulation(
                             channel.sensor_index,
                             channel.pressure_index,
                             0.0,
                         )
+                        channel.command_started = time.monotonic()
 
     def pipeline_resume_all(self) -> None:
         with self._lock:
@@ -177,12 +191,14 @@ class ChannelManager:
                 if channel.owner == "pipeline":
                     if channel.mode == "pressure":
                         self._sdk.set_pressure(channel.pressure_index, 0.0)
+                        channel.command_started = time.monotonic()
                     else:
                         self._sdk.set_sensor_regulation(
                             channel.sensor_index,
                             channel.pressure_index,
                             0.0,
                         )
+                        channel.command_started = time.monotonic()
                     channel.owner = "user"
                     channel.active_setpoint = 0.0
                     channel.regulation_active = False
@@ -193,6 +209,7 @@ class ChannelManager:
         with self._lock:
             for channel in self._channels:
                 self._sdk.set_pressure(channel.pressure_index, 0.0)
+                channel.command_started = time.monotonic()
                 channel.active_setpoint = 0.0
                 channel.regulation_active = False
                 channel.owner = "user"

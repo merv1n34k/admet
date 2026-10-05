@@ -2991,6 +2991,7 @@ class ChannelControlPanel(QFrame):
         self.update_modes(channels)
 
     def update_modes(self, channels: list[Any], *, pipeline_paused: bool = False) -> None:
+        self._channels = channels
         for index, row in enumerate(self._rows):
             if index >= len(channels):
                 row.set_status("missing")
@@ -3005,12 +3006,16 @@ class ChannelControlPanel(QFrame):
             row.set_editable(owner == "user" or pipeline_paused)
 
     def update_from_snapshot(self, snapshot: Any) -> None:
+        now = time.monotonic()
         for index, row in enumerate(self._rows):
+            channel = _safe_list_value(getattr(self, "_channels", []), index)
+            started = getattr(channel, "command_started", 0.0)
+            running = (now - started) if started and getattr(channel, "mode", "off") != "off" else None
             row.update_values(
                 _safe_list_value(snapshot.pressures, index),
                 _safe_list_value(snapshot.flows, index),
                 _safe_list_value(snapshot.volumes_ul, index),
-                _safe_list_value(snapshot.stability, index),
+                running,
             )
             row.set_stop_status(self._stop_status(index))
 
@@ -3045,8 +3050,15 @@ class ChannelControlRow(QWidget):
         header.addWidget(self.status)
         layout.addLayout(header)
 
-        self.live = QLabel("— mbar | — µL/min | — µL | unknown")
+        # Fixed-width columns in a fixed-pitch font, so the numbers never shift.
+        self.live = QLabel(_channel_stats(None, None, None, None))
         self.live.setObjectName("MutedText")
+        self.live.setStyleSheet(f"font-family: '{ui.mono_family()}'; font-size: 11px;")
+        # Never widens the card: if the card is narrower, the line is clipped, not the layout.
+        self.live.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.live.setMinimumWidth(0)
+        self.live.setToolTip("Pressure | flow | counted volume | how long the current command has run. "
+                             "Stability is in the results table.")
         layout.addWidget(self.live)
 
         flow_row = QHBoxLayout()
@@ -3136,12 +3148,10 @@ class ChannelControlRow(QWidget):
         self.style().unpolish(self)
         self.style().polish(self)
 
-    def update_values(self, pressure: float, flow: float, volume: float, stable: bool) -> None:
-        state = "unknown" if stable is None else ("stable" if stable else "unstable")
-        self.live.setText(
-            f"{_measurement(pressure)} mbar | {_measurement(flow)} µL/min | "
-            f"{_measurement(volume)} µL | {state}"
-        )
+    def update_values(self, pressure: float, flow: float, volume: float, running_s: float | None) -> None:
+        text = _channel_stats(pressure, flow, volume, running_s)
+        if self.live.text() != text:
+            self.live.setText(text)
 
 
 class FluidicsMonitorTable(QFrame):
@@ -3252,6 +3262,20 @@ def _small_double_box(minimum: float, maximum: float, suffix: str) -> QDoubleSpi
 def _widget_has_focus(widget: QWidget) -> bool:
     focus = QApplication.focusWidget()
     return focus is widget or bool(focus is not None and widget.isAncestorOf(focus))
+
+
+def _channel_stats(pressure, flow, volume, running_s) -> str:
+    """One channel's live line, every field a fixed width so nothing moves as values change."""
+    def field(value, width, digits):
+        return ("—" if value is None else f"{value:.{digits}f}").rjust(width)
+
+    if running_s is None:
+        running = "off".rjust(6)
+    else:
+        minutes, seconds = divmod(running_s, 60)
+        running = f"{int(minutes)}:{seconds:04.1f}".rjust(6)
+    return (f"{field(pressure, 6, 1)} mbar  {field(flow, 6, 1)} µL/min  "
+            f"{field(volume, 6, 2)} µL  {running}")
 
 
 def _measurement(value):

@@ -172,6 +172,18 @@ class HardwareManagerTests(unittest.TestCase):
 
 
 class ChannelManagerTests(unittest.TestCase):
+    def test_every_command_records_when_it_started(self):
+        import time
+
+        manager = ChannelManager(FakeFluidicsSDK())
+        manager.configure_channels([(0, 0)])
+        self.assertEqual(manager.channels[0].command_started, 0.0)
+        for command in (lambda: manager.user_set_flow_regulation(0, 25.0), lambda: manager.user_zero(0),
+                        lambda: manager.user_set_pressure(0, 80.0), lambda: manager.pipeline_set_setpoint(0, 50.0)):
+            before = time.monotonic()
+            command()
+            self.assertGreaterEqual(manager.channels[0].command_started, before)
+
     def test_user_and_pipeline_ownership_rules(self):
         sdk = FakeFluidicsSDK()
         manager = ChannelManager(sdk)
