@@ -34,8 +34,8 @@ from admet.engines.acquisition.recording import (
     WriterFactory,
 )
 from admet.engines.acquisition.pipeline import PipelineEngine, ProtocolStep, build_pipeline_steps
-from admet.engines.acquisition.triggers import VolumeTrigger
-from admet.engines.acquisition.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES
+from admet.engines.acquisition.triggers import ConditionTrigger, TimeTrigger, VolumeTrigger
+from admet.engines.acquisition.settings import CONTROL_ENGINE_SETTINGS, CORRECTION_PARAM_NAMES, MANUAL_STOPS
 
 log = logging.getLogger(__name__)
 
@@ -128,12 +128,13 @@ ACQUISITION_ACTIONS = (
     ActionSpec("start_polling", "Start Polling", "diagnostics"),
     ActionSpec("stop_polling", "Stop Polling", "diagnostics"),
     ActionSpec("apply_corrections", "Apply Corrections", "fluidics", params=CORRECTION_PARAM_NAMES),
-    ActionSpec("set_channel_flow", "Set Channel Flow", "fluidics", params=("channel_index", "channel_flow_ul_min")),
+    ActionSpec("set_channel_flow", "Set Channel Flow", "fluidics",
+               params=("channel_index", "channel_flow_ul_min", "channel_stop_after", "channel_stop_value")),
     ActionSpec(
         "set_channel_pressure",
         "Set Channel Pressure",
         "fluidics",
-        params=("channel_index", "channel_pressure_mbar"),
+        params=("channel_index", "channel_pressure_mbar", "channel_stop_after", "channel_stop_value"),
     ),
     ActionSpec("stop_channel", "Stop Channel", "fluidics", params=("channel_index",)),
     ActionSpec(
@@ -197,6 +198,9 @@ class AcquisitionEngine:
         self._event_history: deque = deque(maxlen=2000)
         self._event_lock = threading.Lock()
         self.tails = TailTracker()
+        # Rules ending commands set by hand, by channel; each is watched in its own thread.
+        self._manual_stops: dict[int, dict[str, Any]] = {}
+        self._manual_lock = threading.Lock()
         self._event_condition = threading.Condition(self._event_lock)
         self.data_queue: Queue = Queue(maxsize=50)
         self.pipeline_queue: Queue = Queue(maxsize=50)
@@ -263,11 +267,15 @@ class AcquisitionEngine:
             ),
             "set_channel_flow": lambda settings: self._status_after(
                 "set_channel_flow",
-                lambda: self.set_channel_flow(settings["channel_index"], settings["channel_flow_ul_min"]),
+                lambda: self.set_channel_flow(settings["channel_index"], settings["channel_flow_ul_min"],
+                                              stop_after=settings.get("channel_stop_after") or "none",
+                                              stop_value=settings.get("channel_stop_value") or 0.0),
             ),
             "set_channel_pressure": lambda settings: self._status_after(
                 "set_channel_pressure",
-                lambda: self.set_channel_pressure(settings["channel_index"], settings["channel_pressure_mbar"]),
+                lambda: self.set_channel_pressure(settings["channel_index"], settings["channel_pressure_mbar"],
+                                                  stop_after=settings.get("channel_stop_after") or "none",
+                                                  stop_value=settings.get("channel_stop_value") or 0.0),
             ),
             "stop_channel": lambda settings: self._status_after(
                 "stop_channel",
@@ -446,17 +454,119 @@ class AcquisitionEngine:
         # New corrections change what the sensors report, so learned tails restart.
         self.tails.clear()
 
-    def set_channel_flow(self, channel_index: int, flow_ul_min: float) -> None:
+    def set_channel_flow(self, channel_index: int, flow_ul_min: float, *,
+                         stop_after: str = "none", stop_value: float = 0.0) -> None:
         self._require_fluidics_connected()
+        self._manual_stop_rule(stop_after, stop_value)
+        self._cancel_manual_stop(channel_index)
         self.channel_manager.user_set_flow_regulation(channel_index, flow_ul_min)
+        self._arm_manual_stop(channel_index, stop_after, stop_value)
 
-    def set_channel_pressure(self, channel_index: int, pressure_mbar: float) -> None:
+    def set_channel_pressure(self, channel_index: int, pressure_mbar: float, *,
+                             stop_after: str = "none", stop_value: float = 0.0) -> None:
         self._require_fluidics_connected()
+        self._manual_stop_rule(stop_after, stop_value)
+        self._cancel_manual_stop(channel_index)
         self.channel_manager.user_set_pressure(channel_index, pressure_mbar)
+        self._arm_manual_stop(channel_index, stop_after, stop_value)
+
+    @staticmethod
+    def _manual_stop_rule(kind: str, value: float) -> None:
+        if kind not in MANUAL_STOPS:
+            raise ValueError(f"stop after must be one of: {', '.join(MANUAL_STOPS)}")
+        if kind in {"volume", "time"} and not value > 0:
+            raise ValueError(f"stop after {kind} needs a positive value")
+
+    def manual_stop_status(self, channel_index: int) -> str:
+        """What a hand-set command on this channel is waiting for, or how it ended."""
+        with self._manual_lock:
+            stop = self._manual_stops.get(channel_index)
+            return stop["status"] if stop else ""
+
+    def _cancel_manual_stop(self, channel_index: int | None = None) -> None:
+        with self._manual_lock:
+            for index, stop in list(self._manual_stops.items()):
+                if channel_index is None or index == channel_index:
+                    stop["cancel"].set()
+                    del self._manual_stops[index]
+
+    def _arm_manual_stop(self, channel_index: int, kind: str, value: float) -> None:
+        """Watch a hand-set command and take its channel to zero once its rule is met."""
+        if kind == "none":
+            return
+        channel = self.channel_manager.channels[channel_index]
+        sensor, pressure = channel.sensor_index, channel.pressure_index
+        trigger = {
+            "volume": lambda: VolumeTrigger(sensor, value),
+            "time": lambda: TimeTrigger(value),
+            "flow_above": lambda: ConditionTrigger(sensor, min_value=value),
+            "flow_below": lambda: ConditionTrigger(sensor, max_value=value),
+        }.get(kind, lambda: None)()
+        if isinstance(trigger, VolumeTrigger):
+            trigger.tail_source = lambda: self.tails.k(sensor)   # stop early by the learned tail
+        if trigger is not None:
+            trigger.reset()
+        unit = {"volume": "µL", "time": "s"}.get(kind, "mbar" if kind.startswith("pressure") else "µL/min")
+        rule = {"volume": f"{value:g} µL", "time": f"{value:g} s", "flow_above": f"flow ≥ {value:g} µL/min",
+                "flow_below": f"flow ≤ {value:g} µL/min", "pressure_above": f"pressure ≥ {value:g} mbar",
+                "pressure_below": f"pressure ≤ {value:g} mbar"}[kind]
+        stop = {"cancel": threading.Event(), "status": f"stops at {rule}"}
+        with self._manual_lock:
+            self._manual_stops[channel_index] = stop
+        started = time.monotonic()
+
+        def reading(values: list, index: int) -> float:
+            snapshot = self._acquisition.latest_snapshot() if self._acquisition else None
+            items = getattr(snapshot, values, None) or []
+            return float(items[index]) if index < len(items) else 0.0
+
+        def watch() -> None:
+            start_volume = self._acquisition.get_volume(sensor) if self._acquisition else 0.0
+            while not stop["cancel"].wait(0.05):
+                if kind.startswith("pressure"):
+                    current = reading("pressures", pressure)
+                    done = current >= value if kind == "pressure_above" else current <= value
+                else:
+                    done = trigger.check(lambda index: reading("flows", index),
+                                         lambda index: self._acquisition.get_volume(index) if self._acquisition else 0.0)
+                    current = {"volume": (self._acquisition.get_volume(sensor) if self._acquisition else 0.0)
+                               - start_volume, "time": time.monotonic() - started}.get(kind, reading("flows", sensor))
+                with self._manual_lock:
+                    if self._manual_stops.get(channel_index) is not stop:
+                        return
+                    stop["status"] = f"stops at {rule} · now {current:.2f} {unit}"
+                    if not done:
+                        continue
+                    del self._manual_stops[channel_index]
+                try:
+                    flow_controlled = self.channel_manager.channels[channel_index].mode == "flow"
+                    self.channel_manager.user_zero(channel_index)
+                    stop["status"] = f"stopped at {rule} after {time.monotonic() - started:.1f} s"
+                except Exception as exc:
+                    stop["status"] = f"could not stop: {exc}"
+                    return
+                if isinstance(trigger, VolumeTrigger) and flow_controlled and self._acquisition is not None:
+                    # A flow command ends at flow 0, as a protocol step does, so its tail is the
+                    # same kind and teaches the same k. A pressure stop's tail is not, so it does not.
+                    flows = trigger._flows
+                    flow_at_stop = statistics.median(flows) if flows else 0.0
+                    if flow_at_stop >= 1.0:
+                        threading.Thread(
+                            target=self._watch_tail,
+                            args=(sensor, channel_index, flow_at_stop, self._acquisition.get_volume(sensor),
+                                  trigger._start_volume, trigger._target_ul),
+                            name="TailWatch", daemon=True,
+                        ).start()
+                with self._manual_lock:
+                    self._manual_stops.setdefault(channel_index, stop)   # keep the result visible
+                return
+
+        threading.Thread(target=watch, name=f"ManualStop{channel_index}", daemon=True).start()
 
     def stop_channel(self, channel_index: int) -> None:
         self._require_fluidics_connected()
-        self.channel_manager.user_stop_regulation(channel_index)
+        self._cancel_manual_stop(channel_index)
+        self.channel_manager.user_zero(channel_index)
 
     def set_channel_response(self, channel_index: int, response_s: int) -> None:
         self._require_fluidics_connected()
@@ -498,6 +608,7 @@ class AcquisitionEngine:
         """
         if self._pipeline and self._pipeline.is_alive():
             return
+        self._cancel_manual_stop()   # a protocol takes over from anything set by hand
         if not self.hardware.state.connected:
             raise RuntimeError("Fluidics hardware is not connected")
         steps = self.build_pipeline_from_steps(steps)
@@ -822,6 +933,7 @@ class AcquisitionEngine:
         # Channels first, and before anything that can block. Everything else
         # here is bookkeeping; this is the part that makes the rig safe.
         try:
+            self._cancel_manual_stop()
             self.channel_manager.emergency_stop_all()
             stopped["channels_zeroed"] = True
         except Exception as exc:

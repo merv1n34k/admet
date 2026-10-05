@@ -8,6 +8,8 @@ from admet.engines.acquisition.fluidics.config import (
 )
 from admet.engines.acquisition.fluidics.liquids import default_profile_id, profiles_for_unit
 
+MANUAL_STOPS = ("none", "volume", "time", "flow_above", "flow_below", "pressure_above", "pressure_below")
+
 CORRECTION_PARAM_NAMES = tuple(
     name
     for prefix, _label, _calibration, _scale, _offset, _quadratic in FLUIDIC_CHANNELS
@@ -146,6 +148,11 @@ CHANNEL_CONTROL_SETTINGS = ParamSchema(
         Param("channel_flow_ul_min", "Flow", ParamKind.FLOAT, default=0.0, minimum=0.0),
         Param("channel_pressure_mbar", "Pressure", ParamKind.FLOAT, default=0.0, minimum=0.0),
         Param("channel_response_s", "Response", ParamKind.INTEGER, default=2, minimum=2, maximum=3600),
+        # An optional rule that ends a command set by hand: after a volume or a
+        # time, or once the flow or pressure crosses a value.
+        Param("channel_stop_after", "Stop after", ParamKind.CHOICE, default="none",
+              options=tuple(ParamOption(kind, kind) for kind in MANUAL_STOPS)),
+        Param("channel_stop_value", "Stop value", ParamKind.FLOAT, default=0.0, minimum=0.0),
     )
 )
 

@@ -522,7 +522,7 @@ class AcquisitionEngineTests(unittest.TestCase):
         self.assertIn(("regulate", 1, 1, 67.0), sdk.calls)
         self.assertIn(("pressure", 0, 120.0), sdk.calls)
         self.assertIn(("sensor_response", 1, 4), sdk.calls)
-        self.assertIn(("pressure", 1, 0.0), sdk.calls)
+        self.assertIn(("regulate", 1, 1, 0.0), sdk.calls)   # a flow channel stops at flow 0
 
     def test_camera_refresh_and_connect_are_nonfatal_without_device(self):
         engine = make_engine(FakeControlSDK())

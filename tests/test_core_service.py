@@ -234,6 +234,72 @@ class AdaptiveVolumeTests(unittest.TestCase):
         self.assertEqual(cleared["error_doses"], 0)
 
 
+class ManualStopTests(unittest.TestCase):
+    """A command set by hand can end by itself: after a volume or a time, or at a reading."""
+
+    def setUp(self):
+        self.admet = Admet()
+        self.admet.do("connect_fluidics", {"simulated": True})
+        self.admet.do("apply_corrections")
+        self.addCleanup(self.admet.do, "disconnect_fluidics")
+        self.engine = self.admet.engine("acquisition")
+        time.sleep(0.5)
+
+    def command(self, action, settings):
+        # The path the desktop's channel manager uses.
+        return self.admet.run("acquisition", action, settings)
+
+    def wait_stopped(self, channel, limit_s=10):
+        deadline = time.monotonic() + limit_s
+        while not self.engine.manual_stop_status(channel).startswith("stopped"):
+            self.assertLess(time.monotonic(), deadline, self.engine.manual_stop_status(channel))
+            time.sleep(0.05)
+
+    def test_volume_stop_doses_and_teaches_the_tail(self):
+        before = self.engine.latest_snapshot().volumes_ul[1]
+        self.command("set_channel_flow", {"channel_index": 1, "channel_flow_ul_min": 67.0,
+                                           "channel_stop_after": "volume", "channel_stop_value": 3.0})
+        self.wait_stopped(1)
+        deadline = time.monotonic() + 10
+        while self.engine.tails.describe(1)["error_doses"] == 0:   # settled; the tail was measured
+            self.assertLess(time.monotonic(), deadline, "the tail never settled")
+            time.sleep(0.05)
+        delivered = self.engine.latest_snapshot().volumes_ul[1] - before
+
+        channel = self.engine.channel_manager.channels[1]
+        self.assertEqual((channel.mode, channel.active_setpoint), ("flow", 0.0))   # a flow command ends at flow 0
+        self.assertEqual(self.engine.tails.describe(1)["tail_samples"], 1)   # learned like a protocol step
+        self.assertAlmostEqual(delivered, 3.0, delta=1.0)
+
+    def test_time_stop(self):
+        started = time.monotonic()
+        self.command("set_channel_flow", {"channel_index": 2, "channel_flow_ul_min": 20.0,
+                                           "channel_stop_after": "time", "channel_stop_value": 0.6})
+        self.wait_stopped(2)
+        self.assertGreaterEqual(time.monotonic() - started, 0.55)
+        channel = self.engine.channel_manager.channels[2]
+        self.assertEqual((channel.mode, channel.active_setpoint), ("flow", 0.0))
+
+    def test_pressure_threshold_stop(self):
+        self.command("set_channel_pressure", {"channel_index": 1, "channel_pressure_mbar": 80.0,
+                                               "channel_stop_after": "pressure_above", "channel_stop_value": 40.0})
+        self.wait_stopped(1)
+        channel = self.engine.channel_manager.channels[1]
+        self.assertEqual((channel.mode, channel.pressure_setpoint), ("pressure", 0.0))   # a pressure command ends at 0 mbar
+
+    def test_a_new_command_cancels_the_rule(self):
+        self.command("set_channel_flow", {"channel_index": 1, "channel_flow_ul_min": 20.0,
+                                           "channel_stop_after": "time", "channel_stop_value": 0.5})
+        self.command("set_channel_flow", {"channel_index": 1, "channel_flow_ul_min": 30.0})
+        time.sleep(1.0)
+        self.assertEqual(self.engine.manual_stop_status(1), "")
+        self.assertEqual(self.engine.channel_manager.channels[1].mode, "flow")
+        with self.assertRaises(Exception):
+            self.command("set_channel_flow", {"channel_index": 1, "channel_flow_ul_min": 20.0,
+                                               "channel_stop_after": "volume", "channel_stop_value": 0})
+        self.command("stop_channel", {"channel_index": 1})
+
+
 class FluidicsOnlyRecordingTests(unittest.TestCase):
     """System validation must not need a camera pointed at the chip."""
 

@@ -75,6 +75,19 @@ class ChannelManager:
             channel.regulation_active = False
             self._sdk.set_pressure(channel.pressure_index, pressure_mbar)
 
+    def user_zero(self, channel_idx: int) -> None:
+        """Stop a channel by what controls it: flow regulated to 0, or pressure to 0."""
+        with self._lock:
+            channel = self._channels[channel_idx]
+            self._require_user_control(channel)
+            channel.base_setpoint = channel.active_setpoint = 0.0
+            if channel.mode == "flow":
+                channel.regulation_active = True
+                self._sdk.set_sensor_regulation(channel.sensor_index, channel.pressure_index, 0.0)
+            else:
+                channel.pressure_setpoint = 0.0
+                self._sdk.set_pressure(channel.pressure_index, 0.0)
+
     def user_stop_regulation(self, channel_idx: int) -> None:
         with self._lock:
             channel = self._channels[channel_idx]

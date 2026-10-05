@@ -1316,6 +1316,7 @@ class ControlWindow(QMainWindow):
             on_flow=self._set_channel_flow,
             on_pressure=self._set_channel_pressure,
             on_stop=self._stop_channel,
+            stop_status=lambda index: self.api.engine.manual_stop_status(index),
         )
         self.channel_manager_layout.addWidget(self.channel_panel)
         self.channel_panel.update_modes(channels, pipeline_paused=self._pipeline_paused())
@@ -2313,17 +2314,21 @@ class ControlWindow(QMainWindow):
             return []
         return list(getattr(manager, "channels", []))
 
-    def _set_channel_flow(self, channel_index: int, flow_ul_min: float) -> None:
+    def _set_channel_flow(self, channel_index: int, flow_ul_min: float,
+                          stop_after: str = "none", stop_value: float = 0.0) -> None:
         self._run(
             "set_channel_flow",
-            {"channel_index": channel_index, "channel_flow_ul_min": flow_ul_min},
+            {"channel_index": channel_index, "channel_flow_ul_min": flow_ul_min,
+             "channel_stop_after": stop_after, "channel_stop_value": stop_value},
             refresh=False,
         )
 
-    def _set_channel_pressure(self, channel_index: int, pressure_mbar: float) -> None:
+    def _set_channel_pressure(self, channel_index: int, pressure_mbar: float,
+                              stop_after: str = "none", stop_value: float = 0.0) -> None:
         self._run(
             "set_channel_pressure",
-            {"channel_index": channel_index, "channel_pressure_mbar": pressure_mbar},
+            {"channel_index": channel_index, "channel_pressure_mbar": pressure_mbar,
+             "channel_stop_after": stop_after, "channel_stop_value": stop_value},
             refresh=False,
         )
 
@@ -2959,13 +2964,15 @@ class ChannelControlPanel(QFrame):
         self,
         channels: list[Any],
         *,
-        on_flow: Callable[[int, float], None],
-        on_pressure: Callable[[int, float], None],
+        on_flow: Callable[[int, float, str, float], None],
+        on_pressure: Callable[[int, float, str, float], None],
         on_stop: Callable[[int], None],
+        stop_status: Callable[[int], str] = lambda _index: "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("InlinePanel")
+        self._stop_status = stop_status
         self._rows: list[ChannelControlRow] = []
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -3005,6 +3012,7 @@ class ChannelControlPanel(QFrame):
                 _safe_list_value(snapshot.volumes_ul, index),
                 _safe_list_value(snapshot.stability, index),
             )
+            row.set_stop_status(self._stop_status(index))
 
 
 class ChannelControlRow(QWidget):
@@ -3013,8 +3021,8 @@ class ChannelControlRow(QWidget):
         index: int,
         label: str,
         *,
-        on_flow: Callable[[int, float], None],
-        on_pressure: Callable[[int, float], None],
+        on_flow: Callable[[int, float, str, float], None],
+        on_pressure: Callable[[int, float, str, float], None],
         on_stop: Callable[[int], None],
         parent: QWidget | None = None,
     ) -> None:
@@ -3050,7 +3058,7 @@ class ChannelControlRow(QWidget):
         self.flow = _small_double_box(0.0, 5000.0, " uL/min")
         self.flow.setLocale(QLocale.c())
         self.flow.setToolTip("Type a flow target and press Enter to apply. Stop zeros this channel.")
-        self.flow.lineEdit().returnPressed.connect(lambda: on_flow(self._index, self.flow.value()))
+        self.flow.lineEdit().returnPressed.connect(lambda: on_flow(self._index, self.flow.value(), *self.stop_rule()))
         flow_row.addWidget(self.flow, 1)
         layout.addLayout(flow_row)
 
@@ -3063,9 +3071,36 @@ class ChannelControlRow(QWidget):
         self.pressure = _small_double_box(0.0, 2000.0, " mbar")
         self.pressure.setLocale(QLocale.c())
         self.pressure.setToolTip("Type a pressure target and press Enter to apply. Stop zeros this channel.")
-        self.pressure.lineEdit().returnPressed.connect(lambda: on_pressure(self._index, self.pressure.value()))
+        self.pressure.lineEdit().returnPressed.connect(
+            lambda: on_pressure(self._index, self.pressure.value(), *self.stop_rule()))
         pressure_row.addWidget(self.pressure, 1)
         layout.addLayout(pressure_row)
+
+        # Optional: end the next command by itself, after a volume or a time, or
+        # once the flow or pressure crosses a value.
+        stop_row = QHBoxLayout()
+        stop_row.setContentsMargins(0, 0, 0, 0)
+        stop_row.setSpacing(6)
+        stop_label = QLabel("Stop after")
+        stop_label.setObjectName("FieldLabel")
+        stop_row.addWidget(stop_label)
+        self.stop_kind = QComboBox()
+        for label, kind in (("never", "none"), ("volume", "volume"), ("time", "time"),
+                            ("flow ≥", "flow_above"), ("flow ≤", "flow_below"),
+                            ("pressure ≥", "pressure_above"), ("pressure ≤", "pressure_below")):
+            self.stop_kind.addItem(label, kind)
+        self.stop_kind.setToolTip("Applies to the next flow or pressure you set with Enter. "
+                                  "When it is met, this channel stops. A new command or Stop cancels it.")
+        stop_row.addWidget(self.stop_kind)
+        self.stop_value = _small_double_box(0.0, 100000.0, "")
+        self.stop_value.setLocale(QLocale.c())
+        stop_row.addWidget(self.stop_value, 1)
+        self.stop_kind.currentIndexChanged.connect(self._sync_stop_unit)
+        self._sync_stop_unit()
+        layout.addLayout(stop_row)
+        self.stop_progress = QLabel("")
+        self.stop_progress.setObjectName("MutedText")
+        layout.addWidget(self.stop_progress)
 
         self.stop_button = QPushButton("Stop")
         self.stop_button.clicked.connect(lambda: on_stop(self._index))
@@ -3075,6 +3110,19 @@ class ChannelControlRow(QWidget):
     def set_status(self, text: str) -> None:
         self.status.setText(text)
 
+    def stop_rule(self) -> tuple[str, float]:
+        return str(self.stop_kind.currentData()), float(self.stop_value.value())
+
+    def _sync_stop_unit(self) -> None:
+        kind = self.stop_kind.currentData()
+        self.stop_value.setEnabled(kind != "none")
+        self.stop_value.setSuffix({"volume": " µL", "time": " s", "flow_above": " µL/min", "flow_below": " µL/min",
+                                   "pressure_above": " mbar", "pressure_below": " mbar"}.get(kind, ""))
+
+    def set_stop_status(self, text: str) -> None:
+        if self.stop_progress.text() != text:
+            self.stop_progress.setText(text)
+
     def set_editable(self, editable: bool) -> None:
         """Show whether this channel can be driven by hand right now."""
         if editable == self._editable:
@@ -3082,6 +3130,7 @@ class ChannelControlRow(QWidget):
         self._editable = editable
         self.flow.setEnabled(editable)
         self.pressure.setEnabled(editable)
+        self.stop_kind.setEnabled(editable)
         self.stop_button.setEnabled(editable)
         self.setProperty("locked", not editable)
         self.style().unpolish(self)

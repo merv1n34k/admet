@@ -506,7 +506,8 @@ class DesktopBackendTests(unittest.TestCase):
         self.backend.call("set_channel_pressure", {"channel_index": 0, "channel_pressure_mbar": 17})
         self.assertEqual(self.backend.engine.channel_manager.channels[0].pressure_setpoint, 17)
         self.backend.run(RunJob("stop", "acquisition", "stop_channel", {"channel_index": 0}))
-        self.assertEqual(self.backend.engine.channel_manager.channels[0].mode, "off")
+        stopped = self.backend.engine.channel_manager.channels[0]
+        self.assertEqual((stopped.mode, stopped.pressure_setpoint), ("pressure", 0.0))   # stopped by pressure
         for action, payload in (
             ("set_channel_flow", {"channel_flow_ul_min": 4}),
             ("set_channel_pressure", {"channel_pressure_mbar": 12}), ("stop_channel", {}),
