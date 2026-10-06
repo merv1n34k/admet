@@ -1,11 +1,15 @@
 import { defineConfig } from 'vitepress'
 
+// GitHub Pages serves the site under /<repository>/; locally it is served at /.
+const base = process.env.DOCS_BASE ?? '/'
+
 export default defineConfig({
+  base,
   title: 'ADMET',
   description: 'Microfluidics acquisition and analysis: drive the rig, record runs, analyse projects.',
   cleanUrls: true,
   lastUpdated: true,
-  head: [['link', { rel: 'icon', href: '/logo.png' }]],
+  head: [['link', { rel: 'icon', href: `${base}logo.png` }]],
   themeConfig: {
     logo: '/logo.png',
     nav: [
