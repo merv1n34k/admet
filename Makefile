@@ -1,4 +1,4 @@
-.PHONY: setup dev describe build test test-all test-core test-analyze test-control test-integration lint fmt clean
+.PHONY: setup dev describe build test test-all test-core test-analyze test-control test-integration lint fmt clean docs-dev docs-build
 .DEFAULT_GOAL := setup
 
 ANALYZE_TESTS := $(wildcard tests/test_analyze_*.py tests/test_cellpose_helpers.py tests/test_opencv_engine.py)
@@ -41,5 +41,11 @@ lint:
 fmt:
 	uv run ruff format .
 
+docs-dev:
+	cd docs && bun install && bun run dev
+
+docs-build:
+	cd docs && bun install && bun run build
+
 clean:
-	rm -rf .pytest_cache .ruff_cache build dist *.egg-info
+	rm -rf .pytest_cache .ruff_cache build dist *.egg-info docs/.vitepress/dist docs/.vitepress/cache
