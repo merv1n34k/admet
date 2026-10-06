@@ -44,8 +44,12 @@ uv run --locked --extra analyze admet analyze
 ```
 
 No hardware? On the Fluigent page, choose **Simulated Hardware** before
-connecting. For live use, install the Fluigent and Basler drivers; the Fluigent
-SDK itself is bundled.
+connecting. For live use, install the Fluigent and Basler drivers and
+[Fluigent's SDK](https://github.com/Fluigent/fgt-SDK).
+
+> [!NOTE]
+> The Fluigent SDK has no native support for macOS on Apple Silicon. Use a
+> Windows or Linux PC to drive a Fluigent rig.
 
 ## Features
 

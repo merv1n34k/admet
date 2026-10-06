@@ -36,7 +36,7 @@ src/admet/
   engines/        # acquisition (Fluigent, camera), OpenCV, Cellpose
   workflows/      # protocol format, calculations, analysis runner
   ui/             # control (Qt) and analyze (NiceGUI)
-  vendor/         # the bundled Fluigent SDK
+  vendor/         # Fluigent SDK
 templates/        # bundled protocols
 tests/
 docs/             # this site (VitePress)

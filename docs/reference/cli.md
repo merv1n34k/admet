@@ -42,4 +42,4 @@ uv run admet describe acquisition  # one engine
 | Variable | Meaning |
 |---|---|
 | `ADMET_PROJECTS_ROOT` | Default folder holding projects |
-| `ADMET_FLUIGENT_SDK_PATH` | A Fluigent SDK Python folder to use instead of the bundled one |
+| `ADMET_FLUIGENT_SDK_PATH` | The Python folder of a Fluigent SDK to use (the one containing `Fluigent/SDK`) |

@@ -91,11 +91,15 @@ class FluidicsSdkTests(unittest.TestCase):
             with self.assertRaises(FluigentSDKUnavailableError):
                 sdk.get_pressure(0)
 
-    def test_vendored_sdk_path_is_packaged(self):
-        path = vendored_sdk_python_path()
+    def test_vendor_folder_stays_out_of_the_packages(self):
+        import tomllib
 
+        path = vendored_sdk_python_path()
         self.assertTrue((path / "Fluigent" / "SDK" / "__init__.py").exists())
-        self.assertTrue((path / "Fluigent" / "SDK" / "shared").exists())
+        root = Path(__file__).resolve().parents[1]
+        build = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["hatch"]["build"]["targets"]
+        self.assertIn("src/admet/vendor", build["wheel"]["exclude"])
+        self.assertIn("/src/admet/vendor", build["sdist"]["exclude"])
 
     def test_sdk_import_suppresses_vendor_pkg_resources_warning(self):
         sdk = FluigentSDK()
