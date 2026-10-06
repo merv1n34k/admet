@@ -11,3 +11,4 @@ projects/
 docs/node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+src/admet/vendor/
