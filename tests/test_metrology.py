@@ -264,6 +264,14 @@ class MetrologyTests(unittest.TestCase):
         self.assertEqual([row["target_ul_min"] for row in result["units"]["0"]["targets"]], [15, 132.5, 250])
         self.assertTrue(any("Beads M" in issue for issue in result["issues"]))
 
+    def test_every_calculation_has_a_tabular_view(self):
+        from admet.workflows.calculations import result_view
+
+        for name, kind in (("dead_volume", "dead_volume"), ("gravimetry", "recording_summary")):
+            view = result_view(calculate_run(archive(self.tmp.name, name, run_id=f"{name}-{kind}"), kind))
+            self.assertTrue(view["sections"][0]["tables"][0]["rows"])
+            self.assertFalse(view["outdated"])
+
     def test_dead_volume_summarises_the_values_entered_by_hand(self):
         directory = archive(self.tmp.name, "dead_volume")
         result = calculate_run(directory, "dead_volume")["result"]
@@ -386,11 +394,17 @@ class MetrologyTests(unittest.TestCase):
 
     def test_results_survive_project_move(self):
         import shutil
-        from admet.workflows.calculations import result_text
+        from admet.workflows.calculations import result_view
 
         directory = archive(self.tmp.name, "gravimetry")
         result = calculate_run(directory, "gravimetry")
-        self.assertIn("MULTIPLIER", result_text(result))
+        sections = result_view(result)["sections"]
+        self.assertEqual([s["title"] for s in sections], ["Gravimetry", "Cells M (channel 1)"])
+        tables = {t["title"].split(" ·")[0]: t for t in sections[1]["tables"]}
+        self.assertEqual(list(tables), ["Correction for the Rig table", "Collections", "Per flow"])
+        self.assertEqual((tables["Correction for the Rig table"]["rows"][0][0], tables["Correction for the Rig table"]["highlight"]),
+                         ("Scale only (suggested)", 0))
+        self.assertEqual(len(tables["Collections"]["rows"]), 9)
         copied = Path(self.tmp.name) / "copied"
         shutil.copytree(Path(self.tmp.name) / "records", copied / "records")
         self.assertFalse(saved_results(copied / "records" / "protocols" / "gravimetry")[0]["outdated"])

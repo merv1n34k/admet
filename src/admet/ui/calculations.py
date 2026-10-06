@@ -1,13 +1,108 @@
 """Saved-run calculations, with no instrument actions."""
 
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPlainTextEdit, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QScrollArea, QTableWidgetItem, QVBoxLayout,
+    QWidget,
+)
 
 from admet.ui import theme as ui
+from admet.ui.tables import GridTable, fit_table_height
 from admet.ui.tasks import Tasks
 from admet.workflows.calculations import (
-    CALCULATIONS, calculate_run, recorded_runs, result_text, saved_results,
+    CALCULATIONS, calculate_run, recorded_runs, result_view, saved_results,
     available_calculations, calculation_readiness,
 )
+
+GOOD = {"usable", "consistent", "complete"}
+
+
+def _label(text, name=None, *, wrap=True):
+    label = QLabel(str(text))
+    label.setTextFormat(Qt.TextFormat.PlainText)
+    label.setWordWrap(wrap)
+    label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    if name:
+        label.setObjectName(name)
+    return label
+
+
+class ResultView(QScrollArea):
+    """A saved result as headed sections: a few facts, its tables, then its notes."""
+
+    def __init__(self):
+        super().__init__()
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setMinimumHeight(260)
+        self.clear()
+
+    def clear(self):
+        self.show_message("")
+
+    def show_message(self, text):
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.addWidget(_label(text, "MutedText"))
+        layout.addStretch(1)
+        self.setWidget(body)
+
+    def display(self, view):
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setSpacing(ui.spacing("default"))
+        if view["outdated"]:
+            layout.addWidget(_label("Outdated: the saved inputs have changed; calculate again.", "ProtocolConfirmLabel"))
+        for section in view["sections"]:
+            heading = QHBoxLayout()
+            heading.addWidget(_label(section["title"], "PanelTitle", wrap=False))
+            if section["status"]:
+                heading.addWidget(_label(section["status"], "VerdictPass" if section["status"] in GOOD else "VerdictFail",
+                                         wrap=False))
+            heading.addStretch(1)
+            layout.addLayout(heading)
+            if section["facts"]:
+                facts = QGridLayout()
+                facts.setColumnStretch(1, 1)
+                for row, (name, value) in enumerate(section["facts"]):
+                    facts.addWidget(_label(name, "FieldLabel", wrap=False), row, 0)
+                    facts.addWidget(_label(value), row, 1)
+                layout.addLayout(facts)
+            for table in section["tables"]:
+                layout.addWidget(_label(table["title"], "FieldLabel"))
+                layout.addWidget(self._table(table))
+            for issue in section["notes"]:
+                layout.addWidget(_label(issue, "ProtocolConfirmLabel"))
+            for warning in section["warnings"]:
+                layout.addWidget(_label(f"Warning: {warning}", "MutedText"))
+        if view["note"]:
+            layout.addWidget(_label(view["note"], "MutedText"))
+        layout.addWidget(_label(f"Saved: {view['saved']}", "MutedText"))
+        layout.addStretch(1)
+        self.setWidget(body)
+
+    @staticmethod
+    def _table(spec):
+        table = GridTable(len(spec["rows"]), len(spec["headers"]))
+        table.setObjectName("RawConfigTable")
+        table.setHorizontalHeaderLabels(spec["headers"])
+        table.verticalHeader().hide()
+        # Numbers take what they need; the last column, usually a note, takes the rest.
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setEditTriggers(GridTable.EditTrigger.NoEditTriggers)
+        for row, values in enumerate(spec["rows"]):
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if row == spec["highlight"]:
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                table.setItem(row, column, item)
+        fit_table_height(table)
+        return table
 
 
 class CalculationsPanel(QWidget):
@@ -50,10 +145,8 @@ class CalculationsPanel(QWidget):
         self.status = QLabel("Open a project to load its recordings.")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
-        self.output = QPlainTextEdit()
-        self.output.setReadOnly(True)
-        self.output.setMinimumHeight(260)
-        layout.addWidget(self.output)
+        self.output = ResultView()
+        layout.addWidget(self.output, 1)
         self.calculation.currentIndexChanged.connect(self.describe)
         self.runs.currentIndexChanged.connect(self.load_history)
         self.history.currentIndexChanged.connect(self.show_result)
@@ -173,7 +266,10 @@ class CalculationsPanel(QWidget):
 
     def show_result(self, *_args):
         payload = self.history.currentData()
-        self.output.setPlainText(result_text(payload) if payload else "No calculation saved for this run yet.")
+        if payload:
+            self.output.display(result_view(payload))
+        else:
+            self.output.show_message("No calculation saved for this run yet.")
 
     def calculate(self):
         directory = self.runs.currentData()
@@ -187,8 +283,8 @@ class CalculationsPanel(QWidget):
                 self.status.setText("Result saved for the previously selected run.")
                 return
             self.load_history()
-            self.output.setPlainText(result_text(payload))
-            self.status.setText("Result saved; the recording was not changed.")
+            self.output.display(result_view(payload))
+            self.status.setText("Result saved.")
 
         references = self.reference_values()
         self._submit(lambda: calculate_run(directory, key, references=references), calculated)

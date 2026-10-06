@@ -185,92 +185,142 @@ def saved_results(directory):
     return sorted(entries, key=lambda result: result.get("created_at", ""), reverse=True)
 
 
-def result_text(payload):
-    result = payload["result"]
-    kind = payload["calculation_id"]
-    def number(value):
-        return f"{value:.5g}" if value is not None else "unavailable"
+def _number(value, digits=5):
+    return f"{value:.{digits}g}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "—"
 
-    if kind in {"gravimetry", "dead_volume", "viscosity"}:
-        lines = [f"{CALCULATIONS[kind]['label']}: {result['status']}"]
-        if kind == "gravimetry":
-            for channel, unit in result["units"].items():
-                lines += ["", f"{FLUIDIC_CHANNEL_LABELS[int(channel)]} (channel {channel}): {unit['status']}",
-                          f"Recorded-flow multiplier: {number(unit['multiplier'])}",
-                          "STEP | MASS-DERIVED (µL) | RECORDED (µL) | MULTIPLIER"]
-                lines += [f"{s['step']} | left out: {s['left_out']}" if s.get("left_out") else
-                          f"{s['step']} | {number(s['true_volume_ul'])} | {number(s['recorded_volume_ul'])} | "
-                          f"{number(s['multiplier'])}" for s in unit["samples"]]
-                suggestion = unit.get("suggested_correction")
-                if suggestion:
-                    low, high = suggestion["range_ul_min"]
-                    titles = {"current": "Keep current", "scale": "Scale only", "square": "Scale + square"}
-                    for name in (suggestion["recommended"], *(k for k in suggestion["options"] if k != suggestion["recommended"])):
-                        option = suggestion["options"][name]
-                        lines.append(f"{'Suggested' if name == suggestion['recommended'] else 'Alternative'}: "
-                                     f"{titles[name]} ({suggestion['table']} table) — Scale {option['scale']:.5g} · "
-                                     f"Square {option['square']:.5g} · Cube {option['cube']:.5g}; worst error "
-                                     f"{100 * option['worst_error']:.1f} % over {low:.4g}–{high:.4g} µL/min")
-                if unit.get("targets"):
-                    fit = unit.get("flow_fit") or {}
-                    lines += [f"Flow-curve R²: {number(fit.get('r_squared'))}",
-                              f"True Q = {number(fit.get('slope'))} × recorded Q + {number(fit.get('intercept'))} µL/min",
-                              "TARGET | TRUE Q ± REPEAT SD (µL/min) | N | FACTOR | UP/DOWN Δ (%)"]
-                    for row in unit["targets"]:
-                        stats = row["true_flow"]
-                        lines.append(f"{number(row['target_ul_min'])} | {number(stats['mean'])} ± {number(stats['sd'])} | "
-                                     f"{stats['repeats']} | {number(row['multiplier'])} | "
-                                     f"{number(row['up_down_difference_percent'])}")
-                        interval = row["true_flow_repeat_ci95_ul_min"]
-                        if interval:
-                            lines.append(f"  Repeatability 95% CI: {number(interval[0])}–{number(interval[1])} µL/min")
-        elif kind == "dead_volume":
-            interval = result["ci95_ul"]
-            lines += [f"Dead volume: {number(result['volume_ul'])} µL ± {number(result['sd_ul'])} SD "
-                      f"(CV {number(100 * result['cv'])} %)",
-                      f"95% repeatability CI: {number(interval[0])}–{number(interval[1])} µL",
-                      "Entered: " + ", ".join(f"{number(value)}" for value in result["volumes_ul"]) + " µL"]
-        else:
-            lines += [f"Hydraulic resistance: {number(result['resistance_mbar_min_ul'])} mbar·min/µL",
-                      f"Relative viscosity: {number(result['relative_viscosity'])}",
-                      f"Absolute viscosity: {number(result['viscosity_mpa_s'])} mPa·s",
-                      "PASS | RESISTANCE (mbar·min/µL) | P0 (mbar) | R² | SLOPE SE"]
-            lines += [f"{p['pass']} | {number(p['resistance_mbar_min_ul'])} | {number(p['intercept_mbar'])} | "
-                      f"{number(p['r_squared'])} | {number(p['slope_standard_error'])}" for p in result["passes"]]
-            lines += ["STEP | FLOW (µL/min) | PRESSURE (mbar)"]
-            lines += [f"{s['step']} | {number(s['flow_ul_min'])} | {number(s['pressure_mbar'])}"
-                      for s in result["samples"]]
-        lines += ["Total uncertainty: not established", result["note"], *result["issues"]]
-        if result.get("thresholds"):
-            lines.append("Thresholds: " + json.dumps(result["thresholds"]))
-        lines += ["Warning: " + warning for warning in result.get("warnings", [])]
+
+def _fixed(value, places=2):
+    return f"{value:.{places}f}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "—"
+
+
+def _unit(text, unit):
+    return text if text == "—" else f"{text} {unit}"
+
+
+def _percent(value, places=1):
+    return f"{100 * value:.{places}f} %" if isinstance(value, (int, float)) else "—"
+
+
+def _table(title, headers, rows, highlight=None):
+    return {"title": title, "headers": list(headers), "rows": [list(row) for row in rows], "highlight": highlight}
+
+
+def _section(title, status=None, facts=(), tables=(), notes=(), warnings=()):
+    return {"title": title, "status": status, "facts": [list(fact) for fact in facts], "tables": list(tables),
+            "notes": list(notes), "warnings": list(warnings)}
+
+
+def _line(slope, intercept):
+    sign = "−" if intercept < 0 else "+"
+    return f"true = {_number(slope)} × recorded {sign} {_number(abs(intercept), 4)} µL/min"
+
+
+def _gravimetry_unit(channel, unit):
+    title = f"{FLUIDIC_CHANNEL_LABELS[int(channel)]} (channel {channel})"
+    fit = unit.get("flow_fit") or {}
+    facts = [("Flow curve", f"{_line(fit['slope'], fit['intercept'])} · R² {_fixed(fit.get('r_squared'), 4)}"
+              if fit.get("slope") is not None else "—")]
+    tables = []
+    suggestion = unit.get("suggested_correction")
+    if suggestion:
+        names = {"current": "Keep current", "scale": "Scale only", "square": "Scale + square"}
+        order = [suggestion["recommended"], *(k for k in ("current", "scale", "square")
+                                              if k in suggestion["options"] and k != suggestion["recommended"])]
+        low, high = suggestion["range_ul_min"]
+        tables.append(_table(
+            f"Correction for the Rig table · {suggestion['table']} table · {_number(low, 4)}–{_number(high, 4)} µL/min",
+            ("Option", "Scale", "Square (x²)", "Cube (x³)", "Worst error"),
+            [((names[name] + " (suggested)") if name == suggestion["recommended"] else names[name],
+              _number(o["scale"]), _number(o["square"]), _number(o["cube"]), _percent(o["worst_error"]))
+             for name in order for o in [suggestion["options"][name]]], highlight=0))
+    tables.append(_table("Collections", ("#", "Target µL/min", "Weighed µL", "Recorded µL", "Factor", "Note"),
+                         [(s["step"], _number(s["target_ul_min"], 4), _fixed(s["true_volume_ul"], 1),
+                           _fixed(s["recorded_volume_ul"], 1), _fixed(s["multiplier"], 4),
+                           f"left out: {s['left_out']}" if s.get("left_out") else "; ".join(s["issues"]))
+                          for s in unit["samples"]]))
+    if unit.get("targets"):
+        tables.append(_table("Per flow", ("Target µL/min", "True flow µL/min", "N", "Factor", "CV", "Up/down", "95 % CI µL/min"),
+                             [(_number(t["target_ul_min"], 4),
+                               f"{_fixed(t['true_flow']['mean'])} ± {_fixed(t['true_flow']['sd'])}",
+                               t["true_flow"]["repeats"], _fixed(t["multiplier"], 4), _percent(t["repeat_cv"]),
+                               _percent(t["up_down_difference_percent"] / 100 if t["up_down_difference_percent"] is not None else None),
+                               "–".join(_fixed(v) for v in t["true_flow_repeat_ci95_ul_min"])
+                               if t["true_flow_repeat_ci95_ul_min"] else "—")
+                              for t in unit["targets"]]))
+    return _section(title, unit["status"], facts, tables, unit["issues"])
+
+
+def result_view(payload):
+    """A saved result as sections of facts, tables and notes, for showing rather than reading as text."""
+    result, kind = payload["result"], payload["calculation_id"]
+    label = CALCULATIONS.get(kind, {}).get("label", kind)
+    sections = []
+    if kind == "gravimetry":
+        sections.append(_section(label, result["status"],
+                                 [("Liquid", result.get("liquid", "—")),
+                                  ("Density", _unit(_fixed(result.get('density_g_ml'), 4), "g/mL"))]))
+        sections += [_gravimetry_unit(channel, unit) for channel, unit in result["units"].items()]
     elif kind == "fluid_density":
-        value = result.get("density_g_ml")
-        lines = [f"Density: {value:.4f} g/mL" if value is not None else "Density: inconclusive"]
-        for entry in result.get("passes", []):
-            density = entry.get("density_g_ml")
-            lines.append(f"Pass {entry['pass']}: " + (f"{density:.4f} g/mL" if density is not None else "unavailable"))
-        difference = result.get("repeat_difference_percent")
-        if difference is not None:
-            lines.append(f"Pass disagreement: {difference:.2f}%")
-        lines.append(result.get("note", ""))
-        lines.extend(result.get("issues", []))
-        lines.extend("Warning: " + warning for warning in result.get("warnings", []))
-    elif payload["calculation_id"] == "flow_scout":
-        lines = ["Flow scout: " + result["status"], result["note"]]
+        passes = {entry["pass"]: entry for entry in result.get("passes", [])}
+        sections.append(_section(label, result["status"],
+                                 [("Fluid", result.get("fluid_id", "—")),
+                                  ("Density", _unit(_fixed(result.get('density_g_ml'), 4), "g/mL")),
+                                  ("Passes differ", _percent((result.get("repeat_difference_percent") or 0) / 100)
+                                   if result.get("repeat_difference_percent") is not None else "—")],
+                                 [_table("Passes", ("Pass", "Density g/mL", "R²"),
+                                         [(n, _fixed(e.get("density_g_ml"), 4), _fixed(e.get("r_squared"), 4))
+                                          for n, e in sorted(passes.items())]),
+                                  _table("Points", ("Step", "Pass", "Height cm", "Flow µL/min", "Pressure mbar",
+                                                    "Flow SD", "Pressure drift", "Issue"),
+                                         [(p.get("step"), p.get("pass"), _number(p.get("height_cm"), 3),
+                                           _fixed(p.get("flow_mean_ul_min")), _fixed(p.get("pressure_mean_mbar")),
+                                           _fixed(p.get("flow_std_ul_min")), _fixed(p.get("pressure_drift_mbar")),
+                                           "; ".join(p.get("issues", [])))
+                                          for p in result.get("points", [])])],
+                                 result.get("issues", []), result.get("warnings", [])))
+    elif kind == "dead_volume":
+        interval = result.get("ci95_ul") or [None, None]
+        sections.append(_section(label, result["status"],
+                                 [("Dead volume", f"{_fixed(result.get('volume_ul'), 1)} ± {_fixed(result.get('sd_ul'), 1)} µL"),
+                                  ("CV", _percent(result.get("cv"))),
+                                  ("95 % CI", f"{_fixed(interval[0], 1)}–{_fixed(interval[1], 1)} µL")],
+                                 [_table("Entered", ("#", "Volume µL"),
+                                         [(i + 1, _fixed(v, 1)) for i, v in enumerate(result.get("volumes_ul", []))])],
+                                 result.get("issues", [])))
+    elif kind == "viscosity":
+        sections.append(_section(label, result["status"],
+                                 [("Resistance", _unit(_number(result.get('resistance_mbar_min_ul')), "mbar·min/µL")),
+                                  ("Relative viscosity", _number(result.get("relative_viscosity"))),
+                                  ("Viscosity", _unit(_number(result.get('viscosity_mpa_s')), "mPa·s"))],
+                                 [_table("Passes", ("Pass", "Resistance mbar·min/µL", "P0 mbar", "R²", "Slope SE"),
+                                         [(p["pass"], _number(p["resistance_mbar_min_ul"]), _fixed(p["intercept_mbar"]),
+                                           _fixed(p["r_squared"], 4), _number(p["slope_standard_error"], 3))
+                                          for p in result.get("passes", [])]),
+                                  _table("Points", ("Step", "Flow µL/min", "Pressure mbar"),
+                                         [(s["step"], _fixed(s["flow_ul_min"]), _fixed(s["pressure_mbar"]))
+                                          for s in result.get("samples", [])])],
+                                 result.get("issues", []), result.get("warnings", [])))
+    elif kind == "flow_scout":
         recommendation = result.get("recommendation")
-        if recommendation:
-            lines += ["Suggested flows (µL/min): " + ", ".join(f"{v:g}" for v in recommendation["targets_ul_min"]),
-                      f"Settling: {recommendation['settling_s']:g} s; averaging: {recommendation['averaging_s']:g} s",
-                      "Operator approval required; no density protocol is started automatically."]
-        lines += ["\nWINDOW (s) | FLOWS (µL/min) | P0 SD (mbar, forward/reverse) | RESULT"]
-        for fit in result["fits"]:
-            flows = ", ".join(f"{q:g}" for q in fit["usable_targets_ul_min"])
-            errors = "/".join(f"{p['p0_bootstrap_sd_mbar']:.3f}" for p in fit["passes"]) or "unavailable"
-            lines.append(f"{fit['averaging_s']:g} | {flows or 'none'} | {errors} | "
-                         + ("; ".join(fit["issues"]) or "usable"))
-        lines += ["Warning: " + warning for warning in result.get("warnings", [])]
-        lines += ["\nThresholds: " + json.dumps(result["thresholds"], indent=2), *result["issues"]]
+        facts = [("Suggested flows", ", ".join(f"{v:g}" for v in recommendation["targets_ul_min"]) + " µL/min"),
+                 ("Settling / averaging", f"{recommendation['settling_s']:g} s / {recommendation['averaging_s']:g} s")] \
+            if recommendation else [("Suggested flows", "—")]
+        sections.append(_section(label, result["status"], facts,
+                                 [_table("Averaging windows", ("Window s", "Usable flows µL/min", "P0 SD mbar (fwd / rev)", "Result"),
+                                         [(f"{fit['averaging_s']:g}",
+                                           ", ".join(f"{q:g}" for q in fit["usable_targets_ul_min"]) or "none",
+                                           " / ".join(f"{p['p0_bootstrap_sd_mbar']:.3f}" for p in fit["passes"]) or "—",
+                                           "; ".join(fit["issues"]) or "usable")
+                                          for fit in result.get("fits", [])])],
+                                 result.get("issues", []), result.get("warnings", [])))
+    elif kind == "recording_summary":
+        sections.append(_section(label, result["status"], [("Rows", result.get("rows", "—"))],
+                                 [_table("Columns", ("Column", "Samples", "Missing", "Mean", "SD", "Min", "Max"),
+                                         [(name, stats["samples"], stats["missing"], _number(stats["mean"]),
+                                           _number(stats["std"]), _number(stats["min"]), _number(stats["max"]))
+                                          for name, stats in result.get("statistics", {}).items()])]))
     else:
-        lines = [result.get("note", ""), json.dumps(result, indent=2, ensure_ascii=False)]
-    return ("OUTDATED: saved inputs have changed; calculate again.\n\n" if payload.get("outdated") else "") + "\n".join(lines) + "\n\nSaved: " + payload["path"]
+        sections.append(_section(label, result.get("status"), [(key, str(value)) for key, value in result.items()
+                                                               if not isinstance(value, (dict, list))]))
+    return {"outdated": bool(payload.get("outdated")), "saved": payload.get("path", ""),
+            "note": result.get("note", ""), "sections": sections}

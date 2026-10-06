@@ -165,7 +165,7 @@ def calculate(context):
             "thresholds": {"repeat_cv_max": 0.05, "minimum_repeats": 3, "flow_fit_r_squared_min": 0.95},
             "correction_settings": calibration_context(context),
             "note": "Each unit is calculated alone from its own recorded flow and vessels. "
-                    "Multiplier applies to recorded flow, not raw sensor readings. No hardware changes. "
+                    "Factors compare weighed with recorded flow, after the corrections the run used. No hardware changes. "
                     "Before/after weights characterize complete dispenses, including startup and the flow that "
                     "settles after the stop. R² describes the "
                     "recorded-versus-true flow curve, not mass versus time. Per-target 95% intervals use three "
