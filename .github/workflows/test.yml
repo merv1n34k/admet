@@ -1,0 +1,46 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    # The suites run on macOS during development; Qt and the Fluigent simulator
+    # are not yet exercised on Linux.
+    runs-on: macos-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run tests
+        run: |
+          uv sync --locked --extra control
+          make test
+
+  fresh-install:
+    # The newest dependencies the project allows, without the lock file.
+    runs-on: macos-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run tests with unpinned deps
+        run: |
+          rm -f uv.lock
+          uv sync --extra control
+          make test

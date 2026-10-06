@@ -1,9 +1,8 @@
-name: Docs
+name: Deploy docs
 
 on:
   push:
     branches: [master]
-    paths: ["docs/**", ".github/workflows/docs.yml"]
   workflow_dispatch:
 
 permissions:
@@ -11,28 +10,24 @@ permissions:
   pages: write
   id-token: write
 
-# One deployment at a time; a newer push waits rather than cancelling one in flight.
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
   build:
+    # Pages is served from the organisation repository only.
+    if: github.repository == 'YP-Biotech/admet'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docs
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # "last updated" dates come from the git history
       - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
-      - run: bun run build
+      - run: cd docs && bun install --frozen-lockfile && bun run build
         env:
           # Project pages live under /<repository>/.
           DOCS_BASE: /${{ github.event.repository.name }}/
-      - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/.vitepress/dist

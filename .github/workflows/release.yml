@@ -4,18 +4,30 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
-
 jobs:
-  release:
-    # The test suites are run on macOS during development; Qt and the Fluigent
-    # simulator are not yet exercised on Linux runners.
+  test:
+    if: github.repository == 'YP-Biotech/admet'
     runs-on: macos-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv python install 3.12
+        with:
+          python-version: "3.12"
+      - name: Run tests
+        run: |
+          uv sync --locked --extra control
+          make test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
 
       - name: Check the tag matches the package version
         run: |
@@ -27,21 +39,55 @@ jobs:
               sys.exit(f"tag v{sys.argv[1]} does not match the package version {version}")
           PY
 
-      - name: Test
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: |
-          uv sync --locked --extra control
-          make test
-
-      - name: Build
+      - name: Build package
         run: uv build
 
-      - name: Publish the release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          # Re-running updates an existing release instead of failing.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            exit 0
+          fi
           prerelease=""
           case "$GITHUB_REF_NAME" in *-alpha*|*-beta*|*-rc*) prerelease="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes \
             --title "ADMET ${GITHUB_REF_NAME#v}" $prerelease
+
+  publish:
+    # Trusted publishing: pypi.org must list this repository, release.yml and
+    # the "pypi" environment as a publisher for the admet project.
+    needs: github-release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/admet/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
