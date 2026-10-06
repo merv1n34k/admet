@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from admet.ui.backend import DesktopBackend
 from admet.workflows.json_protocol import normalize
+from tests.sdk import needs_fluigent_sdk
 from tests.test_qt_backend import definition
 
 
@@ -55,6 +56,7 @@ class RunMeasurementsTests(unittest.TestCase):
         self.assertEqual(store.measurements(run_id)["revision"], 0)
         self.assertIsNone(store.measurements(run_id)["values"]["after_mg"])
 
+    @needs_fluigent_sdk
     def test_execution_initializes_null_values_and_rerun_is_independent(self):
         self.backend.call("connect_fluidics")
         self.backend.call("apply_corrections")

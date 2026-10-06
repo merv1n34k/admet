@@ -17,7 +17,6 @@ from admet.engines.acquisition.fluidics import (
     HardwareManager,
     PressureChannelInfo,
     SensorChannelInfo,
-    vendored_sdk_python_path,
 )
 from admet.engines.acquisition.fluidics.config import SIM_INSTRUMENTS
 
@@ -94,8 +93,6 @@ class FluidicsSdkTests(unittest.TestCase):
     def test_vendor_folder_stays_out_of_the_packages(self):
         import tomllib
 
-        path = vendored_sdk_python_path()
-        self.assertTrue((path / "Fluigent" / "SDK" / "__init__.py").exists())
         root = Path(__file__).resolve().parents[1]
         build = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["hatch"]["build"]["targets"]
         self.assertIn("src/admet/vendor", build["wheel"]["exclude"])
