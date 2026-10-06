@@ -3,7 +3,7 @@ layout: home
 
 hero:
   name: ADMET
-  text: Microfluidics acquisition and analysis
+  text: Automatic Droplet Management Extended Toolkit
   tagline: Drive a Fluigent rig and camera, record every run, and analyse the results — from one project folder.
   image:
     src: /logo.png

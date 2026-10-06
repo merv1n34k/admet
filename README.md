@@ -5,8 +5,9 @@
 <h1 align="center">ADMET</h1>
 
 <p align="center">
-  Microfluidics acquisition and analysis — drive a Fluigent rig and camera,
-  record every run, and analyse the results from one project folder.
+  <b>Automatic Droplet Management Extended Toolkit</b><br>
+  Drive a Fluigent rig and camera, record every run, and analyse the droplets
+  from one project folder.
 </p>
 
 ---
@@ -98,6 +99,15 @@ Simulation does not validate wiring, liquid calibration or Windows drivers.
 > [!WARNING]
 > Keep the physical emergency stop within reach. ADMET's software stop cannot
 > recover from a blocked SDK, a lost USB link or a power cut.
+
+## Background
+
+ADMET extends the idea of Automated Droplet Measurement (ADM):
+
+> Z. Z. Chong, S. B. Tor, A. M. Gañán-Calvo, Z. J. Chong, N. H. Loh, N.-T. Nguyen, S. H. Tan.
+> Automated droplet measurement (ADM): an enhanced video processing software for rapid droplet
+> measurements. *Microfluidics and Nanofluidics* **20**, 66 (2016).
+> [doi:10.1007/s10404-016-1722-5](https://doi.org/10.1007/s10404-016-1722-5)
 
 ## License
 

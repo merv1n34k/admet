@@ -6,7 +6,7 @@ const base = process.env.DOCS_BASE ?? '/'
 export default defineConfig({
   base,
   title: 'ADMET',
-  description: 'Microfluidics acquisition and analysis: drive the rig, record runs, analyse projects.',
+  description: 'ADMET, the Automatic Droplet Management Extended Toolkit: drive a microfluidics rig, record runs, analyse droplets.',
   cleanUrls: true,
   lastUpdated: true,
   head: [['link', { rel: 'icon', href: `${base}logo.png` }]],

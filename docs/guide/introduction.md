@@ -1,7 +1,7 @@
 # Introduction
 
-ADMET drives a microfluidics rig, records what happens on it, and analyses the
-results. It has three entry points, all from one `admet` command:
+ADMET — the **Automatic Droplet Management Extended Toolkit** — drives a
+microfluidics rig, records what happens on it, and analyses the results. It has three entry points, all from one `admet` command:
 
 | Command | What it does | Touches the rig |
 |---|---|---|
@@ -50,3 +50,13 @@ recorded videos and images.
 - It never guesses missing data. A step that was paused, skipped or recorded
   with gaps is left out or reported, not filled in.
 - It does not replace the physical emergency stop. Keep it within reach.
+
+## Background
+
+ADMET extends the idea of Automated Droplet Measurement (ADM), video processing
+software for rapid droplet measurements:
+
+> Z. Z. Chong, S. B. Tor, A. M. Gañán-Calvo, Z. J. Chong, N. H. Loh, N.-T. Nguyen, S. H. Tan.
+> Automated droplet measurement (ADM): an enhanced video processing software for rapid droplet
+> measurements. *Microfluidics and Nanofluidics* **20**, 66 (2016).
+> [doi:10.1007/s10404-016-1722-5](https://doi.org/10.1007/s10404-016-1722-5)
