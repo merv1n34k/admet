@@ -198,8 +198,19 @@ def result_text(payload):
                 lines += ["", f"{FLUIDIC_CHANNEL_LABELS[int(channel)]} (channel {channel}): {unit['status']}",
                           f"Recorded-flow multiplier: {number(unit['multiplier'])}",
                           "STEP | MASS-DERIVED (µL) | RECORDED (µL) | MULTIPLIER"]
-                lines += [f"{s['step']} | {number(s['true_volume_ul'])} | {number(s['recorded_volume_ul'])} | "
+                lines += [f"{s['step']} | left out: {s['left_out']}" if s.get("left_out") else
+                          f"{s['step']} | {number(s['true_volume_ul'])} | {number(s['recorded_volume_ul'])} | "
                           f"{number(s['multiplier'])}" for s in unit["samples"]]
+                suggestion = unit.get("suggested_correction")
+                if suggestion:
+                    low, high = suggestion["range_ul_min"]
+                    titles = {"current": "Keep current", "scale": "Scale only", "square": "Scale + square"}
+                    for name in (suggestion["recommended"], *(k for k in suggestion["options"] if k != suggestion["recommended"])):
+                        option = suggestion["options"][name]
+                        lines.append(f"{'Suggested' if name == suggestion['recommended'] else 'Alternative'}: "
+                                     f"{titles[name]} ({suggestion['table']} table) — Scale {option['scale']:.5g} · "
+                                     f"Square {option['square']:.5g} · Cube {option['cube']:.5g}; worst error "
+                                     f"{100 * option['worst_error']:.1f} % over {low:.4g}–{high:.4g} µL/min")
                 if unit.get("targets"):
                     fit = unit.get("flow_fit") or {}
                     lines += [f"Flow-curve R²: {number(fit.get('r_squared'))}",

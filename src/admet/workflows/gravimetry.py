@@ -6,7 +6,7 @@ from statistics import mean, stdev
 
 from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_LABELS
 from admet.workflows.calculation_schema import measurement_binding, sample_steps, three_flow_passes
-from admet.workflows.calculation_inputs import settled_after, step_window, trace, volume_ul
+from admet.workflows.calculation_inputs import settled_after, skipped_steps, step_window, trace, volume_ul
 from admet.workflows.json_protocol import per_unit
 
 
@@ -60,7 +60,10 @@ def check(context):
     missing = []
     for unit in unit_configs(context["config"]):
         try:
-            for sample in unit["samples"]:
+            used = [s for s in unit["samples"] if not left_out(context, s, set())]
+            if not used:
+                raise ValueError(f"Missing measurement: {unit['samples'][0]['after']}")
+            for sample in used:
                 for key in ("before", "after"):
                     measurement(context, sample[key])
             return
@@ -117,9 +120,11 @@ def linear_fit(x, y):
 def flow_curve(rows, issues):
     groups = []
     for target in sorted({row["target_ul_min"] for row in rows}):
-        samples = [row for row in rows if row["target_ul_min"] == target and not row["issues"]]
+        samples = [row for row in rows if row["target_ul_min"] == target and not row["issues"] and not row["left_out"]]
         stats = repeat_statistics([row["true_flow_ul_min"] for row in samples])
-        if len(samples) != 3:
+        # Three collections per target, fewer only by those left out, and never under two.
+        expected = 3 - sum(bool(row["left_out"]) for row in rows if row["target_ul_min"] == target)
+        if len(samples) != 3 and (len(samples) != expected or len(samples) < 2):
             issues.append(f"{target:g} µL/min: three valid independent collections required")
         cv = stats["sd"] / stats["mean"] if stats["sd"] is not None and stats["mean"] > 0 else None
         if cv is not None and cv > 0.05:
@@ -137,7 +142,8 @@ def flow_curve(rows, issues):
     fit = None
     if not issues:
         try:
-            fit = linear_fit([row["recorded_flow_ul_min"] for row in rows], [row["true_flow_ul_min"] for row in rows])
+            used = [row for row in rows if not row["left_out"]]
+            fit = linear_fit([row["recorded_flow_ul_min"] for row in used], [row["true_flow_ul_min"] for row in used])
             if fit["slope"] <= 0 or fit["r_squared"] < 0.95:
                 issues.append("Calibration curve requires positive slope and R² >= 0.95")
         except ValueError as exc:
@@ -168,15 +174,29 @@ def calculate(context):
                     "retained droplets add uncertainty. A flow-dependent correction must not be averaged away."}
 
 
+def left_out(context, sample, skipped):
+    """Why a collection is not used: skipped during the run, or no mass entered after it."""
+    if sample["step"] in skipped:
+        return "skipped in the run"
+    if context["measurements"]["values"].get(sample["after"]) is None:
+        return "no mass entered after it"
+    return None
+
+
 def unit_result(context, config, rho):
     rows, issues, factors = [], [], []
+    skipped = skipped_steps(context)
     for sample in config["samples"]:
         step = context["summary"]["steps"][sample["step"] - 1]
         result = {"step": sample["step"], "pass": sample.get("pass"),
                   "target_ul_min": step["flow_setpoints_ul_min"][str(config["channel"])],
                   "true_flow_ul_min": None, "recorded_flow_ul_min": None,
                   "true_volume_ul": None, "recorded_volume_ul": None,
-                  "multiplier": None, "issues": []}
+                  "multiplier": None, "left_out": left_out(context, sample, skipped), "issues": []}
+        if result["left_out"]:
+            # Left out and listed, not held against the result.
+            rows.append(result)
+            continue
         try:
             masses = [measurement(context, sample[key]) *
                       (1000 if context["measurements"]["fields"][sample[key]]["unit"] == "g" else 1)
@@ -205,7 +225,73 @@ def unit_result(context, config, rho):
     stats = repeat_statistics(factors)
     curve = flow_curve(rows, issues)
     scalar_ok = factors and max(factors) - min(factors) <= 0.05 * stats["mean"]
-    return {"status": "usable" if len(factors) >= 2 and not issues else "inconclusive",
+    usable = len(factors) >= 2 and not issues
+    return {"status": "usable" if usable else "inconclusive",
             "channel": config["channel"], "samples": rows,
-            "multiplier": stats["mean"] if len(factors) >= 2 and not issues and scalar_ok else None,
-            **curve, "issues": issues, "calibration_identity": calibration_identity(context, config["channel"])}
+            "multiplier": stats["mean"] if usable and scalar_ok else None,
+            **curve, "issues": issues, "calibration_identity": calibration_identity(context, config["channel"]),
+            "suggested_correction": suggest_correction(context, config["channel"], rows) if usable else None}
+
+
+def raw_reading(value, terms):
+    """The table reading the unit turned into value with its terms a·x + b·x² + c·x³ (x ≥ 0)."""
+    a, b, c = terms
+    if not b and not c:
+        return value / a
+    reported = lambda x: a * x + b * x * x + c * x ** 3
+    low, high = 0.0, max(1.0, abs(value))
+    for _ in range(60):
+        if reported(high) >= value:
+            break
+        high *= 2
+    for _ in range(100):
+        middle = (low + high) / 2
+        low, high = (middle, high) if reported(middle) < value else (low, middle)
+    return (low + high) / 2
+
+
+def suggest_correction(context, channel, rows):
+    """Terms for the unit's own correction, so it reports the weighed flow over the range measured."""
+    from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNELS
+
+    settings = calibration_context(context) or {}
+    prefix = FLUIDIC_CHANNELS[channel][0] if channel < len(FLUIDIC_CHANNELS) else None
+    keys = [f"{prefix}_{key}" for key in ("scale", "offset", "quadratic")]
+    if prefix is None or any(type(settings.get(key)) not in (int, float) for key in keys) or not settings[keys[0]]:
+        return None
+    terms = [settings[key] for key in keys]
+    points = [(raw_reading(row["recorded_flow_ul_min"], terms), row["true_flow_ul_min"])
+              for row in rows if not row["left_out"] and not row["issues"]]
+    if len(points) < 3 or any(x <= 0 or y <= 0 for x, y in points):
+        return None
+
+    def worst(model):
+        return max(abs(model(x) - y) / y for x, y in points)
+
+    sxx = sum(x * x for x, _ in points)
+    scale = sum(x * y for x, y in points) / sxx
+    s3, s4 = sum(x ** 3 for x, _ in points), sum(x ** 4 for x, _ in points)
+    sxy, sxxy = sum(x * y for x, y in points), sum(x * x * y for x, y in points)
+    det = sxx * s4 - s3 * s3
+    options = {"scale": {"scale": scale, "square": 0.0, "cube": 0.0, "worst_error": worst(lambda x: scale * x)}}
+    if det > 0:
+        a, b = (sxy * s4 - sxxy * s3) / det, (sxx * sxxy - s3 * sxy) / det
+        options["square"] = {"scale": a, "square": b, "cube": 0.0, "worst_error": worst(lambda x: a * x + b * x * x)}
+    a0, b0, c0 = terms
+    options["current"] = {"scale": a0, "square": b0, "cube": c0,
+                          "worst_error": worst(lambda x: a0 * x + b0 * x * x + c0 * x ** 3)}
+    # Keep what the run used unless a change is clearly better; over a narrow range many
+    # scale/square pairs draw nearly the same curve. A curve only when one scale misses
+    # by over 2 % somewhere and the curve does clearly better.
+    best = min(option["worst_error"] for option in options.values())
+    curve = options.get("square")
+    if options["current"]["worst_error"] <= best + 0.01:
+        recommended = "current"
+    elif (curve and options["scale"]["worst_error"] > 0.02
+          and curve["worst_error"] < options["scale"]["worst_error"] - 0.005):
+        recommended = "square"
+    else:
+        recommended = "scale"
+    return {"table": settings.get(f"{prefix}_calibration"), "recommended": recommended, "options": options,
+            "range_ul_min": [min(y for _, y in points), max(y for _, y in points)],
+            "from_terms": dict(zip(("scale", "square", "cube"), terms))}

@@ -123,6 +123,12 @@ def _origin(context):
     return origin
 
 
+def skipped_steps(context):
+    """The one-based steps the operator skipped during the run."""
+    events = [json.loads(line) for line in (context["directory"] / "events.jsonl").read_text().splitlines() if line]
+    return {e["step_index"] + 1 for e in events if e.get("outcome") == "skipped" and type(e.get("step_index")) is int}
+
+
 def _step_events(context, step):
     events = [json.loads(line) for line in (context["directory"] / "events.jsonl").read_text().splitlines() if line]
     return [e for e in events if e.get("step_name") and e.get("step_index") == step - 1]

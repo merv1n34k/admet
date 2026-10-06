@@ -137,15 +137,65 @@ class MetrologyTests(unittest.TestCase):
         self.assertIsNone(result["multiplier"])
         self.assertIn("did not settle", result["samples"][0]["issues"][0])
 
-    def test_gravimetry_missing_and_invalid_collection_never_produces_a_correction(self):
+    def test_gravimetry_leaves_out_a_collection_without_its_after_mass(self):
         directory = archive(self.tmp.name, "gravimetry")
         path = directory / "measurements.json"
         payload = json.loads(path.read_text())
         payload["values"]["mass_after_ch1_1"] = None
         write_json(path, payload)
+        self.assertEqual(calculation_readiness(directory, "gravimetry"), "")
+        result = calculate_run(directory, "gravimetry")["result"]["units"]["1"]
+        self.assertEqual(result["samples"][0]["left_out"], "no mass entered after it")
+        self.assertEqual((result["status"], [t["true_flow"]["repeats"] for t in result["targets"]]), ("usable", [2, 3, 3]))
+        payload["values"]["mass_after_ch1_6"] = None                       # a second one at 15 µL/min
+        write_json(path, payload)
+        result = calculate_run(directory, "gravimetry")["result"]["units"]["1"]
+        self.assertEqual(result["status"], "inconclusive")
+        self.assertIsNone(result["multiplier"])
+
+    def test_gravimetry_suggests_the_unit_s_own_correction_terms(self):
+        from admet.workflows.gravimetry import raw_reading
+
+        # The archive's rig applied IPA x2.25 and the weighed flow is 1.2x the recorded one.
+        result = calculate_run(archive(self.tmp.name, "gravimetry"), "gravimetry")["result"]["units"]["1"]
+        suggestion = result["suggested_correction"]
+        self.assertEqual((suggestion["table"], suggestion["recommended"]), ("IPA", "scale"))
+        self.assertAlmostEqual(suggestion["options"]["scale"]["scale"], 2.25 * 1.2, places=2)
+        self.assertLess(suggestion["options"]["scale"]["worst_error"], 0.01)
+        self.assertAlmostEqual(suggestion["options"]["current"]["worst_error"], 1 - 1 / 1.2, places=2)
+        # A unit that already reports a·x + b·x² is read back to its table reading x.
+        self.assertAlmostEqual(raw_reading(0.739 * 65 + 0.0127 * 65 ** 2, (0.739, 0.0127, 0.0)), 65, places=6)
+
+    def test_gravimetry_leaves_out_a_collection_skipped_during_the_run(self):
+        directory = archive(self.tmp.name, "gravimetry")
+        events = [json.loads(line) for line in (directory / "events.jsonl").read_text().splitlines()]
+        for event in events:
+            if event["step_index"] == 7:                                     # collection 8
+                event["outcome"] = "skipped"
+        (directory / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+        path = directory / "measurements.json"
+        payload = json.loads(path.read_text())
+        payload["values"].update(mass_before_ch1_8=None, mass_after_ch1_8=None)
+        write_json(path, payload)
+        result = calculate_run(directory, "gravimetry")["result"]["units"]["1"]
+        self.assertEqual(result["samples"][7]["left_out"], "skipped in the run")
+        self.assertEqual(result["status"], "usable")
+
+    def test_gravimetry_missing_and_invalid_collection_never_produces_a_correction(self):
+        directory = archive(self.tmp.name, "gravimetry")
+        path = directory / "measurements.json"
+        payload = json.loads(path.read_text())
+        payload["values"]["mass_before_ch1_1"] = None                      # weighed after, not before
+        write_json(path, payload)
         self.assertIn("Missing measurement", calculation_readiness(directory, "gravimetry"))
         with self.assertRaises(ValueError):
             calculate_run(directory, "gravimetry")
+        payload["values"] = {key: None for key in payload["values"]} | {"density_g_ml": 1.6}
+        write_json(path, payload)
+        self.assertIn("Missing measurement", calculation_readiness(directory, "gravimetry"))
+        directory = archive(self.tmp.name, "gravimetry", run_id="invalid")
+        path = directory / "measurements.json"
+        payload = json.loads(path.read_text())
         payload["values"]["mass_after_ch1_1"] = 900
         write_json(path, payload)
         result = calculate_run(directory, "gravimetry")["result"]["units"]["1"]
@@ -203,7 +253,7 @@ class MetrologyTests(unittest.TestCase):
         directory = archive(self.tmp.name, "gravimetry", parameters={"units": "111"})
         path = directory / "measurements.json"
         payload = json.loads(path.read_text())
-        payload["values"]["mass_after_ch2_4"] = None
+        payload["values"]["mass_after_ch2_4"] = payload["values"]["mass_before_ch2_4"]   # nothing collected
         write_json(path, payload)
         self.assertEqual(calculation_readiness(directory, "gravimetry"), "")
         result = calculate_run(directory, "gravimetry")["result"]
