@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "admet"
-version = "0.1.0"
+version = "0.1.0-beta"
 description = "Unified microfluidics acquisition and analysis workflow system"
 requires-python = ">=3.12,<3.13"
 license = "AGPL-3.0-only"
