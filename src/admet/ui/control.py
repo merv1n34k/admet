@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 import numpy as np
 from PySide6.QtCore import QEvent, QLocale, QObject, QRect, QSettings, QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -104,8 +104,13 @@ def run_control_app(api: AdmetAPI, argv: list[str] | None = None) -> int:
     app = QApplication.instance()
     owns_app = app is None
     if app is None:
+        if sys.platform == "win32":
+            # Otherwise Windows groups the window under python.exe and shows its icon.
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("admet.control")
         app = QApplication(argv if argv is not None else sys.argv[:1])
     app.setStyleSheet(ui.stylesheet())
+    app.setWindowIcon(QIcon(ui.asset("logo.png")))
 
     window = ControlWindow(api)
     window.show()

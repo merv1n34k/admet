@@ -552,3 +552,15 @@ class DesktopBackendTests(unittest.TestCase):
             "assert 'admet.core.control' not in sys.modules",
         ], capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class AppIconTests(unittest.TestCase):
+    def test_the_app_ships_its_logo_with_transparent_corners(self):
+        from PySide6.QtGui import QImage
+        from admet.ui import theme
+
+        image = QImage(theme.asset("logo.png"))
+        self.assertFalse(image.isNull())
+        self.assertTrue(image.hasAlphaChannel())
+        self.assertEqual(image.pixelColor(0, 0).alpha(), 0)
+        self.assertEqual(image.pixelColor(256, 256).alpha(), 255)
