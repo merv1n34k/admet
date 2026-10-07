@@ -21,6 +21,7 @@ make dev       # run admet control
 | `make lint` / `make fmt` | Ruff check / format |
 | `make docs-dev` | Serve this documentation locally |
 | `make docs-build` | Build the documentation site |
+| `make publish-upstream [TAG=v…]` | Push master to the YP-Biotech repository; with `TAG`, also tag a release |
 | `make clean` | Remove build and cache folders |
 
 Tests use the Fluigent simulator and mocked cameras; no physical device is
