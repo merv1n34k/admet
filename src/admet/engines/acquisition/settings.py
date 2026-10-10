@@ -6,7 +6,7 @@ from admet.engines.acquisition.fluidics.config import (
     FLUIDIC_CHANNELS,
     SENSOR_CALIBRATIONS,
 )
-from admet.engines.acquisition.fluidics.liquids import default_profile_id, profiles_for_unit
+from admet.engines.acquisition.fluidics.liquids import default_profile_id, default_profiles
 
 MANUAL_STOPS = ("none", "volume", "time", "flow_above", "flow_below", "pressure_above", "pressure_below")
 
@@ -108,7 +108,7 @@ FLUIGENT_SETTINGS = ParamSchema(
 )
 
 def _profile_options(unit: str) -> tuple[ParamOption, ...]:
-    return tuple(ParamOption(profile.id, profile.name) for profile in profiles_for_unit(unit))
+    return tuple(ParamOption(profile.id, profile.name) for profile in default_profiles() if profile.unit == unit)
 
 
 CORRECTION_SETTINGS = ParamSchema(
@@ -118,7 +118,7 @@ CORRECTION_SETTINGS = ParamSchema(
         for param in (
             Param(
                 f"{prefix}_profile",
-                f"{label} Liquid",
+                f"{label} Profile",
                 ParamKind.CHOICE,
                 default=default_profile_id(
                     prefix, FLUIDIC_CHANNEL_UNITS[prefix], calibration, scale

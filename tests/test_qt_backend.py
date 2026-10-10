@@ -37,8 +37,7 @@ class DesktopBackendTests(unittest.TestCase):
         self.backend.call("apply_corrections")
 
     def test_calibration_is_kept_in_the_project(self):
-        saved = {"cells_m": {"profile": "water_m", "liquids": {"water_m": {
-            "calibration": "H2O", "scale": 1.07, "offset": 0.0, "quadratic": 0.0, "updated_at": "2026-10-02T20:00:00"}}}}
+        saved = {"cells_m": {"profile": "water_m", "dead_volume_ul": 85.0}}
         self.backend.save_calibration(saved)
 
         reopened = DesktopBackend(simulated=True)
@@ -46,26 +45,43 @@ class DesktopBackendTests(unittest.TestCase):
         reopened.open_project(Path(self.tmp.name) / "desktop.admetp")
         self.assertEqual(reopened.calibration, saved)
 
-    def test_added_liquids_are_kept_in_the_project(self):
-        entry = self.backend.add_liquid("dSurf", "M", "H2O", 1.0, 1.1)
+    def test_liquids_and_profiles_are_kept_in_the_project(self):
+        liquid = self.backend.add_liquid("dSurf", 1.61, 1.24)
+        profile = self.backend.add_profile(name="L dSurf", liquid=liquid["id"], unit="L", calibration="IPA",
+                                           scale=0.739, square=0.0127)
 
         reopened = DesktopBackend(simulated=True)
         self.addCleanup(reopened.shutdown)
         reopened.open_project(Path(self.tmp.name) / "desktop.admetp")
-        self.assertEqual(reopened.liquids, [entry])
-        self.assertEqual(self.backend.add_liquid("dSurf", "M", "H2O", 1.0)["id"], "dsurf_m_2")
+        self.assertEqual((reopened.liquids, reopened.profiles), ([liquid], [profile]))
+        self.assertEqual(profile["cube"], 0.0)
+        self.assertEqual(self.backend.add_liquid("dSurf", 1.6)["id"], "dsurf_2")
+        self.assertEqual(self.backend.add_liquid("Water", 0.993)["id"], "water_2")   # a default is called water
 
-    def test_a_project_liquid_is_edited_in_place(self):
-        entry = self.backend.add_liquid("New liquid", "M", "H2O", 1.0, 1.0)
-        edited = self.backend.update_liquid(entry["id"], name="dSurf", density=1.02)
-
-        self.assertEqual((edited["id"], edited["name"], edited["density"]), (entry["id"], "dSurf", 1.02))
-        self.assertEqual(self.backend.liquids, [edited])
+    def test_project_entries_are_edited_and_removed_but_not_while_in_use(self):
+        liquid = self.backend.add_liquid("New liquid", 1.0, 1.0)
+        edited = self.backend.update_liquid(liquid["id"], name="Buffer", density=1.02)
+        self.assertEqual((edited["id"], edited["name"], edited["density"]), (liquid["id"], "Buffer", 1.02))
         with self.assertRaises(ValueError):
-            self.backend.update_liquid(entry["id"], density=0)
-        self.backend.save_calibration({"cells_m": {"profile": entry["id"], "liquids": {}}})
+            self.backend.update_liquid(liquid["id"], density=0)
+
+        profile = self.backend.add_profile(name="M1 buffer", liquid=liquid["id"], unit="M", calibration="H2O", scale=1)
+        with self.assertRaisesRegex(ValueError, "Choose a liquid"):
+            self.backend.add_profile(name="x", liquid="unknown", unit="M", calibration="H2O", scale=1)
+        with self.assertRaisesRegex(ValueError, "uses this liquid"):
+            self.backend.remove_liquid(liquid["id"])
+        self.backend.save_calibration({"cells_m": {"profile": profile["id"]}})
         with self.assertRaisesRegex(ValueError, "in use"):
-            self.backend.update_liquid(entry["id"], unit="L")    # Cells M is an M channel
+            self.backend.update_profile(profile["id"], unit="L")    # Cells M is an M channel
+        with self.assertRaisesRegex(ValueError, "A channel uses"):
+            self.backend.remove_profile(profile["id"])
+
+        self.backend.save_calibration({"cells_m": {"profile": "water_m"}})
+        self.backend.remove_profile(profile["id"])
+        self.backend.remove_liquid(liquid["id"])
+        self.assertEqual((self.backend.liquids, self.backend.profiles), ([], []))
+        with self.assertRaises(ValueError):
+            self.backend.remove_profile("water_m")                 # defaults are not the project's
 
     def test_preflight_save_replaces_the_checkup_and_keeps_other_metadata(self):
         from dataclasses import replace

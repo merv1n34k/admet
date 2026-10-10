@@ -50,43 +50,106 @@ class DesktopBackend:
 
     @property
     def liquids(self):
-        """Liquids added in this project, as profile entries."""
+        """Liquids added in this project; the defaults are not listed here."""
         entries = self.session.metadata.get("liquids") if self.session else None
         return list(entries) if isinstance(entries, list) else []
 
-    def add_liquid(self, name, unit, calibration, density, viscosity=0.0):
-        from admet.engines.acquisition.fluidics.liquids import load_profiles, new_liquid
+    @property
+    def profiles(self):
+        """Correction profiles added in this project; the defaults are not listed here."""
+        entries = self.session.metadata.get("profiles") if self.session else None
+        return list(entries) if isinstance(entries, list) else []
 
-        project = self.service.project
-        if project is None:
-            raise RuntimeError("Open a project before adding a liquid")
+    def _project(self, doing):
+        if self.service.project is None:
+            raise RuntimeError(f"Open a project before {doing}")
+        return self.service.project
+
+    def _all_liquid_ids(self):
+        from admet.engines.acquisition.fluidics.liquids import default_liquids
+
+        return {liquid.id for liquid in default_liquids()} | {entry.get("id") for entry in self.liquids}
+
+    def _all_profile_ids(self):
+        from admet.engines.acquisition.fluidics.liquids import default_profiles
+
+        return {profile.id for profile in default_profiles()} | {entry.get("id") for entry in self.profiles}
+
+    def add_liquid(self, name, density, viscosity=0.0):
+        from admet.engines.acquisition.fluidics.liquids import check_liquid, unique_id
+
+        project = self._project("adding a liquid")
         with project.lock:
-            taken = {profile.id for profile in load_profiles()} | {entry.get("id") for entry in self.liquids}
-            entry = new_liquid(name, unit, calibration, density, viscosity, taken)
+            entry = check_liquid({"name": name, "density": density, "viscosity": viscosity})
+            entry.update(id=unique_id(entry["name"], self._all_liquid_ids()), updated_at=_now())
             project.update_metadata(liquids=[*self.liquids, entry])
             return entry
 
     def update_liquid(self, liquid_id, **changes):
-        from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_UNITS
         from admet.engines.acquisition.fluidics.liquids import check_liquid
 
-        project = self.service.project
-        if project is None:
-            raise RuntimeError("Open a project before editing a liquid")
+        project = self._project("editing a liquid")
         with project.lock:
             liquids = self.liquids
             index = next((i for i, entry in enumerate(liquids) if entry.get("id") == liquid_id), None)
             if index is None:
                 raise ValueError(f"{liquid_id} is not a liquid of this project")
-            entry = check_liquid({**liquids[index], **changes})
-            in_use = [prefix for prefix, channel in self.calibration.items()
-                      if isinstance(channel, dict) and channel.get("profile") == liquid_id
-                      and FLUIDIC_CHANNEL_UNITS.get(prefix) != entry["unit"]]
-            if in_use:
-                raise ValueError(f"{entry['name']} is in use on a {FLUIDIC_CHANNEL_UNITS[in_use[0]]} channel")
-            liquids[index] = entry
+            liquids[index] = {**check_liquid({**liquids[index], **changes}), "updated_at": _now()}
             project.update_metadata(liquids=liquids)
+            return liquids[index]
+
+    def remove_liquid(self, liquid_id):
+        project = self._project("removing a liquid")
+        with project.lock:
+            liquids = [entry for entry in self.liquids if entry.get("id") != liquid_id]
+            if len(liquids) == len(self.liquids):
+                raise ValueError(f"{liquid_id} is not a liquid of this project")
+            users = [entry.get("name") for entry in self.profiles if entry.get("liquid") == liquid_id]
+            if users:
+                raise ValueError(f"Profile {users[0]} uses this liquid; remove or change it first")
+            project.update_metadata(liquids=liquids)
+
+    def add_profile(self, **fields):
+        from admet.engines.acquisition.fluidics.liquids import check_profile, unique_id
+
+        project = self._project("adding a profile")
+        with project.lock:
+            entry = check_profile(fields, self._all_liquid_ids())
+            entry.update(id=unique_id(entry["name"], self._all_profile_ids()), updated_at=_now())
+            project.update_metadata(profiles=[*self.profiles, entry])
             return entry
+
+    def update_profile(self, profile_id, **changes):
+        from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_UNITS
+        from admet.engines.acquisition.fluidics.liquids import channel_profile, check_profile
+
+        project = self._project("editing a profile")
+        with project.lock:
+            profiles = self.profiles
+            index = next((i for i, entry in enumerate(profiles) if entry.get("id") == profile_id), None)
+            if index is None:
+                raise ValueError(f"{profile_id} is not a profile of this project")
+            entry = {**check_profile({**profiles[index], **changes}, self._all_liquid_ids()), "updated_at": _now()}
+            wrong_unit = [prefix for prefix, unit in FLUIDIC_CHANNEL_UNITS.items()
+                          if channel_profile(self.calibration, prefix) == profile_id and unit != entry["unit"]]
+            if wrong_unit:
+                raise ValueError(f"{entry['name']} is in use on a {FLUIDIC_CHANNEL_UNITS[wrong_unit[0]]} channel")
+            profiles[index] = entry
+            project.update_metadata(profiles=profiles)
+            return entry
+
+    def remove_profile(self, profile_id):
+        from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_UNITS
+        from admet.engines.acquisition.fluidics.liquids import channel_profile
+
+        project = self._project("removing a profile")
+        with project.lock:
+            profiles = [entry for entry in self.profiles if entry.get("id") != profile_id]
+            if len(profiles) == len(self.profiles):
+                raise ValueError(f"{profile_id} is not a profile of this project")
+            if any(channel_profile(self.calibration, prefix) == profile_id for prefix in FLUIDIC_CHANNEL_UNITS):
+                raise ValueError("A channel uses this profile; choose another on the Rig first")
+            project.update_metadata(profiles=profiles)
 
     def set_acquisition_mode(self, mode):
         if mode not in {"fluidics_only", "camera_fluidics"}:
@@ -244,3 +307,10 @@ class DesktopBackend:
     def plan_file(self, path):
         with self.lock:
             return self.service.plan_protocol_file(str(Path(path)))
+
+
+def _now():
+    """When a liquid or profile was last changed, to the second, local time."""
+    from datetime import datetime
+
+    return datetime.now().isoformat(timespec="seconds")

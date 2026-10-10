@@ -401,8 +401,8 @@ class MetrologyTests(unittest.TestCase):
         sections = result_view(result)["sections"]
         self.assertEqual([s["title"] for s in sections], ["Gravimetry", "Cells M (channel 1)"])
         tables = {t["title"].split(" ·")[0]: t for t in sections[1]["tables"]}
-        self.assertEqual(list(tables), ["Correction for the Rig table", "Collections", "Per flow"])
-        self.assertEqual((tables["Correction for the Rig table"]["rows"][0][0], tables["Correction for the Rig table"]["highlight"]),
+        self.assertEqual(list(tables), ["Correction for a profile", "Collections", "Per flow"])
+        self.assertEqual((tables["Correction for a profile"]["rows"][0][0], tables["Correction for a profile"]["highlight"]),
                          ("Scale only (suggested)", 0))
         self.assertEqual(len(tables["Collections"]["rows"]), 9)
         copied = Path(self.tmp.name) / "copied"

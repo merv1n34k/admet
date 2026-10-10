@@ -36,9 +36,9 @@ True flow is fitted against recorded flow over all collections:
 **true = slope × recorded + intercept**. The fit needs a positive slope and
 R² ≥ 0.95.
 
-## Correction for the Rig table
+## Correction for a profile
 
-Each unit suggests the terms to enter on the [Calibration](../control/calibration)
+Each unit suggests the terms to enter in a profile on the [Calibration](../control/calibration)
 page, so the unit itself reports the weighed flow.
 
 1. The run's own terms are undone to recover each collection's raw table reading.

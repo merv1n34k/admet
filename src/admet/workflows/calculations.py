@@ -228,7 +228,7 @@ def _gravimetry_unit(channel, unit):
                                               if k in suggestion["options"] and k != suggestion["recommended"])]
         low, high = suggestion["range_ul_min"]
         tables.append(_table(
-            f"Correction for the Rig table · {suggestion['table']} table · {_number(low, 4)}–{_number(high, 4)} µL/min",
+            f"Correction for a profile · {suggestion['table']} table · {_number(low, 4)}–{_number(high, 4)} µL/min",
             ("Option", "Scale", "Square (x²)", "Cube (x³)", "Worst error"),
             [((names[name] + " (suggested)") if name == suggestion["recommended"] else names[name],
               _number(o["scale"]), _number(o["square"]), _number(o["cube"]), _percent(o["worst_error"]))

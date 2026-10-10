@@ -1,84 +1,27 @@
 {
   "_comment": [
-    "Liquid profiles for the Fluigent flow units. Edit this file by hand; admet reads",
-    "it at startup and ships it as part of the package.",
+    "Default liquids and correction profiles, shown in every project and not editable",
+    "there; editing one in the app creates a project copy below the defaults.",
     "",
-    "unit         which flow unit the profile is for: 'L' or 'M'. A channel is only",
-    "             offered profiles matching the unit it carries.",
-    "calibration  Fluigent sensor calibration table (see SENSOR_CALIBRATIONS).",
-    "scale        proportional term of the sensor custom scale, i.e. the correction",
-    "             factor: true_flow = scale * sensor_reading. Derive it gravimetrically",
-    "             (dispense a target volume, weigh it, divide by the target).",
-    "offset       square term of the custom scale, 0 unless characterised.",
-    "quadratic    cubic term of the custom scale, 0 unless characterised.",
-    "density      g/mL, used to turn a weighed mass into a volume during calibration."
+    "liquids      what a liquid is: density (g/mL) and viscosity (mPa.s).",
+    "profiles     how a flow unit reads a liquid:",
+    "  liquid       id of the liquid it is for.",
+    "  unit         flow unit type, 'L' or 'M'; a channel is offered profiles for its unit.",
+    "  calibration  Fluigent sensor table (see SENSOR_CALIBRATIONS).",
+    "  scale, square, cube   the unit reports scale*x + square*x^2 + cube*x^3, x being",
+    "               its reading on that table."
+  ],
+  "liquids": [
+    {"id": "oil", "name": "Oil", "density": 1.614, "viscosity": 1.24},
+    {"id": "ipa", "name": "IPA", "density": 0.786, "viscosity": 2.04},
+    {"id": "water", "name": "Water", "density": 0.997, "viscosity": 0.89}
   ],
   "profiles": [
-    {
-      "id": "oil_l",
-      "name": "Oil (L)",
-      "unit": "L",
-      "calibration": "IPA",
-      "scale": 2.25,
-      "offset": 0.0,
-      "quadratic": 0.0,
-      "density": 1.614,
-      "viscosity": 1.24
-    },
-    {
-      "id": "ipa_l",
-      "name": "IPA (L)",
-      "unit": "L",
-      "calibration": "IPA",
-      "scale": 1.0,
-      "offset": 0.0,
-      "quadratic": 0.0,
-      "density": 0.786,
-      "viscosity": 2.04
-    },
-    {
-      "id": "water_l",
-      "name": "Water (L)",
-      "unit": "L",
-      "calibration": "H2O",
-      "scale": 1.0,
-      "offset": 0.0,
-      "quadratic": 0.0,
-      "density": 0.997,
-      "viscosity": 0.89
-    },
-    {
-      "id": "oil_m",
-      "name": "Oil (M)",
-      "unit": "M",
-      "calibration": "IPA",
-      "scale": 2.25,
-      "offset": 0.0,
-      "quadratic": 0.0,
-      "density": 1.614,
-      "viscosity": 1.24
-    },
-    {
-      "id": "ipa_m",
-      "name": "IPA (M)",
-      "unit": "M",
-      "calibration": "IPA",
-      "scale": 1.0,
-      "offset": 0.0,
-      "quadratic": 0.0,
-      "density": 0.786,
-      "viscosity": 2.04
-    },
-    {
-      "id": "water_m",
-      "name": "Water (M)",
-      "unit": "M",
-      "calibration": "H2O",
-      "scale": 1.0,
-      "offset": 0.0,
-      "quadratic": 0.0,
-      "density": 0.997,
-      "viscosity": 0.89
-    }
+    {"id": "oil_l", "name": "Oil · L", "liquid": "oil", "unit": "L", "calibration": "IPA", "scale": 2.25, "square": 0.0, "cube": 0.0},
+    {"id": "ipa_l", "name": "IPA · L", "liquid": "ipa", "unit": "L", "calibration": "IPA", "scale": 1.0, "square": 0.0, "cube": 0.0},
+    {"id": "water_l", "name": "Water · L", "liquid": "water", "unit": "L", "calibration": "H2O", "scale": 1.0, "square": 0.0, "cube": 0.0},
+    {"id": "oil_m", "name": "Oil · M", "liquid": "oil", "unit": "M", "calibration": "IPA", "scale": 2.25, "square": 0.0, "cube": 0.0},
+    {"id": "ipa_m", "name": "IPA · M", "liquid": "ipa", "unit": "M", "calibration": "IPA", "scale": 1.0, "square": 0.0, "cube": 0.0},
+    {"id": "water_m", "name": "Water · M", "liquid": "water", "unit": "M", "calibration": "H2O", "scale": 1.0, "square": 0.0, "cube": 0.0}
   ]
 }

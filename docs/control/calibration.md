@@ -7,27 +7,36 @@ flow it reports — and regulates to — is the corrected one.
 
 ## The Calibration page
 
-The **Rig** table has one row per channel:
+The page has three tables.
+
+**Rig** — one row per channel: the **Profile** it uses (only profiles for its flow
+unit type are offered), that profile's sensor table and terms (read-only), and
+the channel's **dead volume** (tubing from source to chip).
+
+**Profiles** — how a flow unit reads a liquid, saved under a name you choose:
 
 | Column | Meaning |
 |---|---|
-| Liquid | The liquid profile active on this channel |
+| Name | e.g. "M1 · Water" or "L · dSurf" |
+| Liquid | The liquid the profile is for |
+| Flow unit | L or M |
 | Sensor table | The flow unit's factory table: `H2O` or `IPA` |
-| Scale | Linear term *a* |
-| Square (x²) | Square term *b* |
-| Cube (x³) | Cube term *c* |
-| Dead volume, µL | Tubing volume from source to chip on this rig |
+| Scale, Square (x²), Cube (x³) | Terms *a*, *b*, *c* |
 
 The flow unit reports **a·x + b·x² + c·x³**, where *x* is its reading on the
 chosen table. A plain scale (b = c = 0) suits liquids whose error is the same at
 every flow; the square term bends the curve when the error grows with flow.
 
-The **Liquids** table holds the project's liquids, so each channel can switch
-between profiles (e.g. water and S+B buffer on M1) without retyping terms.
+**Liquids** — what a liquid is: name, density and viscosity.
 
-Values are saved in the project for each channel and liquid, so a reopened
-project starts calibrated. **Apply All Corrections** sends them to the flow units;
-flow regulation is only available once they are applied.
+Default profiles and liquids are shown first and are locked: editing one adds a
+project copy below the defaults with your change. Project profiles and liquids
+can be renamed, edited and removed — except a profile a channel uses, or a
+liquid a profile uses.
+
+Everything is saved in the project, so a reopened project starts on the same
+profiles. **Apply All Corrections** sends each channel's profile to its flow
+unit; flow regulation is only available once they are applied.
 
 ### What applying checks
 
@@ -56,10 +65,10 @@ with what it recorded. The loop is:
 
 1. Run the [gravimetry template](../protocols/templates#gravimetry) with the
    terms you have (e.g. IPA × 2.25 for an oil on L).
-2. **Calculate** gravimetry. Each unit gets a *Correction for the Rig table* with
+2. **Calculate** gravimetry. Each unit gets a *Correction for a profile* with
    three options — keep current, scale only, scale + square — and their worst
    error over the measured flows. The suggested one is in bold.
-3. Enter the suggested terms on the Rig table and **Apply All Corrections**.
+3. Enter the suggested terms in a profile (or add one), select it for the channel on the Rig, and **Apply All Corrections**.
 4. Run gravimetry again. When the suggestion is **Keep current**, the unit reads
    right with the terms it ran with.
 

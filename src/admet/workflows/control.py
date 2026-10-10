@@ -243,9 +243,9 @@ def create_control_workflow() -> Workflow:
             Stage(
                 "corrections",
                 "3. Calibration",
-                description="Each channel's liquid, sensor calibration table and correction factors for this rig.",
-                instructions=("Values are saved in the project for each channel and liquid, "
-                              "so a reopened project starts calibrated. Apply sends them to the flow units.",),
+                description="The profile and dead volume of each channel, and the profiles and liquids they use.",
+                instructions=("Choose a profile per channel; edit profiles and liquids below. Defaults stay "
+                              "as they are: editing one adds a project copy. Apply sends the profiles to the flow units.",),
                 settings=CORRECTION_SETTINGS,
                 actions=(
                     StageAction(

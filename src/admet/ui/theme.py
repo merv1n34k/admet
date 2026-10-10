@@ -476,6 +476,44 @@ QFrame#TransportButtons QPushButton[roundLeft="true"][roundTop="true"] {{
 QFrame#TransportButtons QPushButton[roundRight="true"][roundTop="true"] {{
     border-top-right-radius: {Theme.RADIUS - 1}px;
 }}
+/* A small pill of joined buttons under a table: Add | Remove. */
+QFrame#PillButtons {{
+    background: {Theme.BG_CONTROL};
+    border: 1px solid {Theme.BORDER_COOL};
+    border-radius: 12px;
+}}
+QFrame#PillSeparator {{
+    background: {Theme.BORDER_COOL};
+    border: 0;
+}}
+QFrame#PillButtons QPushButton {{
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    color: {Theme.TEXT_WHITE};
+    min-height: 22px;
+    max-height: 22px;
+    padding: 0 14px;
+    font-weight: 500;
+}}
+QFrame#PillButtons QPushButton:hover {{
+    background: {Theme.BG_CONTROL_HOVER};
+}}
+QFrame#PillButtons QPushButton:pressed {{
+    background: {Theme.BG_CONTROL_PRESSED};
+}}
+QFrame#PillButtons QPushButton:disabled {{
+    color: {Theme.TEXT_DISABLED};
+    background: transparent;
+}}
+QFrame#PillButtons QPushButton[pillLeft="true"] {{
+    border-top-left-radius: 11px;
+    border-bottom-left-radius: 11px;
+}}
+QFrame#PillButtons QPushButton[pillRight="true"] {{
+    border-top-right-radius: 11px;
+    border-bottom-right-radius: 11px;
+}}
 QLabel#ProcessAction {{
     background: transparent;
     font-weight: 600;
