@@ -14,7 +14,7 @@ from queue import Empty
 from typing import Any, Callable
 
 import numpy as np
-from PySide6.QtCore import QEvent, QLocale, QObject, QRect, QSettings, QSize, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QItemSelectionModel, QLocale, QObject, QRect, QSettings, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -227,8 +227,14 @@ class _RowFocus(QObject):
         if event.type() is QEvent.Type.FocusIn and obj in self._rows:
             # After the focus change: selecting while Qt is still delivering it crashes PySide.
             row = self._rows[obj]
-            QTimer.singleShot(0, self, lambda: self._table.selectRow(row))
+            QTimer.singleShot(0, self, lambda: self._select(row))
         return False
+
+    def _select(self, row: int) -> None:
+        # Not selectRow: that also moves the current cell to the row's first column,
+        # and the table then gives that cell's editor the keyboard focus.
+        flags = QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows
+        self._table.selectionModel().select(self._table.model().index(row, 0), flags)
 
 
 class _WheelGuard(QObject):
