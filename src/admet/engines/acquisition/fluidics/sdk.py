@@ -239,23 +239,28 @@ def vendored_sdk_python_path() -> Path:
     return Path(__file__).resolve().parents[3] / "vendor" / "fgt_sdk" / "Python"
 
 
-def _candidate_sdk_paths() -> list[Path]:
-    candidates = []
+def _ensure_fluigent_sdk_path() -> None:
+    """Put the SDK copy to use first on the import path.
+
+    A folder named in ADMET_FLUIGENT_SDK_PATH wins over every other copy; a wrong
+    folder there is an error, not a silent fallback. Otherwise the vendored copy
+    is used, if installed, and then any Fluigent package already importable.
+    """
     env_path = os.environ.get("ADMET_FLUIGENT_SDK_PATH", "").strip()
     if env_path:
-        candidates.append(Path(env_path).expanduser())
-    candidates.append(vendored_sdk_python_path())
-    return candidates
-
-
-def _ensure_fluigent_sdk_path() -> None:
-    for path in _candidate_sdk_paths():
-        if not (path / "Fluigent" / "SDK").exists():
-            continue
-        path_text = str(path)
-        if path_text not in sys.path:
-            sys.path.insert(0, path_text)
-        return
+        path = Path(env_path).expanduser()
+        if not (path / "Fluigent" / "SDK").is_dir():
+            raise FluigentSDKUnavailableError(
+                f"ADMET_FLUIGENT_SDK_PATH is {path}, which has no Fluigent/SDK folder."
+            )
+    else:
+        path = vendored_sdk_python_path()
+        if not (path / "Fluigent" / "SDK").is_dir():
+            return
+    path_text = str(path)
+    if path_text in sys.path:
+        sys.path.remove(path_text)
+    sys.path.insert(0, path_text)
 
 
 def _import_fluigent_sdk():
@@ -272,3 +277,50 @@ def _configure_sdk_reporting(module) -> None:
     set_mode = getattr(module, "fgt_set_errorReportMode", None)
     if callable(set_mode):
         set_mode("none")
+
+
+FLUIGENT_SDK_VERSION = "24.0.0"
+FLUIGENT_SDK_ARCHIVE = "https://codeload.github.com/Fluigent/fgt-SDK/zip/refs/tags/{version}"
+
+
+def install_sdk(
+    version: str = FLUIGENT_SDK_VERSION,
+    *,
+    target: Path | None = None,
+    force: bool = False,
+    source: str | None = None,
+) -> Path:
+    """Download Fluigent's SDK release from its official GitHub and unpack its Python package.
+
+    Returns the folder to which Fluigent/SDK was written (the vendored folder by default).
+    """
+    import shutil
+    import tempfile
+    import urllib.request
+    import zipfile
+
+    target = target or vendored_sdk_python_path()
+    package = target / "Fluigent"
+    if package.exists() and not force:
+        raise FileExistsError(f"{package} already exists; pass --force to replace it.")
+    url = source or FLUIGENT_SDK_ARCHIVE.format(version=version)
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = Path(tmp) / "fgt-SDK.zip"
+        with urllib.request.urlopen(url, timeout=60) as response, archive.open("wb") as out:
+            shutil.copyfileobj(response, out)
+        unpacked = Path(tmp) / "Fluigent"
+        with zipfile.ZipFile(archive) as bundle:
+            for member in bundle.infolist():
+                parts = Path(member.filename).parts
+                if len(parts) < 4 or parts[1:3] != ("Python", "Fluigent") or member.is_dir():
+                    continue
+                destination = unpacked.joinpath(*parts[3:])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(bundle.read(member))
+        if not (unpacked / "SDK" / "__init__.py").is_file():
+            raise FluigentSDKError(f"{url} has no Python/Fluigent/SDK package.")
+        if package.exists():
+            shutil.rmtree(package)
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(unpacked), package)
+    return target

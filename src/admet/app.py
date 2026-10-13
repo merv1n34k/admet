@@ -33,6 +33,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="an operation or engine id; omit for everything",
     )
 
+    sdk = sub.add_parser(
+        "install-sdk", help="download Fluigent's SDK from its official GitHub into ADMET's vendor folder"
+    )
+    sdk.add_argument("--version", help="an fgt-SDK release tag (default: the one ADMET is tested with)")
+    sdk.add_argument("--force", action="store_true", help="replace an SDK already there")
+
     return parser
 
 
@@ -52,6 +58,18 @@ def main(argv: list[str] | None = None) -> int:
         from admet.core.service import Admet
 
         return _attempt(lambda: Admet().describe(args.target))
+
+    if args.command == "install-sdk":
+        from admet.engines.acquisition.fluidics.sdk import FLUIGENT_SDK_VERSION, install_sdk
+
+        version = args.version or FLUIGENT_SDK_VERSION
+        try:
+            path = install_sdk(version, force=args.force)
+        except Exception as exc:
+            print(f"Could not install the Fluigent SDK {version}: {exc}", file=sys.stderr)
+            return 1
+        print(f"Fluigent SDK {version} installed in {path}")
+        return 0
 
     parser.error(f"unknown command {args.command!r}")
     return 2

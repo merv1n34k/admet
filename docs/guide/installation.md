@@ -50,9 +50,11 @@ Never copy a `.venv` from another machine; sync a fresh one on each PC.
 For live hardware, install the vendor drivers for your instruments:
 
 - **Fluigent** — the controller and flow-unit drivers, and
-  [Fluigent's SDK](https://github.com/Fluigent/fgt-SDK) in the same Python
-  environment. To use an SDK copy elsewhere, set `ADMET_FLUIGENT_SDK_PATH` to its
-  Python folder (the one containing `Fluigent/SDK`).
+  [Fluigent's SDK](https://github.com/Fluigent/fgt-SDK). Install the SDK with
+  `uv run admet install-sdk`, which downloads it from Fluigent's GitHub into
+  ADMET's vendor folder. To use an SDK copy elsewhere instead, set
+  `ADMET_FLUIGENT_SDK_PATH` to its Python folder (the one containing
+  `Fluigent/SDK`); that copy then takes precedence.
 - **Basler** — the pylon runtime for the camera. Only needed for
   *Camera + fluidics* acquisition.
 
