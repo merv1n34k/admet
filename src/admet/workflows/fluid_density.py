@@ -10,6 +10,8 @@ from pathlib import Path
 from statistics import mean, stdev
 from typing import Iterable
 
+from admet.core.engine import Param, ParamKind
+
 GRAVITY_CONVERSION_MBAR_PER_CM_PER_G_ML = 0.980665
 
 
@@ -363,7 +365,13 @@ def _point_statistics(point, step, rows, events, origin, channel):
     return result
 
 
-def analyze_density_run(document, csv_path, events_path, polling_origin, *, completed):
+PARAMETERS = (
+    Param("fit_r_squared_min", "Fit R² min", ParamKind.FLOAT, 0.95, minimum=0.01, maximum=1),
+    Param("repeat_difference_max_percent", "Pass difference max, %", ParamKind.FLOAT, 10.0, minimum=0.1, maximum=100),
+)
+
+
+def analyze_density_run(document, csv_path, events_path, polling_origin, *, completed, parameters=None):
     """Read closed artifacts only. Sensor samples are not independent replicates."""
     from admet.workflows.json_protocol import resolve
     from admet.workflows.calculation_schema import declarations
@@ -373,9 +381,8 @@ def analyze_density_run(document, csv_path, events_path, polling_origin, *, comp
     result = {"type": "fluid_density", "fluid_id": config["fluid_id"], "status": "inconclusive",
               "density_g_ml": None, "repeat_difference_percent": None, "ci95_g_ml": None,
               "passes": [], "points": [], "issues": [], "warnings": [],
-              "thresholds": {"pressure_flow_r_squared_min": 0.95, "pressure_height_r_squared_min": 0.95,
-                             "repeat_difference_max_percent": 10},
               "note": "Two passes assess repeatability, not a robust confidence interval or absolute accuracy."}
+    limits = {param.name: param.default for param in PARAMETERS} | (parameters or {})
     if not completed:
         result["issues"].append("protocol did not complete")
     origin = _finite(polling_origin)
@@ -419,7 +426,7 @@ def analyze_density_run(document, csv_path, events_path, polling_origin, *, comp
                 continue
             balances.append({"height_cm": height, "p0_mbar": fit.intercept,
                              "resistance_mbar_min_ul": fit.slope, "r_squared": fit.r_squared})
-            if fit.slope <= 0 or fit.r_squared < 0.95:
+            if fit.slope <= 0 or fit.r_squared < limits["fit_r_squared_min"]:
                 result["issues"].append(f"pass {repeat}, {height:g} cm: poor pressure/flow fit")
             elif fit.r_squared < 0.995:
                 result["warnings"].append(f"pass {repeat}, {height:g} cm: mild pressure/flow curvature; R²={fit.r_squared:.4f}")
@@ -428,7 +435,7 @@ def analyze_density_run(document, csv_path, events_path, polling_origin, *, comp
             fit = _linear_fit([b["height_cm"] for b in balances], [b["p0_mbar"] for b in balances])
             entry.update(density_g_ml=fit.slope / GRAVITY_CONVERSION_MBAR_PER_CM_PER_G_ML,
                          r_squared=fit.r_squared)
-            if fit.slope <= 0 or fit.r_squared < 0.95:
+            if fit.slope <= 0 or fit.r_squared < limits["fit_r_squared_min"]:
                 result["issues"].append(f"pass {repeat}: poor pressure/height fit")
             elif fit.r_squared < 0.98:
                 result["warnings"].append(f"pass {repeat}: pressure/height R²={fit.r_squared:.4f}; review fitted points")
@@ -440,8 +447,9 @@ def analyze_density_run(document, csv_path, events_path, polling_origin, *, comp
         average = mean(densities)
         difference = 100 * abs(densities[0] - densities[1]) / average
         result["repeat_difference_percent"] = difference
-        if difference > 10:
-            result["issues"].append("density passes disagree by more than 10%")
+        if difference > limits["repeat_difference_max_percent"]:
+            result["issues"].append(
+                f"density passes disagree by more than {limits['repeat_difference_max_percent']:g}%")
         if not result["issues"]:
             result.update(status="consistent", density_g_ml=average)
     return result

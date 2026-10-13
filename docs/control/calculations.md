@@ -10,7 +10,10 @@ files only; it needs no device and changes no setting on the rig.
 2. If the calculation can use a reference — a density result for gravimetry, a
    reference run for viscosity — pick it explicitly. ADMET never picks the
    latest result for you.
-3. Click **Calculate**. The result is saved as a new file under the run's
+3. If the calculation has **parameters**, set them in the parameter table:
+   gravimetry's fit range, the limits of viscosity and fluid density. They start
+   at their defaults and are kept per calculation until ADMET closes.
+4. Click **Calculate**. The result is saved as a new file under the run's
    `calculations/` folder; earlier results stay and are listed under
    *Saved results for this run*.
 
@@ -26,6 +29,10 @@ tables and any issues.
 |---|---|
 | usable / consistent / complete | The result passed its checks |
 | inconclusive | Something failed a check; the issues say what, step by step |
+
+For gravimetry, inconclusive only informs: the curve and the suggested correction
+are still calculated from what was measured, so you decide whether to use them.
+Every result records the parameters it was calculated with and shows them.
 
 A result is marked **outdated** when one of its inputs changed after it was
 calculated — a corrected mass, for example. Calculate again to refresh it.

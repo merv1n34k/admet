@@ -11,7 +11,7 @@ from admet.ui.tables import GridTable, fit_table_height
 from admet.ui.tasks import Tasks
 from admet.workflows.calculations import (
     CALCULATIONS, calculate_run, recorded_runs, result_view, saved_results,
-    available_calculations, calculation_readiness,
+    available_calculations, calculation_parameters, calculation_readiness,
 )
 
 GOOD = {"usable", "consistent", "complete"}
@@ -82,12 +82,9 @@ class ResultView(QWidget):
             for table in section["tables"]:
                 layout.addWidget(_label(table["title"], "FieldLabel"))
                 layout.addWidget(self._table(table))
-            for issue in section["notes"]:
-                layout.addWidget(_label(issue, "ProtocolConfirmLabel"))
-            for warning in section["warnings"]:
-                layout.addWidget(_label(f"Warning: {warning}", "MutedText"))
-        if view["note"]:
-            layout.addWidget(_label(view["note"], "MutedText"))
+            # Notes are what the calculation found: failed checks first, then softer findings.
+            for note in section["notes"] + section["warnings"]:
+                layout.addWidget(_label(note, "ProtocolConfirmLabel"))
         layout.addWidget(_label(f"Saved: {view['saved']}", "MutedText"))
         self.setWidget(body)
 
@@ -116,8 +113,10 @@ class ResultView(QWidget):
 
 
 class CalculationsPanel(QWidget):
-    def __init__(self):
+    def __init__(self, param_table=None):
         super().__init__()
+        # The Experiments parameter table, so parameters look and edit the same here.
+        self.param_table = param_table
         self.project = None
         self.tasks = Tasks(self)
         self._generation = 0
@@ -149,6 +148,11 @@ class CalculationsPanel(QWidget):
         self.references = {}
         self.reference_layout = QVBoxLayout()
         layout.addLayout(self.reference_layout)
+        # Each calculation's parameters, kept for the session.
+        self.parameter_values = {}
+        self.parameter_table = None
+        self.parameter_box = QVBoxLayout()
+        layout.addLayout(self.parameter_box)
         layout.addWidget(QLabel("Saved results for this run"))
         self.history = QComboBox()
         layout.addWidget(self.history)
@@ -157,6 +161,7 @@ class CalculationsPanel(QWidget):
         layout.addWidget(self.status)
         self.output = ResultView()
         layout.addWidget(self.output)
+        layout.addStretch(1)
         self.calculation.currentIndexChanged.connect(self.describe)
         self.runs.currentIndexChanged.connect(self.load_history)
         self.history.currentIndexChanged.connect(self.show_result)
@@ -181,6 +186,7 @@ class CalculationsPanel(QWidget):
         while self.reference_layout.count():
             item = self.reference_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
         self.references = {}
         for role, kind in entry.get("references", {}).items():
@@ -194,7 +200,33 @@ class CalculationsPanel(QWidget):
             box.currentIndexChanged.connect(self.ready)
             self.reference_layout.addWidget(box)
             self.references[role] = box
+        self._show_parameters(self.calculation.currentData())
         self.ready()
+
+    def _show_parameters(self, key):
+        if self.parameter_table is not None:
+            self.parameter_box.removeWidget(self.parameter_table)
+            self.parameter_table.hide()
+            self.parameter_table.deleteLater()
+            self.parameter_table = None
+        params = CALCULATIONS[key].get("parameters", ())
+        if not params or self.param_table is None:
+            return
+        from admet.ui.control import NumericParamEdit
+
+        values = self.parameter_values.setdefault(key, calculation_parameters(key))
+
+        def make_editor(param):
+            editor = NumericParamEdit(param, values[param.name])
+            editor.committed.connect(lambda value, name=param.name: values.__setitem__(name, value))
+            editor.rejected.connect(self.status.setText)
+            return editor
+
+        self.parameter_table = self.param_table(list(params), editor_factory=make_editor)
+        self.parameter_box.addWidget(self.parameter_table)
+
+    def current_parameters(self):
+        return dict(self.parameter_values.get(self.calculation.currentData(), {}))
 
     def reference_values(self):
         return {role: box.currentData() for role, box in self.references.items() if box.currentData()}
@@ -296,5 +328,5 @@ class CalculationsPanel(QWidget):
             self.output.display(result_view(payload))
             self.status.setText("Result saved.")
 
-        references = self.reference_values()
-        self._submit(lambda: calculate_run(directory, key, references=references), calculated)
+        references, parameters = self.reference_values(), self.current_parameters()
+        self._submit(lambda: calculate_run(directory, key, references=references, parameters=parameters), calculated)

@@ -4,6 +4,7 @@ from copy import deepcopy
 import math
 from statistics import mean, stdev
 
+from admet.core.engine import Param, ParamKind
 from admet.workflows.calculation_schema import measurement_binding, sample_steps
 from admet.workflows.calculation_inputs import step_window, trace
 from admet.workflows.gravimetry import measurement, calibration_context, linear_fit
@@ -55,9 +56,17 @@ def fit(points):
             "r_squared": result["r_squared"], "slope_standard_error": result["slope_standard_error"]}
 
 
+PARAMETERS = (
+    Param("stability_max_percent", "Flow CV / drift max, %", ParamKind.FLOAT, 5.0, minimum=0.1, maximum=100),
+    Param("fit_r_squared_min", "Fit R² min", ParamKind.FLOAT, 0.95, minimum=0.01, maximum=1),
+    Param("pass_difference_max_percent", "Pass difference max, %", ParamKind.FLOAT, 10.0, minimum=0.1, maximum=100),
+)
+
+
 def calculate(context):
     check(context)
     config = context["config"]
+    limits = {param.name: param.default for param in PARAMETERS} | context.get("parameters", {})
     points, passes, issues = [], [], []
     for sample in config["samples"]:
         point = {"step": sample["step"], "pass": sample["pass"], "flow_ul_min": None,
@@ -75,8 +84,8 @@ def calculate(context):
             pressure_drift = abs(mean(p[:quarter]) - mean(p[-quarter:])) / max(abs(mean(p)), 1)
             point.update(flow_ul_min=mean(q), pressure_mbar=mean(p), flow_cv=cv,
                          flow_drift_fraction=drift, pressure_drift_fraction=pressure_drift, samples=len(rows))
-            if max(cv, drift, pressure_drift) > 0.05:
-                raise ValueError("Settled flow CV or pressure/flow drift exceeds 5%")
+            if max(cv, drift, pressure_drift) > limits["stability_max_percent"] / 100:
+                raise ValueError(f"Settled flow CV or pressure/flow drift exceeds {limits['stability_max_percent']:g}%")
         except ValueError as exc:
             point["issues"].append(str(exc))
             issues.append(f"Step {sample['step']}: {exc}")
@@ -87,16 +96,16 @@ def calculate(context):
             if any(p["issues"] for p in selected):
                 raise ValueError("Unusable points; no selective removal from the fit")
             result = fit(selected)
-            if result["resistance_mbar_min_ul"] <= 0 or result["r_squared"] < 0.95:
-                raise ValueError("Positive resistance and R² >= 0.95 required")
+            if result["resistance_mbar_min_ul"] <= 0 or result["r_squared"] < limits["fit_r_squared_min"]:
+                raise ValueError(f"Positive resistance and R² >= {limits['fit_r_squared_min']:g} required")
             passes.append({"pass": number, **result})
         except ValueError as exc:
             issues.append(f"Pass {number}: {exc}")
     resistance = mean(p["resistance_mbar_min_ul"] for p in passes) if len(passes) == 2 else None
     disagreement = (abs(passes[0]["resistance_mbar_min_ul"] - passes[1]["resistance_mbar_min_ul"]) / resistance
                     if resistance else None)
-    if disagreement is not None and disagreement > 0.1:
-        issues.append("Forward/reverse resistance disagreement exceeds 10%")
+    if disagreement is not None and disagreement > limits["pass_difference_max_percent"] / 100:
+        issues.append(f"Forward/reverse resistance disagreement exceeds {limits['pass_difference_max_percent']:g}%")
     if issues:
         resistance = None
     reference = context["references"].get("reference", {}).get("result", {})
@@ -110,7 +119,6 @@ def calculate(context):
             "viscosity_mpa_s": absolute, "known_viscosity_mpa_s": known,
             "samples": points, "passes": passes, "pass_disagreement_fraction": disagreement,
             "uncertainty": None, "issues": issues, "correction_settings": calibration_context(context),
-            "thresholds": {"r_squared_min": 0.95, "stability_fraction_max": 0.05, "pass_difference_max": 0.1},
             "note": "P = P0 + RQ fits the recorded flow, already corrected by the rig calibration, excluding settling. Viscosity ratios require "
                     "unchanged geometry and comparable temperature with Newtonian laminar flow. Absolute viscosity "
                     "requires a selected reference with known viscosity. Fit errors exclude calibration, geometry "

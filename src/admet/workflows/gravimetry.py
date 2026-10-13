@@ -4,10 +4,31 @@ from copy import deepcopy
 import math
 from statistics import mean, stdev
 
+from admet.core.engine import Param, ParamKind
 from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNEL_LABELS
 from admet.workflows.calculation_schema import measurement_binding, sample_steps, three_flow_passes
 from admet.workflows.calculation_inputs import settled_after, skipped_steps, step_window, trace, volume_ul
 from admet.workflows.json_protocol import per_unit
+
+
+# Fixed pass limits. A result outside them is inconclusive, which only informs: the
+# curve and the suggested terms are still calculated from what was measured.
+LIMITS = {
+    "repeat_cv_max_percent": 5.0,
+    "fit_r_squared_min": 0.95,
+    "target_deviation_max_percent": 20.0,
+    "settle_limit_s": 10.0,
+}
+
+# The flow range the suggested terms are fitted over; 0 leaves that end open.
+PARAMETERS = (
+    Param("fit_from_ul_min", "Fit from, µL/min (0 = lowest)", ParamKind.FLOAT, 0.0, minimum=0),
+    Param("fit_to_ul_min", "Fit to, µL/min (0 = highest)", ParamKind.FLOAT, 0.0, minimum=0),
+)
+
+
+def measured(row):
+    return not row["left_out"] and row["true_flow_ul_min"] is not None
 
 
 def unit_configs(config):
@@ -117,18 +138,20 @@ def linear_fit(x, y):
             "slope_standard_error": math.sqrt(residual / (len(x) - 2) / xx)}
 
 
-def flow_curve(rows, issues):
+def flow_curve(rows, issues, limits):
     groups = []
     for target in sorted({row["target_ul_min"] for row in rows}):
-        samples = [row for row in rows if row["target_ul_min"] == target and not row["issues"] and not row["left_out"]]
+        samples = [row for row in rows if row["target_ul_min"] == target and measured(row)]
+        found = []
         stats = repeat_statistics([row["true_flow_ul_min"] for row in samples])
         # Three collections per target, fewer only by those left out, and never under two.
         expected = 3 - sum(bool(row["left_out"]) for row in rows if row["target_ul_min"] == target)
         if len(samples) != 3 and (len(samples) != expected or len(samples) < 2):
-            issues.append(f"{target:g} µL/min: three valid independent collections required")
+            found.append(f"{target:g} µL/min: three valid independent collections required")
         cv = stats["sd"] / stats["mean"] if stats["sd"] is not None and stats["mean"] > 0 else None
-        if cv is not None and cv > 0.05:
-            issues.append(f"{target:g} µL/min: true-flow repeat CV exceeds 5%")
+        if cv is not None and cv > limits["repeat_cv_max_percent"] / 100:
+            found.append(f"{target:g} µL/min: true-flow repeat CV exceeds {limits['repeat_cv_max_percent']:g}%")
+        issues.extend(found)
         up = [row["multiplier"] for row in samples if row["pass"] != 2]
         down = [row["multiplier"] for row in samples if row["pass"] == 2]
         hysteresis = (100 * (mean(up) - mean(down)) / mean(up) if up and down else None)
@@ -138,31 +161,31 @@ def flow_curve(rows, issues):
                        "true_flow_repeat_ci95_ul_min": [stats["mean"] - 4.302653 * stats["sem"],
                                                          stats["mean"] + 4.302653 * stats["sem"]]
                        if len(samples) == 3 else None,
-                       "up_down_difference_percent": hysteresis})
+                       "up_down_difference_percent": hysteresis, "issues": found})
     fit = None
-    if not issues:
-        try:
-            used = [row for row in rows if not row["left_out"]]
-            fit = linear_fit([row["recorded_flow_ul_min"] for row in used], [row["true_flow_ul_min"] for row in used])
-            if fit["slope"] <= 0 or fit["r_squared"] < 0.95:
-                issues.append("Calibration curve requires positive slope and R² >= 0.95")
-        except ValueError as exc:
-            issues.append(str(exc))
+    try:
+        used = [row for row in rows if measured(row)]
+        fit = linear_fit([row["recorded_flow_ul_min"] for row in used], [row["true_flow_ul_min"] for row in used])
+        if fit["slope"] <= 0 or fit["r_squared"] < limits["fit_r_squared_min"]:
+            issues.append(f"Calibration curve requires positive slope and R² >= {limits['fit_r_squared_min']:g}")
+    except ValueError as exc:
+        issues.append(str(exc))
     return {"targets": groups, "flow_fit": fit,
             "calibration_curve": [{"recorded_flow_ul_min": group["recorded_flow_ul_min"],
-                                    "true_flow_ul_min": group["true_flow"]["mean"]} for group in groups]
-            if not issues else None}
+                                    "true_flow_ul_min": group["true_flow"]["mean"]}
+                                   for group in groups if group["true_flow"]["mean"] is not None]}
 
 
 def calculate(context):
     check(context)
     rho = density(context)
-    units = {str(config["channel"]): unit_result(context, config, rho) for config in unit_configs(context["config"])}
+    fit_range = {param.name: param.default for param in PARAMETERS} | context.get("parameters", {})
+    units = {str(config["channel"]): unit_result(context, config, rho, LIMITS, fit_range)
+             for config in unit_configs(context["config"])}
     return {"status": "usable" if all(u["status"] == "usable" for u in units.values()) else "inconclusive",
             "liquid": context["config"]["liquid"], "density_g_ml": rho, "units": units,
             "issues": [f"{FLUIDIC_CHANNEL_LABELS[int(ch)]}: {issue}" for ch, u in units.items() for issue in u["issues"]],
             "uncertainty": None,
-            "thresholds": {"repeat_cv_max": 0.05, "minimum_repeats": 3, "flow_fit_r_squared_min": 0.95},
             "correction_settings": calibration_context(context),
             "note": "Each unit is calculated alone from its own recorded flow and vessels. "
                     "Factors compare weighed with recorded flow, after the corrections the run used. No hardware changes. "
@@ -183,7 +206,7 @@ def left_out(context, sample, skipped):
     return None
 
 
-def unit_result(context, config, rho):
+def unit_result(context, config, rho, limits, fit_range):
     rows, issues, factors = [], [], []
     skipped = skipped_steps(context)
     for sample in config["samples"]:
@@ -205,7 +228,8 @@ def unit_result(context, config, rho):
             window = step_window(context, sample["step"])
             # The vessel also catches what flows after the stop, so the recorded
             # volume runs on until that tail has settled.
-            settled = settled_after(context, config["channel"], sample["step"], window[1], result["target_ul_min"])
+            settled = settled_after(context, config["channel"], sample["step"], window[1], result["target_ul_min"],
+                                    limit_s=limits["settle_limit_s"])
             during = volume_ul(trace(context, config["channel"], *window))
             recorded = volume_ul(trace(context, config["channel"], window[0], settled))
             if not all(math.isfinite(v) and v > 0 for v in (true_volume, recorded, during)):
@@ -216,21 +240,23 @@ def unit_result(context, config, rho):
             result.update(true_volume_ul=true_volume, recorded_volume_ul=recorded, multiplier=factor,
                           tail_volume_ul=recorded - during, window_elapsed_s=window, settled_elapsed_s=settled,
                           true_flow_ul_min=recorded_flow * factor, recorded_flow_ul_min=recorded_flow)
-            if abs(result["recorded_flow_ul_min"] - result["target_ul_min"]) > 0.2 * result["target_ul_min"]:
-                raise ValueError("Recorded mean flow differs from target by more than 20%; investigate capacity/settling")
+            deviation = limits["target_deviation_max_percent"]
+            if abs(result["recorded_flow_ul_min"] - result["target_ul_min"]) > deviation / 100 * result["target_ul_min"]:
+                raise ValueError(f"Recorded mean flow differs from target by more than {deviation:g}%; "
+                                 "investigate capacity/settling")
         except ValueError as exc:
             result["issues"].append(str(exc))
             issues.append(f"Step {sample['step']}: {exc}")
         rows.append(result)
     stats = repeat_statistics(factors)
-    curve = flow_curve(rows, issues)
+    curve = flow_curve(rows, issues, limits)
     scalar_ok = factors and max(factors) - min(factors) <= 0.05 * stats["mean"]
     usable = len(factors) >= 2 and not issues
     return {"status": "usable" if usable else "inconclusive",
             "channel": config["channel"], "samples": rows,
             "multiplier": stats["mean"] if usable and scalar_ok else None,
             **curve, "issues": issues, "calibration_identity": calibration_identity(context, config["channel"]),
-            "suggested_correction": suggest_correction(context, config["channel"], rows) if usable else None}
+            "suggested_correction": suggest_correction(context, config["channel"], rows, fit_range)}
 
 
 def raw_reading(value, terms):
@@ -250,8 +276,8 @@ def raw_reading(value, terms):
     return (low + high) / 2
 
 
-def suggest_correction(context, channel, rows):
-    """Terms for the unit's own correction, so it reports the weighed flow over the range measured."""
+def suggest_correction(context, channel, rows, fit_range):
+    """Terms for the unit's own correction, so it reports the weighed flow over the chosen flow range."""
     from admet.engines.acquisition.fluidics.config import FLUIDIC_CHANNELS
 
     settings = calibration_context(context) or {}
@@ -260,9 +286,13 @@ def suggest_correction(context, channel, rows):
     if prefix is None or any(type(settings.get(key)) not in (int, float) for key in keys) or not settings[keys[0]]:
         return None
     terms = [settings[key] for key in keys]
-    points = [(raw_reading(row["recorded_flow_ul_min"], terms), row["true_flow_ul_min"])
-              for row in rows if not row["left_out"] and not row["issues"]]
-    if len(points) < 3 or any(x <= 0 or y <= 0 for x, y in points):
+    low, high = fit_range["fit_from_ul_min"], fit_range["fit_to_ul_min"] or math.inf
+    # Every measured collection, so the page can show which ones the range kept.
+    table = [{"step": row["step"], "recorded_ul_min": row["recorded_flow_ul_min"],
+              "raw_ul_min": raw_reading(row["recorded_flow_ul_min"], terms), "true_ul_min": row["true_flow_ul_min"],
+              "in_range": low <= row["true_flow_ul_min"] <= high} for row in rows if measured(row)]
+    points = [(p["raw_ul_min"], p["true_ul_min"]) for p in table if p["in_range"]]
+    if len(points) < 2 or any(x <= 0 or y <= 0 for x, y in points):
         return None
 
     def worst(model):
@@ -280,18 +310,11 @@ def suggest_correction(context, channel, rows):
     a0, b0, c0 = terms
     options["current"] = {"scale": a0, "square": b0, "cube": c0,
                           "worst_error": worst(lambda x: a0 * x + b0 * x * x + c0 * x ** 3)}
-    # Keep what the run used unless a change is clearly better; over a narrow range many
-    # scale/square pairs draw nearly the same curve. A curve only when one scale misses
-    # by over 2 % somewhere and the curve does clearly better.
-    best = min(option["worst_error"] for option in options.values())
+    # The fit with the smaller worst error over the range (the square by at least 0.1 point, so a
+    # straight line is not bent for nothing); the run's own terms are shown for comparison.
     curve = options.get("square")
-    if options["current"]["worst_error"] <= best + 0.01:
-        recommended = "current"
-    elif (curve and options["scale"]["worst_error"] > 0.02
-          and curve["worst_error"] < options["scale"]["worst_error"] - 0.005):
-        recommended = "square"
-    else:
-        recommended = "scale"
+    recommended = "square" if curve and curve["worst_error"] < options["scale"]["worst_error"] - 0.001 else "scale"
     return {"table": settings.get(f"{prefix}_calibration"), "recommended": recommended, "options": options,
             "range_ul_min": [min(y for _, y in points), max(y for _, y in points)],
+            "points": table, "sums": {"x2": sxx, "x3": s3, "x4": s4, "xy": sxy, "x2y": sxxy, "det": det},
             "from_terms": dict(zip(("scale", "square", "cube"), terms))}

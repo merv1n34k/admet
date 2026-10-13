@@ -1510,7 +1510,7 @@ class ControlWindow(QMainWindow):
 
             self.action_panel.layout().itemAt(0).widget().setText("Calculations")
             if self._calculations is None:
-                self._calculations = CalculationsPanel()
+                self._calculations = CalculationsPanel(self._param_table)
             unchanged_project = self._calculations.project == self.api.workdir
             self._calculations.set_project(self.api.workdir)
             if unchanged_project and not self._calculations.tasks.busy:

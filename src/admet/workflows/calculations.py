@@ -15,7 +15,7 @@ from admet.workflows.fluid_density import _finite, analyze_density_run
 from admet.workflows.flow_scout import analyze_scout
 from admet.workflows.calculation_schema import declarations
 from admet.workflows.calculation_inputs import load_context, fingerprint, result_current, read_json
-from admet.workflows import gravimetry, dead_volume, viscosity
+from admet.workflows import gravimetry, dead_volume, fluid_density, viscosity
 
 
 def available_calculations(directory):
@@ -88,7 +88,7 @@ def _density(context):
     result = analyze_density_run(
         document, context["csv"], context["directory"] / "events.jsonl",
         context["summary"].get("artifacts", {}).get("polling_origin_monotonic"),
-        completed=context["summary"].get("state") == "completed",
+        completed=context["summary"].get("state") == "completed", parameters=context.get("parameters"),
     )
     result["point_mapping"] = mapping
     return result
@@ -119,16 +119,18 @@ def _recording_summary(context):
 CALCULATIONS = {
     "viscosity": {"label": "Viscosity", "version": 2, "calculate": viscosity.calculate,
                   "check": viscosity.check, "files": ("protocol.json", "events.jsonl"),
-                  "references": {"reference": "viscosity"},
+                  "references": {"reference": "viscosity"}, "parameters": viscosity.PARAMETERS,
                   "description": "Pressure/flow resistance; same-path reference comparison for viscosity."},
     "dead_volume": {"label": "Dead volume", "version": 3, "calculate": dead_volume.calculate,
                     "check": dead_volume.check, "files": ("protocol.json",),
                     "description": "Mean and spread of the dead volumes measured by hand."},
-    "gravimetry": {"label": "Gravimetry", "version": 2, "calculate": gravimetry.calculate,
+    "gravimetry": {"label": "Gravimetry", "version": 3, "calculate": gravimetry.calculate,
                    "check": gravimetry.check, "files": ("protocol.json", "events.jsonl"),
                    "references": {"density": "fluid_density"},
+                   "parameters": gravimetry.PARAMETERS,
                    "description": "Before/after weights: calibration curve, per-rate repeatability and direction differences."},
     "fluid_density": {"label": "Fluid density", "version": 2, "calculate": _density,
+                      "parameters": fluid_density.PARAMETERS,
                     "files": ("protocol.json", "events.jsonl"),
                     "description": "Two height passes from a density protocol; excludes scout and settling."},
     "recording_summary": {"label": "Recording summary", "version": 1, "calculate": _recording_summary,
@@ -143,10 +145,20 @@ CALCULATIONS["flow_scout"] = {
 }
 
 
-def calculate_run(directory, calculation_id, *, references=None):
+def calculation_parameters(calculation_id, values=None):
+    """A calculation's parameters at their defaults, with these values checked and replacing them."""
+    params = {param.name: param for param in CALCULATIONS[calculation_id].get("parameters", ())}
+    unknown = set(values or {}) - set(params)
+    if unknown:
+        raise ValueError(f"Unknown parameter: {', '.join(sorted(unknown))}")
+    return {name: param.validate((values or {}).get(name, param.default)) for name, param in params.items()}
+
+
+def calculate_run(directory, calculation_id, *, references=None, parameters=None):
     calculation = CALCULATIONS.get(calculation_id)
     if calculation is None:
         raise ValueError("Unknown calculation")
+    parameters = calculation_parameters(calculation_id, parameters)
     context = load_context(directory, calculation_id, calculation, references)
     directory = context["directory"]
     inputs = fingerprint(context["paths"], directory)
@@ -154,6 +166,7 @@ def calculate_run(directory, calculation_id, *, references=None):
     if fingerprint(context["paths"], directory) != inputs:
         raise ValueError("Recording changed during calculation; refresh and try again")
     summary = context["summary"]
+    context["parameters"] = parameters
     result = calculation["calculate"](context)
     if fingerprint(context["paths"], directory) != inputs:
         raise ValueError("Recording changed during calculation; refresh and try again")
@@ -161,7 +174,8 @@ def calculate_run(directory, calculation_id, *, references=None):
                "created_at": datetime.now(timezone.utc).isoformat(), "plan_id": summary.get("plan_id"),
                "run_id": summary["run_id"],
                "inputs": inputs, "measurement_revision": context["measurements"]["revision"],
-               "references": {key: value["path"] for key, value in context["references"].items()}, "result": result}
+               "references": {key: value["path"] for key, value in context["references"].items()},
+               "parameters": parameters, "result": result}
     path = directory / "calculations" / f"{calculation_id}_{uuid.uuid4().hex}.json"
     write_json(path, payload)
     return {"path": str(path), **payload}
@@ -215,6 +229,34 @@ def _line(slope, intercept):
     return f"true = {_number(slope)} × recorded {sign} {_number(abs(intercept), 4)} µL/min"
 
 
+def _gravimetry_fit(channel, unit):
+    """How the unit's terms were fitted: the points in range, the sums and each formula with its numbers."""
+    suggestion = unit.get("suggested_correction") or {}
+    sums, points = suggestion.get("sums"), suggestion.get("points")
+    if not sums or not points:
+        return None
+    n = _number
+    options = suggestion["options"]
+    a, b = options.get("square", {}).get("scale"), options.get("square", {}).get("square")
+    facts = [
+        ("Points", "x = raw table reading (the run's terms undone from the recorded flow), "
+                   "y = weighed flow; only collections whose y is in the fit range"),
+        ("Sums", f"Σx² = {n(sums['x2'])} · Σx³ = {n(sums['x3'])} · Σx⁴ = {n(sums['x4'])} · "
+                 f"Σxy = {n(sums['xy'])} · Σx²y = {n(sums['x2y'])}"),
+        ("Scale only", f"y = a·x, least squares: a = Σxy / Σx² = {n(sums['xy'])} / {n(sums['x2'])} "
+                       f"= {n(options['scale']['scale'])}"),
+        ("Scale + square", f"y = a·x + b·x², least squares: D = Σx²·Σx⁴ − (Σx³)² = {n(sums['det'])}; "
+                           f"a = (Σxy·Σx⁴ − Σx²y·Σx³) / D = {n(a)}; b = (Σx²·Σx²y − Σx³·Σxy) / D = {n(b)}"
+         if a is not None else "needs two different flows in range"),
+        ("Worst error", "max over the points of |model(x) − y| / y; the suggestion is the fit with the smaller one "
+                        "(scale + square only when it is at least 0.1 point better)"),
+    ]
+    rows = [(p["step"], _fixed(p["recorded_ul_min"], 3), _fixed(p["raw_ul_min"], 3), _fixed(p["true_ul_min"], 3),
+             "yes" if p["in_range"] else "no") for p in points]
+    return _section(f"Fit · {FLUIDIC_CHANNEL_LABELS[int(channel)]}", None, facts,
+                    [_table("Points", ("Step", "Recorded µL/min", "Raw x µL/min", "Weighed y µL/min", "In range"), rows)])
+
+
 def _gravimetry_unit(channel, unit):
     title = f"{FLUIDIC_CHANNEL_LABELS[int(channel)]} (channel {channel})"
     fit = unit.get("flow_fit") or {}
@@ -239,15 +281,20 @@ def _gravimetry_unit(channel, unit):
                            f"left out: {s['left_out']}" if s.get("left_out") else "; ".join(s["issues"]))
                           for s in unit["samples"]]))
     if unit.get("targets"):
-        tables.append(_table("Per flow", ("Target µL/min", "True flow µL/min", "N", "Factor", "CV", "Up/down", "95 % CI µL/min"),
+        tables.append(_table("Per flow", ("Target µL/min", "True flow µL/min", "N", "Factor", "CV", "Up/down",
+                                          "95 % CI µL/min", "Note"),
                              [(_number(t["target_ul_min"], 4),
                                f"{_fixed(t['true_flow']['mean'])} ± {_fixed(t['true_flow']['sd'])}",
                                t["true_flow"]["repeats"], _fixed(t["multiplier"], 4), _percent(t["repeat_cv"]),
                                _percent(t["up_down_difference_percent"] / 100 if t["up_down_difference_percent"] is not None else None),
                                "–".join(_fixed(v) for v in t["true_flow_repeat_ci95_ul_min"])
-                               if t["true_flow_repeat_ci95_ul_min"] else "—")
+                               if t["true_flow_repeat_ci95_ul_min"] else "—",
+                               "; ".join(issue.split(": ", 1)[1] for issue in t.get("issues", [])))
                               for t in unit["targets"]]))
-    return _section(title, unit["status"], facts, tables, unit["issues"])
+    # Findings for one collection or one flow sit in that row's Note; the rest are the unit's notes.
+    in_rows = ({f"Step {s['step']}: {issue}" for s in unit["samples"] for issue in s["issues"]}
+               | {issue for t in unit.get("targets", []) for issue in t.get("issues", [])})
+    return _section(title, unit["status"], facts, tables, [i for i in unit["issues"] if i not in in_rows])
 
 
 def result_view(payload):
@@ -260,6 +307,8 @@ def result_view(payload):
                                  [("Liquid", result.get("liquid", "—")),
                                   ("Density", _unit(_fixed(result.get('density_g_ml'), 4), "g/mL"))]))
         sections += [_gravimetry_unit(channel, unit) for channel, unit in result["units"].items()]
+        # The worked fit goes last, below every unit's results.
+        sections += [fit for channel, unit in result["units"].items() if (fit := _gravimetry_fit(channel, unit))]
     elif kind == "fluid_density":
         passes = {entry["pass"]: entry for entry in result.get("passes", [])}
         sections.append(_section(label, result["status"],
@@ -322,5 +371,8 @@ def result_view(payload):
     else:
         sections.append(_section(label, result.get("status"), [(key, str(value)) for key, value in result.items()
                                                                if not isinstance(value, (dict, list))]))
+    labels = {param.name: param.label for param in CALCULATIONS.get(kind, {}).get("parameters", ())}
+    sections[0]["facts"] += [[labels.get(name, name), _number(value)]
+                             for name, value in (payload.get("parameters") or {}).items()]
     return {"outdated": bool(payload.get("outdated")), "saved": payload.get("path", ""),
             "note": result.get("note", ""), "sections": sections}

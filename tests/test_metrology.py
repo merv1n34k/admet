@@ -166,6 +166,41 @@ class MetrologyTests(unittest.TestCase):
         # A unit that already reports a·x + b·x² is read back to its table reading x.
         self.assertAlmostEqual(raw_reading(0.739 * 65 + 0.0127 * 65 ** 2, (0.739, 0.0127, 0.0)), 65, places=6)
 
+    def test_gravimetry_fits_both_terms_over_the_chosen_range_even_when_inconclusive(self):
+        from admet.workflows.calculations import result_view
+
+        # One collection weighs 12 % more than its repeats: inconclusive, but the terms still come.
+        directory = archive(self.tmp.name, "gravimetry")
+        path = directory / "measurements.json"
+        payload = json.loads(path.read_text())
+        values = payload["values"]
+        values["mass_after_ch1_1"] = values["mass_before_ch1_1"] + 1.12 * (values["mass_after_ch1_1"]
+                                                                          - values["mass_before_ch1_1"])
+        write_json(path, payload)
+        whole = calculate_run(directory, "gravimetry")
+        working = calculate_run(directory, "gravimetry", parameters={"fit_from_ul_min": 30})
+
+        unit = whole["result"]["units"]["1"]
+        self.assertEqual(unit["status"], "inconclusive")
+        suggestion = unit["suggested_correction"]
+        self.assertEqual(set(suggestion["options"]), {"current", "scale", "square"})
+        self.assertNotEqual(suggestion["options"]["square"]["square"], 0)
+        # Above 30 µL/min only the clean collections count: one scale fits them exactly.
+        narrow = working["result"]["units"]["1"]["suggested_correction"]
+        self.assertEqual(working["parameters"], {"fit_from_ul_min": 30, "fit_to_ul_min": 0.0})
+        self.assertGreater(narrow["range_ul_min"][0], 30)
+        self.assertEqual(narrow["recommended"], "scale")
+        self.assertLess(narrow["options"]["scale"]["worst_error"], 1e-4)
+        unit_view = result_view({**whole, "outdated": False, "saved": ""})["sections"][1]
+        per_flow = next(t for t in unit_view["tables"] if t["title"] == "Per flow")
+        self.assertEqual(per_flow["rows"][0][-1], "true-flow repeat CV exceeds 5%")    # in its row's Note
+        self.assertEqual(unit_view["notes"], [])
+        sections = result_view({**working, "outdated": False, "saved": ""})["sections"]
+        self.assertEqual(dict(sections[0]["facts"])["Fit from, µL/min (0 = lowest)"], "30")
+        for parameters in ({"fit_from_ul_min": -1}, {"unknown": 1}):
+            with self.assertRaises(ValueError, msg=parameters):
+                calculate_run(directory, "gravimetry", parameters=parameters)
+
     def test_gravimetry_leaves_out_a_collection_skipped_during_the_run(self):
         directory = archive(self.tmp.name, "gravimetry")
         events = [json.loads(line) for line in (directory / "events.jsonl").read_text().splitlines()]
@@ -399,7 +434,10 @@ class MetrologyTests(unittest.TestCase):
         directory = archive(self.tmp.name, "gravimetry")
         result = calculate_run(directory, "gravimetry")
         sections = result_view(result)["sections"]
-        self.assertEqual([s["title"] for s in sections], ["Gravimetry", "Cells M (channel 1)"])
+        self.assertEqual([s["title"] for s in sections], ["Gravimetry", "Cells M (channel 1)", "Fit · Cells M"])
+        scale = result["result"]["units"]["1"]["suggested_correction"]["options"]["scale"]["scale"]
+        self.assertTrue(dict(sections[2]["facts"])["Scale only"].endswith(f"= {scale:.5g}"))
+        self.assertEqual(len(sections[2]["tables"][0]["rows"]), 9)
         tables = {t["title"].split(" ·")[0]: t for t in sections[1]["tables"]}
         self.assertEqual(list(tables), ["Correction for a profile", "Collections", "Per flow"])
         self.assertEqual((tables["Correction for a profile"]["rows"][0][0], tables["Correction for a profile"]["highlight"]),
