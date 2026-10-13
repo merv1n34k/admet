@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QScrollArea, QTableWidgetItem, QVBoxLayout,
+    QComboBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QTableWidgetItem, QVBoxLayout,
     QWidget,
 )
 
@@ -27,15 +27,25 @@ def _label(text, name=None, *, wrap=True):
     return label
 
 
-class ResultView(QScrollArea):
-    """A saved result as headed sections: a few facts, its tables, then its notes."""
+class ResultView(QWidget):
+    """A saved result as headed sections: a few facts, its tables, then its notes.
+
+    Shown at its full height, with no scrolling of its own: the page scrolls.
+    """
 
     def __init__(self):
         super().__init__()
-        self.setWidgetResizable(True)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setMinimumHeight(260)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._body = None
         self.clear()
+
+    def setWidget(self, body):
+        if self._body is not None:
+            self._layout.removeWidget(self._body)
+            self._body.deleteLater()
+        self._body = body
+        self._layout.addWidget(body)
 
     def clear(self):
         self.show_message("")
@@ -43,13 +53,14 @@ class ResultView(QScrollArea):
     def show_message(self, text):
         body = QWidget()
         layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(_label(text, "MutedText"))
-        layout.addStretch(1)
         self.setWidget(body)
 
     def display(self, view):
         body = QWidget()
         layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(ui.spacing("default"))
         if view["outdated"]:
             layout.addWidget(_label("Outdated: the saved inputs have changed; calculate again.", "ProtocolConfirmLabel"))
@@ -78,7 +89,6 @@ class ResultView(QScrollArea):
         if view["note"]:
             layout.addWidget(_label(view["note"], "MutedText"))
         layout.addWidget(_label(f"Saved: {view['saved']}", "MutedText"))
-        layout.addStretch(1)
         self.setWidget(body)
 
     @staticmethod
@@ -146,7 +156,7 @@ class CalculationsPanel(QWidget):
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.output = ResultView()
-        layout.addWidget(self.output, 1)
+        layout.addWidget(self.output)
         self.calculation.currentIndexChanged.connect(self.describe)
         self.runs.currentIndexChanged.connect(self.load_history)
         self.history.currentIndexChanged.connect(self.show_result)
