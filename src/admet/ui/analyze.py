@@ -49,9 +49,9 @@ from admet.ui.analyze_results import (
     corrections_summary,
     export_csv_zip,
     file_results,
+    iter_raw_rows,
     load_stored_runs,
     local_time,
-    read_raw_rows,
     resolve_project_path,
     result_charts,
     results_cells,
@@ -1040,12 +1040,12 @@ class AnalyzeWorkflowView:
 
     def _results_rows(self) -> list[dict[str, Any]]:
         """Every listed file that has a stored result, ticked or not, with the plot colour of the ticked ones."""
-        shown = {(r.project, r.engine, r.sample_id): i for i, r in enumerate(self._results())}
+        shown = {_result_key(r): i for i, r in enumerate(self._results())}
+        by_key = {self._row_key(row): row for row in self.matrix}
         rows = []
         for result in self._results(ticked_only=False):
-            key = (result.project, result.engine, result.sample_id)
-            row = next((row for row in self.matrix if (Path(row.project_path).name, row.engine, row.sample_id) == key),
-                       None)
+            key = _result_key(result)
+            row = by_key.get(key)
             if row is None:
                 continue
             color = chart_color(shown[key]) if key in shown else "var(--text-disabled)"
@@ -1068,19 +1068,25 @@ class AnalyzeWorkflowView:
                     self._chart_refs.append((name, chart))
 
     def _results(self, *, ticked_only: bool = True) -> list[FileResult]:
-        """Stored results of the listed files -- the ticked ones unless asked otherwise -- with the hand corrections."""
-        ticked = {(Path(row.project_path).name, row.engine, row.sample_id) for row in self.matrix
-                  if row.active or not ticked_only}
-        fixes = json.dumps({f"{engine}/{sample}": value for (engine, sample), value in self._corrections().items()},
+        """Stored results of the listed files -- the ticked ones unless asked otherwise -- with the hand corrections.
+
+        A file is known by its path, never by its sample name: two files may be given the same name.
+        """
+        listed = {self._row_key(row) for row in self.matrix if row.active or not ticked_only}
+        fixes = json.dumps([[engine, source, value] for (engine, source), value in self._corrections().items()],
                            sort_keys=True)
         results = []
         for run in self._stored_runs():
-            results.extend(result for result in _cached_results(run, fixes)
-                           if (result.project, result.engine, result.sample_id) in ticked)
+            results.extend(result for result in _cached_results(run, fixes) if _result_key(result) in listed)
         return results
 
+    def _row_key(self, row: MatrixRow) -> tuple[str, str, str]:
+        return (Path(row.project_path).name, row.engine,
+                str(self._resolve_media_path(row.source_path, row.project_path).resolve()))
+
     def _corrections(self) -> dict[tuple[str, str], dict[str, Any]]:
-        return {(row.engine, row.sample_id): row.settings["corrections"]
+        """Hand corrections by (engine, source path), the way the results are keyed."""
+        return {(row.engine, self._row_key(row)[2]): row.settings["corrections"]
                 for row in self.matrix if row.settings.get("corrections")}
 
     def _export_csv(self) -> None:
@@ -1701,11 +1707,15 @@ def _results_of(project_path: str, raw_path: str, _mtime: float, run_id: str, fi
     run = next((run for run in load_stored_runs([Path(project_path)]) if run.run_id == run_id), None)
     if run is None:
         return ()
-    corrections = {tuple(key.split("/", 1)): value for key, value in json.loads(fixes).items()}
-    return tuple(file_results(run, read_raw_rows(run.project_path, run.raw_path), corrections))
+    corrections = {(engine, source): value for engine, source, value in json.loads(fixes)}
+    return tuple(file_results(run, iter_raw_rows(run.project_path, run.raw_path), corrections))
 
 
-def _cached_results(run: StoredRun, fixes: str = "{}") -> tuple[FileResult, ...]:
+def _result_key(result: FileResult) -> tuple[str, str, str]:
+    return (result.project, result.engine, str(Path(result.source_path).resolve()))
+
+
+def _cached_results(run: StoredRun, fixes: str = "[]") -> tuple[FileResult, ...]:
     raw = run.raw_path if run.raw_path.is_absolute() else run.project_path / run.raw_path
     try:
         mtime = raw.stat().st_mtime
