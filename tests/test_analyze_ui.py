@@ -15,6 +15,7 @@ from admet.ui.analyze import (
     _droplet_at,
     _roi_from_drag,
     _uid,
+    _usable_cache_root,
     apply_click,
 )
 from admet.workflows import create_analyze_workflow
@@ -161,6 +162,16 @@ class ProjectTests(unittest.TestCase):
             store = ProjectStore(store.path)
             self.assertEqual([file.role for file in store.session.files], ["control_video"])
             self.assertEqual(store.session.items, ())
+
+
+class CacheRootTests(unittest.TestCase):
+    def test_another_machines_cache_folder_is_not_used_here(self):
+        own = str(Path.home() / ".admet-cache")
+        self.assertEqual(_usable_cache_root(r"C:\Users\ADMIN\.admet-cache"), own)
+        self.assertEqual(_usable_cache_root("relative/cache"), own)
+        self.assertEqual(_usable_cache_root(None), own)
+        self.assertEqual(_usable_cache_root(str(Path(tempfile.gettempdir()) / "cache")),
+                         str(Path(tempfile.gettempdir()) / "cache"))
 
 
 class FileDialogTests(unittest.TestCase):

@@ -1396,7 +1396,7 @@ class AnalyzeWorkflowView:
         self.project_path = str(store.path)
         self.matrix = []
         self.selected_uid = ""
-        self.cache_root = str(store.session.metadata.get("cache_root") or Path.home() / ".admet-cache")
+        self.cache_root = _usable_cache_root(store.session.metadata.get("cache_root"))
         self._restore_setup(store)
         self._load_project_files(store)
         for row in self.matrix:
@@ -2101,6 +2101,18 @@ def _friendly_video_error(message: str) -> str:
     if "not readable" in message.lower():
         return "The video is missing or not readable. Check the file."
     return message
+
+
+def _usable_cache_root(value: Any) -> str:
+    """A project's cache folder if it is a path on this machine; otherwise this machine's own.
+
+    The last machine to analyse the project writes its cache folder into it: a Windows
+    path on a Mac is not a folder here, it is a name, and must not be created as one.
+    """
+    path = Path(str(value)) if value else None
+    if path is not None and path.is_absolute() and path.anchor and "\\" not in str(value):
+        return str(path)
+    return str(Path.home() / ".admet-cache")
 
 
 def _count(number: int, noun: str) -> str:
