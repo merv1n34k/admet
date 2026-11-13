@@ -1075,10 +1075,19 @@ class AnalyzeWorkflowView:
         listed = {self._row_key(row) for row in self.matrix if row.active or not ticked_only}
         fixes = json.dumps([[engine, source, value] for (engine, source), value in self._corrections().items()],
                            sort_keys=True)
+        scales = json.dumps([[row.engine, self._row_key(row)[2], *self._row_scale(row)] for row in self.matrix],
+                            sort_keys=True)
         results = []
         for run in self._stored_runs():
-            results.extend(result for result in _cached_results(run, fixes) if _result_key(result) in listed)
+            results.extend(result for result in _cached_results(run, fixes, scales)
+                           if _result_key(result) in listed)
         return results
+
+    def _row_scale(self, row: MatrixRow) -> tuple[float, float]:
+        """The µm per px and fps the file's rows are read with now: the table's values, not the run's."""
+        if row.engine == "cellpose":
+            return _row_float(row, "px_to_um", 0.0), 0.0
+        return _row_float(row, "microns_per_pixel", 0.0), _row_float(row, "fps", 0.0)
 
     def _row_key(self, row: MatrixRow) -> tuple[str, str, str]:
         return (Path(row.project_path).name, row.engine,
@@ -1703,25 +1712,27 @@ class AnalyzeWorkflowView:
 # -- stored results, read once per version of the raw file ------------------------------
 
 @lru_cache(maxsize=16)
-def _results_of(project_path: str, raw_path: str, _mtime: float, run_id: str, fixes: str) -> tuple[FileResult, ...]:
+def _results_of(project_path: str, raw_path: str, _mtime: float, run_id: str, fixes: str,
+                scales: str) -> tuple[FileResult, ...]:
     run = next((run for run in load_stored_runs([Path(project_path)]) if run.run_id == run_id), None)
     if run is None:
         return ()
     corrections = {(engine, source): value for engine, source, value in json.loads(fixes)}
-    return tuple(file_results(run, iter_raw_rows(run.project_path, run.raw_path), corrections))
+    scale_of = {(engine, source): (scale, fps) for engine, source, scale, fps in json.loads(scales)}
+    return tuple(file_results(run, iter_raw_rows(run.project_path, run.raw_path), corrections, scale_of))
 
 
 def _result_key(result: FileResult) -> tuple[str, str, str]:
     return (result.project, result.engine, str(Path(result.source_path).resolve()))
 
 
-def _cached_results(run: StoredRun, fixes: str = "[]") -> tuple[FileResult, ...]:
+def _cached_results(run: StoredRun, fixes: str = "[]", scales: str = "[]") -> tuple[FileResult, ...]:
     raw = run.raw_path if run.raw_path.is_absolute() else run.project_path / run.raw_path
     try:
         mtime = raw.stat().st_mtime
     except OSError:
         return ()
-    return _results_of(str(run.project_path), str(raw), mtime, run.run_id, fixes)
+    return _results_of(str(run.project_path), str(raw), mtime, run.run_id, fixes, scales)
 
 
 _cached_results.cache_clear = _results_of.cache_clear  # type: ignore[attr-defined]

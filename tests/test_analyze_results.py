@@ -21,6 +21,7 @@ from admet.ui.analyze_results import (
     results_table_html,
     scatter_chart,
     settings_summary,
+    short_names,
     spark,
     timeline_chart,
 )
@@ -71,6 +72,16 @@ class FileResultTests(unittest.TestCase):
         self.assertEqual(result.settings["fps"], 100.0)
         self.assertEqual(result.source_path, "/p/study.admetp/media/v.avi")
         self.assertIn("µm/px 2", settings_summary(result.settings))
+
+    def test_the_scale_and_fps_of_the_day_apply_without_a_new_run(self):
+        scales = {("opencv", "/p/study.admetp/media/v.avi"): (4.0, 200.0)}
+
+        result, = file_results(_run(Path("/p/study.admetp")), _rows(), scales=scales)
+
+        self.assertEqual(result.diameters, (80.0, 84.0, 88.0))           # px × 4 µm/px, not the run's 2
+        self.assertAlmostEqual(result.rate_hz, 40.0)                     # 5 frames apart at 200 fps
+        self.assertAlmostEqual(result.speed_mm_s, 8.0)                   # 10 px/frame · 4 µm/px · 200 fps
+        self.assertEqual((result.scale, result.fps, result.settings["fps"]), (4.0, 200.0, 200.0))
 
     def test_two_files_with_the_same_sample_name_stay_two_results(self):
         rows = []
@@ -181,7 +192,8 @@ class ChartTests(unittest.TestCase):
                             chart["series"][0]["data"][1]["itemStyle"]["color"])
 
     def test_only_plots_with_data_for_the_ticked_files_are_shown(self):
-        video = _result(sample_id="v", diameters=(10.0, 11.0), spans=((1, 0, 5),), detections=((0, 1.0, 2.0, 3.0),))
+        video = _result(sample_id="v", diameters=(10.0, 11.0), spans=((1, 0, 5),), arrivals_s=(0.0, 0.1),
+                        detections=((0, 1.0, 2.0, 3.0),))
         imaging = _result(sample_id="i", engine="cellpose", diameters=(140.0, 141.0), inclusion_counts=(0, 1, 1, 3),
                           detections=((1, 10.0, 20.0, 15000.0),))
 
@@ -196,11 +208,38 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(chart["xAxis"]["data"], ["0", "1", "3"])
         self.assertEqual(chart["series"][0]["data"], [1, 2, 1])
 
-    def test_timeline_uses_line_segments_per_droplet(self):
-        chart = timeline_chart([_result(sample_id="a", spans=((1, 0, 12), (2, 3, 18)))])
+    def test_timeline_counts_droplets_against_seconds_from_each_files_start(self):
+        chart = timeline_chart([_result(sample_id="a", arrivals_s=(0.0, 0.01, 0.02)),
+                                _result(sample_id="b", arrivals_s=(0.0, 0.05))])
 
-        self.assertEqual(chart["series"][0]["data"][:3], [[0, 1], [12, 1], ["-", "-"]])
-        self.assertEqual(chart["yAxis"]["name"], "droplet id")
+        self.assertEqual(chart["series"][0]["data"], [[0.0, 1], [0.01, 2], [0.02, 3]])
+        self.assertEqual(chart["series"][1]["data"], [[0.0, 1], [0.05, 2]])
+        self.assertEqual(chart["yAxis"]["name"], "droplets")
+
+    def test_plots_name_samples_by_what_differs(self):
+        names = ["run_18dc8be5506449fda417fd6206c9230f_step01_20261113_183825",
+                 "run_18dc8be5506449fda417fd6206c9230f_step02_20261113_184149"]
+
+        self.assertEqual(short_names(names), {names[0]: "step01_20261113_183825", names[1]: "step02_20261113_184149"})
+        self.assertEqual(short_names(["a", "b"]), {"a": "a", "b": "b"})
+        self.assertEqual(short_names(["only"]), {"only": "only"})
+        chart = cv_chart([_result(sample_id=names[0], diameters=(1.0, 2.0)),
+                          _result(sample_id=names[1], diameters=(1.0, 2.0))])
+        self.assertEqual(chart["xAxis"]["data"], ["step01_20261113_183825", "step02_20261113_184149"])
+
+    def test_the_rate_falls_back_to_arrivals_when_the_gate_saw_few_droplets(self):
+        rows = [{"engine": "opencv", "item_id": "s", "file_id": "f1", "kind": "run_context",
+                 "values": {"analysis": {"fps": 100.0, "microns_per_pixel": 1.0},
+                            "generation": {"crossings": 2, "rate_hz": 3.0}}}]
+        rows += [{"engine": "opencv", "item_id": "s", "file_id": "f1", "kind": "detection",
+                  "values": {"frame": 2 * i, "droplet_id": i, "centroid_x": 1.0, "centroid_y": 1.0,
+                             "equivalent_diameter": 10, "area": 78}} for i in range(50)]
+
+        result, = file_results(_run(Path("/p/study.admetp")), rows)
+
+        self.assertAlmostEqual(result.rate_hz, 50.0)                        # 49 intervals over 98 frames at 100 fps
+        self.assertEqual(result.rate_note, "from arrivals; gate saw 2 of 50")
+        self.assertEqual(result.arrivals_s[:3], (0.0, 0.02, 0.04))
 
     def test_scatter_chart_keeps_axis_labels_inside_grid(self):
         chart = scatter_chart("t", "x", "y", [_result(detections=((0, 1.0, 2.0, 3.0),))], lambda d: [d[1], d[2]])

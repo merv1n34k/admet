@@ -58,6 +58,11 @@ opening the size of a satellite droplet keeps satellites, wall lines and specks 
 the main droplets. Droplets are then followed from frame to frame and counted once
 each as they pass a gate line, which gives the generation rate.
 
+**µm/px** and **FPS** are applied when results are read, not by the run: the engine
+measures in pixels and frames, so changing either updates Results and the export at
+once. Crop, frame range and the detection settings change what is detected and need
+a new run.
+
 Detection settings, per file: **skip left / right** (% of the width left out, where
 droplets form and where they leave); **gate** (% of the width, where every droplet
 passes once); **satellite size**, **min droplet area** and **threshold × noise**.
