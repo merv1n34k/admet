@@ -22,8 +22,8 @@ saved files only; it needs no device and changes nothing on the rig.
     the Fluigent.
 - **Reset view** fits the plots to the data again.
 
-The four plots sit in a grid, pressure and flow above, droplets and their CV below,
-all on one time axis. The droplet plots show the QC each recording wrote while it
+The four plots sit in a grid, pressure and the droplet CV above, flow and the
+droplet rate below, all on one time axis. The droplet plots show the QC each recording wrote while it
 ran (see [Live QC](./running#live-qc)): the rate with its 95 % interval shaded and,
 dashed, the rate the flows measured at that moment must make at the size measured
 then; and the CV in the colour of its state, green stable, amber settling, red

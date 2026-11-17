@@ -234,6 +234,10 @@ class DropletQCTests(unittest.TestCase):
                          ["run_q · rate ± 95 %", "run_q · expected from the flows"])
         self.assertEqual([label.text for _s, label in panel.legends[panel.cv_plot].items],
                          ["STABLE", "UNSTABLE", "SETTLING", "5 % limit"])
+        grid = panel.layout().itemAt(3).layout()                                  # pressure, CV / flow, rate
+        at = lambda r, c: grid.itemAtPosition(r, c).widget()
+        self.assertEqual((at(0, 0), at(0, 1), at(1, 0), at(1, 1)),
+                         (panel.pressure_plot, panel.cv_plot, panel.flow_plot, panel.droplet_plot))
 
         panel.align.setCurrentIndex(1)                                           # stacked: the step from 0
         self.assertEqual(len(panel.droplet_plot.listDataItems()), 2)

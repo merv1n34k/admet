@@ -338,7 +338,7 @@ class _Crosshair:
 
 class ReviewPanel(QWidget):
     """The runs table on top, one row of view controls, then four plots in a grid sharing the time axis:
-    pressure and flow above, the droplet rate and its CV below, from the QC each recording wrote."""
+    pressure and the droplet CV above, flow and the droplet rate below, from the QC each recording wrote."""
 
     def __init__(self):
         super().__init__()
@@ -431,10 +431,11 @@ class ReviewPanel(QWidget):
         for state, color in QC_STATE_COLORS.items():
             self.legends[self.cv_plot].addItem(pg.PlotDataItem(pen=pg.mkPen(color, width=LINE_WIDTH)), state)
         self.legends[self.cv_plot].addItem(pg.PlotDataItem(pen=limit.pen), f"{QC_LIMIT_PERCENT:g} % limit")
-        for index, plot in enumerate(self.crosshairs):
+        placed = ((self.pressure_plot, 0, 0), (self.cv_plot, 0, 1), (self.flow_plot, 1, 0), (self.droplet_plot, 1, 1))
+        for plot, row, column in placed:                      # all four in view at once
             plot.scene().sigMouseMoved.connect(self._hover)
             plot.scene().sigMouseClicked.connect(lambda event, plot=plot: self._click(plot, event))
-            grid.addWidget(plot, index // 2, index % 2)       # all four in view at once
+            grid.addWidget(plot, row, column)
         root.addLayout(grid)
         self.status = QLabel()
         self.status.setObjectName("MutedText")
