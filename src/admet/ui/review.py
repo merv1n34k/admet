@@ -425,6 +425,12 @@ class ReviewPanel(QWidget):
                            self.cv_plot: _Crosshair(pg, self.cv_plot, "%")}
         grid = QGridLayout()
         grid.setSpacing(ui.spacing("default"))
+        # A legend a plot: a run's curves by name, the CV's states once; it can be dragged off a curve.
+        self.legends = {plot: plot.getPlotItem().addLegend(offset=(10, 10), labelTextColor=Theme.TEXT_WHITE)
+                        for plot in self.crosshairs}
+        for state, color in QC_STATE_COLORS.items():
+            self.legends[self.cv_plot].addItem(pg.PlotDataItem(pen=pg.mkPen(color, width=LINE_WIDTH)), state)
+        self.legends[self.cv_plot].addItem(pg.PlotDataItem(pen=limit.pen), f"{QC_LIMIT_PERCENT:g} % limit")
         for index, plot in enumerate(self.crosshairs):
             plot.scene().sigMouseMoved.connect(self._hover)
             plot.scene().sigMouseClicked.connect(lambda event, plot=plot: self._click(plot, event))
@@ -520,6 +526,8 @@ class ReviewPanel(QWidget):
             for item in list(plot.listDataItems()) + [i for i in plot.items()
                                                      if getattr(i, "step_marker", False) or getattr(i, "qc_item", False)]:
                 plot.removeItem(item)
+            if plot is not self.cv_plot:
+                self.legends[plot].clear()                    # the CV legend is the states, drawn once
         shown, points = self.shown_runs(), 0
         rows = {self.table.item(row, 0).data(Qt.ItemDataRole.UserRole): row for row in range(self.table.rowCount())}
         mode = self.align.currentData()
@@ -530,17 +538,19 @@ class ReviewPanel(QWidget):
                 for channel, values in enumerate(series):
                     if not self.channel_boxes[channel].isChecked():
                         continue
+                    name = f"{run.name} · {FLUIDIC_CHANNEL_LABELS[channel]}"     # one entry a run, whatever the mode
                     for start, end, shift in pieces:
                         inside = (run.t >= start) & (run.t <= end)
                         t, y = _bin(run.t[inside] + shift, values[inside], self.bin.value())
                         if not len(t):
                             continue
                         points += len(t)
-                        curve = plot.plot(t, y, pen=channel_pen(color, channel))
+                        curve = plot.plot(t, y, pen=channel_pen(color, channel), name=name)
+                        name = None
                         curve.setDownsampling(auto=True, method="peak")
                         curve.setClipToView(True)
             if run.qc is not None:
-                points += self._draw_qc(run.qc, pieces, color)
+                points += self._draw_qc(run.qc, pieces, color, run.name)
             if mode == "stacked":
                 continue    # every step starts at 0; its curve ends where the step ended
             shift = pieces[0][2]
@@ -567,11 +577,12 @@ class ReviewPanel(QWidget):
         self.status.setText(f"{len(shown)} run(s) · {points:,} points · bin {bin_text} · {hint}"
                             if shown else "Tick a run to plot it.")
 
-    def _draw_qc(self, qc: QCSeries, pieces: list[tuple[float, float, float]], color: str) -> int:
+    def _draw_qc(self, qc: QCSeries, pieces: list[tuple[float, float, float]], color: str, name: str) -> int:
         """The rate with its interval and the expected rate, and the CV in the state's colour, one
         curve a recording so nothing is drawn across the gaps between them; the points drawn."""
         pg = self._pg
         points = 0
+        rate_name, expected_name = f"{name} · rate ± 95 %", f"{name} · expected from the flows"
         for start, end, shift in pieces:
             for chunk in qc.chunks((qc.t >= start) & (qc.t <= end)):
                 t = qc.t[chunk] + shift
@@ -584,11 +595,13 @@ class ReviewPanel(QWidget):
                                                                          QColor(color).blue(), 45))
                     band.qc_item = True
                     self.droplet_plot.addItem(band)
-                self.droplet_plot.plot(t, rate, pen=pg.mkPen(color, width=LINE_WIDTH))
+                self.droplet_plot.plot(t, rate, pen=pg.mkPen(color, width=LINE_WIDTH), name=rate_name)
+                rate_name = None
                 expected = qc.expected[chunk]
                 if np.isfinite(expected).any():
                     self.droplet_plot.plot(t, expected, pen=pg.mkPen(color, width=1.2, style=Qt.PenStyle.DashLine),
-                                           connect="finite")
+                                           connect="finite", name=expected_name)
+                    expected_name = None
                 points += len(t)
                 # The CV, each stretch of one state in that state's colour, joined to the next.
                 states = [qc.state[i] for i in chunk]

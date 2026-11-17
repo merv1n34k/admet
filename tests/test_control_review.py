@@ -228,9 +228,16 @@ class DropletQCTests(unittest.TestCase):
         self.assertEqual(qc_cells(run.qc), ("22 230", "1170", "2.7 STABLE"))
         self.assertEqual([panel.table.item(0, c).text() for c in (6, 7, 8)], ["22 230", "1170", "2.7 STABLE"])
         self.assertEqual(panel.table.horizontalHeaderItem(8).text(), "CV, %")
+        self.assertEqual([label.text for _s, label in panel.legends[panel.flow_plot].items],
+                         ["run_q · Oil L", "run_q · Cells M", "run_q · Beads M"])
+        self.assertEqual([label.text for _s, label in panel.legends[panel.droplet_plot].items],
+                         ["run_q · rate ± 95 %", "run_q · expected from the flows"])
+        self.assertEqual([label.text for _s, label in panel.legends[panel.cv_plot].items],
+                         ["STABLE", "UNSTABLE", "SETTLING", "5 % limit"])
 
         panel.align.setCurrentIndex(1)                                           # stacked: the step from 0
         self.assertEqual(len(panel.droplet_plot.listDataItems()), 2)
+        self.assertEqual(len(panel.legends[panel.flow_plot].items), 3)           # still one entry a run and channel
         panel.table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
         self.assertEqual(len(panel.droplet_plot.listDataItems()), 0)
         self.assertFalse(any(getattr(item, "qc_item", False) for item in panel.droplet_plot.items()))

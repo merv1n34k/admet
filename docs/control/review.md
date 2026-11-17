@@ -32,6 +32,10 @@ drawn across the gaps between them. The runs table adds the droplets made over t
 run's recordings, the median rate, and the median CV with the state at the end. A
 loaded file has no QC and leaves those plots empty.
 
+Each plot has a legend naming its curves, `run · channel` above, `run · rate` and
+`run · expected` for the droplets, the three states and the limit for the CV; drag
+it aside when it covers a curve.
+
 Pressure and flow share the time axis with the droplet plots. Step starts (▶) and ends (■) are marked as on
 the live plots, for runs recorded in the project. A crosshair follows the cursor with
 the time and value under it; a click pins a reference (+), after which the readout
