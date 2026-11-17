@@ -89,10 +89,20 @@ the stored rows stay as found, and *Clear corrections* drops them.
 ## Results
 
 The table has one row per ticked file: droplets, diameter, area, CV, generation
-rate and speed, each with a small histogram of its distribution (one value per
-droplet), and when the file was analysed with which settings. The plots show the
-diameter distribution, the droplet timeline, positions and area along the channel,
-with the files overlaid. **Export CSV** downloads a zip with a summary and every
+rate, volume and speed, each with a small histogram of its distribution (one value
+per droplet), and when the file was analysed with which settings. The plots show the
+diameter distribution, the droplet timeline, the volume, positions and area along
+the channel, with the files overlaid.
+
+**Volume** is the check that every droplet was seen at its true size. The detected
+volume adds up the droplets as they are first seen, each a sphere of its median
+diameter. The delivered volume is what the flow units pushed through every channel
+but the oil while the file was recorded, read from the volume counters in the run's
+fluidics CSV between the recording's start and stop; the recording's own record
+names the run, and the run's summary names the CSV. The column shows the two totals
+and their ratio; the plot lays both against time since the recording started, the
+delivered line dashed. Slopes that agree mean the detection is complete; a detected
+line below the delivered one means droplets missed or sized small. **Export CSV** downloads a zip with a summary and every
 droplet row per file; **Export plots** downloads the plots as PNG.
 
 ## Where results go

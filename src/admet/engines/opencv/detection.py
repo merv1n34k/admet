@@ -19,7 +19,7 @@ import numpy as np
 DEFAULTS: dict[str, Any] = {
     "k_sigma": 4.0,          # threshold = k x the frame's noise
     "satellite": 13,         # px: what an opening this wide removes is not a main droplet
-    "min_area": 150.0,       # px²
+    "min_area": 800.0,       # px²: a droplet of 32 px across; satellites and specks are smaller
     "max_area": 50000.0,     # px²
     "min_solidity": 0.85,
     "min_threshold": 2.0,    # levels: the threshold never falls below this, however quiet the frame

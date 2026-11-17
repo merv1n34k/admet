@@ -209,7 +209,7 @@ def pipeline_config(settings: dict[str, Any], *, cache_dir: Path | None = None) 
         "detection": {
             "k_sigma": float(settings.get("k_sigma") or 4.0),
             "satellite": int(settings.get("satellite_px") or 13),
-            "min_area": float(settings.get("min_area") or 150.0),
+            "min_area": float(settings.get("min_area") or 800.0),
             "skip_left_pct": float(settings.get("skip_left_pct") or 0.0),
             "skip_right_pct": float(settings.get("skip_right_pct") or 0.0),
             "gate_pct": float(settings.get("gate_pct") if settings.get("gate_pct") is not None else 50.0),

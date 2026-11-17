@@ -160,6 +160,14 @@ class DetectionTests(unittest.TestCase):
         self.assertAlmostEqual(found["properties"][0]["equivalent_diameter"], 20, delta=1.5)
         self.assertEqual(found["properties"][0]["solidity"] > 0.9, True)
 
+    def test_the_smallest_droplet_kept_defaults_to_800_px2(self):
+        from admet.engines.opencv.detection import DEFAULTS
+        from admet.engines.opencv.engine import pipeline_config
+
+        self.assertEqual(DEFAULTS["min_area"], 800.0)
+        self.assertEqual(OPENCV_SETTINGS.defaults()["min_area"], 800.0)
+        self.assertEqual(pipeline_config({})["detection"]["min_area"], 800.0)
+
     def test_a_rim_open_on_its_bright_side_is_completed_to_the_droplet(self):
         """Lit from one side, a droplet shows a dark rim on that side only; its hull is the droplet."""
         from admet.engines.opencv.detection import detect

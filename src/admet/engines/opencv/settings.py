@@ -18,7 +18,7 @@ OPENCV_SETTINGS = ParamSchema(
               description="A pixel is droplet when darker than the background by this many times the noise"),
         Param("satellite_px", "Satellite Size", ParamKind.INTEGER, default=13, minimum=3,
               description="Shapes narrower than this many px are satellites, not droplets"),
-        Param("min_area", "Min Area", ParamKind.FLOAT, default=150.0, minimum=0.0,
+        Param("min_area", "Min Area", ParamKind.FLOAT, default=800.0, minimum=0.0,
               description="Smallest droplet area kept, px²"),
         Param("skip_left_pct", "Skip Left", ParamKind.FLOAT, default=0.0, minimum=0.0, maximum=100.0,
               description="% of the width left out on the left, where droplets form"),

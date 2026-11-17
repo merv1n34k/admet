@@ -60,6 +60,16 @@ class FileResult:
     detections: tuple[tuple[float, float, float, float], ...] = ()   # frame, x px, y px, area µm²
     spans: tuple[tuple[float, float, float], ...] = ()               # droplet id, first frame, last frame
     inclusion_counts: tuple[int, ...] = ()
+    detected_ul: tuple[tuple[float, float], ...] = ()      # s since the recording's first frame, µL so far
+    delivered_ul: tuple[tuple[float, float], ...] = ()     # the same clock, what the flow units pushed (no oil)
+
+    @property
+    def detected_total_ul(self) -> float:
+        return self.detected_ul[-1][1] if self.detected_ul else 0.0
+
+    @property
+    def delivered_total_ul(self) -> float:
+        return self.delivered_ul[-1][1] if self.delivered_ul else 0.0
 
     @property
     def mean_diameter(self) -> float:
@@ -143,14 +153,16 @@ PLOT_POINTS = 6000      # detections kept per file for the plots: a uniform samp
 
 
 def file_results(run: StoredRun, rows, corrections: dict[tuple[str, str], dict[str, Any]] | None = None,
-                 scales: dict[tuple[str, str], tuple[float, float]] | None = None) -> list[FileResult]:
+                 scales: dict[tuple[str, str], tuple[float, float]] | None = None,
+                 deliveries: dict[tuple[str, str], Any] | None = None) -> list[FileResult]:
     """Each file's result from one run's rows, in one pass: distributions per droplet, rate and speed.
 
     Files are told apart by their id, never by the sample name two files may share. CORRECTIONS,
     by (engine, source path), are what the user changed by hand on imaging droplets: a droplet
     switched off is left out, an inclusion count is taken as corrected. SCALES, by the same key,
     are the µm per px and fps to read the rows with: the engine measures in pixels and frames,
-    so changing either needs no new run.
+    so changing either needs no new run. DELIVERIES, by the same key, are what the flow units pushed
+    while the file was recorded, as (s, µL) points, read from the run's fluidics CSV.
     """
     jobs = _jobs_by_key(run)
     files: dict[tuple[str, str], dict[str, Any]] = {}
@@ -165,7 +177,8 @@ def file_results(run: StoredRun, rows, corrections: dict[tuple[str, str], dict[s
                                 "seen": 0, "inclusions": [], "frames": set(), "um": False, "job": job,
                                 "source": source, "rng": random.Random(0),
                                 "fixes": (corrections or {}).get((key[0], source), {}),
-                                "scale": tuple((scales or {}).get((key[0], source), (0.0, 0.0)))}
+                                "scale": tuple((scales or {}).get((key[0], source), (0.0, 0.0))),
+                                "delivery": tuple(tuple(p) for p in (deliveries or {}).get((key[0], source), ()))}
         if kind == "run_context":
             acc["context"] = _values(row)
             continue
@@ -274,6 +287,7 @@ def _finish(run: StoredRun, key: tuple[str, str], acc: dict[str, Any]) -> FileRe
     speed = speed_px * scale * fps / 1000.0 if speed_px and fps else (mean(speeds) if speeds else 0.0)
     dispersed = float(acc["scale"][2]) if len(acc["scale"]) > 2 and acc["scale"][2] else 0.0
     expected = expected_rate_hz(dispersed, median(diameters)) if dispersed and diameters else 0.0
+    detected_ul = detected_volume(acc["per_droplet"], to_um, fps) if fps else ()
     analyzed_at = str(meta.get("analyzed_at") or "")
     points = sorted(acc["points"])
     settings = _run_settings(run, job, analysis, _as_dict(context.get("detection")))
@@ -305,7 +319,96 @@ def _finish(run: StoredRun, key: tuple[str, str], acc: dict[str, Any]) -> FileRe
         detections=tuple((f, x, y, round(a * to_um * to_um, 2)) for f, x, y, a in points),
         spans=tuple(spans),
         inclusion_counts=tuple(acc["inclusions"]),
+        detected_ul=detected_ul,
+        delivered_ul=acc["delivery"],
     )
+
+
+def detected_volume(per_droplet: dict[Any, dict[str, list]], to_um: float, fps: float) -> tuple[tuple[float, float], ...]:
+    """The volume found so far, droplet by droplet in order of first sighting: each a sphere of its
+    median diameter, as (s since the recording's first frame, µL)."""
+    droplets = sorted((min(e["f"]), median(e["d"]) * to_um) for e in per_droplet.values() if e["f"] and e["d"])
+    points, total = [], 0.0
+    for frame, diameter in droplets:
+        total += math.pi / 6 * diameter ** 3 * 1e-9                  # µm³ to µL
+        points.append((round(frame / fps, 4), total))
+    return tuple(points)
+
+
+def dispersed_indices(record: dict[str, Any] | None) -> tuple[int, ...]:
+    """The channels whose liquid becomes droplets, from a recording's record: every one but the oil."""
+    return tuple(int(c["index"]) for c in (record or {}).get("channels") or []
+                 if isinstance(c, dict) and "index" in c and "oil" not in str(c.get("label", "")).lower())
+
+
+def fluidics_csv_path(project_path: Path, run_id: str) -> Path | None:
+    """The fluidics CSV the run wrote, from the run's summary; None when the run or the file is not there."""
+    if not run_id:
+        return None
+    summary = Path(project_path) / "records" / "protocols" / run_id / "summary.json"
+    try:
+        stored = json.loads(summary.read_text(encoding="utf-8")).get("artifacts", {}).get("fluidics_csv")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not stored:
+        return None
+    path = resolve_project_path(Path(project_path), str(stored))
+    return path if path.is_file() else None
+
+
+def delivered_volume(csv_path: Path, started_at: str, stopped_at: str,
+                     channels: tuple[int, ...], *, max_points: int = 400) -> tuple[tuple[float, float], ...]:
+    """What the flow units pushed through the given channels while a recording ran, from the run's
+    fluidics CSV: (s since the recording started, µL since then), from the volume counters.
+
+    The CSV keeps the time of day; the recording's record keeps the date too, and both come from
+    the same clock. A recording across midnight is handled."""
+    start, stop = _time_of_day(started_at), _time_of_day(stopped_at)
+    if start is None or not channels:
+        return ()
+    if stop is None or stop < start:
+        stop = (stop if stop is not None else -1.0) + 86400.0 if stop is not None and stop < start else 10 ** 9
+    columns = [f"volume_{index}_ul" for index in channels]
+    points: list[tuple[float, float]] = []
+    origin = None
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                seconds = _time_of_day(row.get("timestamp", ""))
+                if seconds is None:
+                    continue
+                if seconds < start - 43200:            # past midnight, the day after the recording started
+                    seconds += 86400.0
+                if seconds < start:
+                    continue
+                if seconds > stop:
+                    break
+                try:
+                    total = sum(float(row[column]) for column in columns)
+                except (KeyError, ValueError):
+                    continue
+                if origin is None:
+                    origin = total
+                points.append((round(seconds - start, 3), round(total - origin, 4)))
+    except OSError:
+        return ()
+    if len(points) > max_points:
+        step = len(points) // max_points + 1
+        points = points[::step] + [points[-1]]
+    return tuple(points)
+
+
+def _time_of_day(stamp: str) -> float | None:
+    """Seconds since midnight of an ISO stamp with a date, or of a bare HH:MM:SS.mmm."""
+    text = str(stamp or "").strip()
+    if not text:
+        return None
+    clock = text.split("T", 1)[1] if "T" in text else text
+    try:
+        hours, minutes, seconds = clock.split(":")
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    except ValueError:
+        return None
 
 
 def settings_summary(settings: dict[str, Any]) -> str:
@@ -369,10 +472,10 @@ def spark(values, width: int = 72, height: int = 16, bins: int = 24) -> str:
     return f'<svg class="spark" width="{width}" height="{height}">{rects}</svg>'
 
 
-RESULT_FIELDS = ("sample", "droplets", "inclusions", "diameter", "area", "cv", "rate", "speed", "analysed")
+RESULT_FIELDS = ("sample", "droplets", "inclusions", "diameter", "area", "cv", "rate", "volume", "speed", "analysed")
 RESULT_LABELS = {"sample": "Sample", "droplets": "Droplets", "inclusions": "Inclusions", "diameter": "Diameter, µm",
-                 "area": "Area, µm²", "cv": "CV, %", "rate": "Rate, /s", "speed": "Speed, mm/s",
-                 "analysed": "Analysed"}
+                 "area": "Area, µm²", "cv": "CV, %", "rate": "Rate, /s", "volume": "Volume, µL",
+                 "speed": "Speed, mm/s", "analysed": "Analysed"}
 
 
 def dispersed_flow_ul_min(record: dict[str, Any] | None) -> float:
@@ -417,10 +520,23 @@ def results_cells(result: FileResult, color: str, *, active: bool = True) -> dic
                          if result.rate_note else "")
                       + (f'<div class="sub">expected {result.expected_hz:.0f} from {result.dispersed_ul_min:g} µL/min'
                          '</div>' if result.expected_hz else "")) if result.rate_hz else "—"),
+        "volume": cell(_volume_cell(result)),
         "speed": cell(_distribution(result.speed_mm_s, 0.0, result.speeds_mm_s, 2) if result.speed_mm_s else "—"),
         "analysed": cell(f'{html.escape(result.analyzed_at or "earlier")}'
                          f'<div class="sub" title="{html.escape(summary)}">{html.escape(_short(summary, 48))}</div>'),
     }
+
+
+def _volume_cell(result: FileResult) -> str:
+    """Found in the droplets, and how much of what the flow units delivered that is."""
+    if not result.detected_ul:
+        return "—"
+    found = f'<span class="n">{result.detected_total_ul:.3g}</span>'
+    if not result.delivered_ul:
+        return found + '<div class="sub">found; no fluidics record</div>'
+    delivered = result.delivered_total_ul
+    share = f"{100 * result.detected_total_ul / delivered:.0f} %" if delivered else "—"
+    return found + f'<div class="sub">of {delivered:.3g} delivered, {share}</div>'
 
 
 def results_table_html(results: list[FileResult]) -> str:
@@ -549,6 +665,37 @@ def timeline_chart(results: list[FileResult]) -> dict[str, Any]:
     }
 
 
+def volume_chart(results: list[FileResult]) -> dict[str, Any]:
+    """The volume the flow units delivered against the volume found in the droplets, over the recording:
+    two lines a file on one clock. Agreeing slopes mean every droplet was seen at its true size."""
+    names = _names(results)
+    series = []
+    for index, result in enumerate(result for result in results if result.detected_ul or result.delivered_ul):
+        color = chart_color(index)
+        if result.delivered_ul:
+            series.append({"name": f"{names[result.sample_id]} delivered", "type": "line", "showSymbol": False,
+                           "silent": True, "data": [[t, round(v, 5)] for t, v in result.delivered_ul],
+                           "lineStyle": {"width": 2, "type": "dashed", "color": color}, "itemStyle": {"color": color}})
+        if result.detected_ul:
+            points = [[t, round(v, 5)] for t, v in result.detected_ul]
+            if len(points) > 4000:
+                step = len(points) // 4000 + 1
+                points = points[::step] + [points[-1]]
+            series.append({"name": f"{names[result.sample_id]} detected", "type": "line", "showSymbol": False,
+                           "silent": True, "data": points, "lineStyle": {"width": 2, "color": color},
+                           "itemStyle": {"color": color}})
+    return {
+        "title": _title("Volume: delivered vs detected"),
+        "animation": False,
+        "tooltip": {"trigger": "axis"},
+        "legend": _legend(),
+        "grid": _grid(right=28),
+        "xAxis": _value_axis("s since the recording started"),
+        "yAxis": _value_axis("µL"),
+        "series": series,
+    }
+
+
 def positions_chart(results: list[FileResult]) -> dict[str, Any]:
     return scatter_chart("Droplet positions (px)", "x", "y", results, lambda d: [d[1], d[2]], invert_y=True)
 
@@ -636,7 +783,8 @@ def result_charts(results: list[FileResult]) -> list[tuple[str, dict[str, Any]]]
     both have diameters. A plot with nothing to show is not shown.
     """
     builders = (("diameter_distribution", diameter_chart), ("cv_per_sample", cv_chart),
-                ("droplet_timeline", timeline_chart), ("droplet_positions", positions_chart),
+                ("droplet_timeline", timeline_chart), ("volume_delivered_vs_detected", volume_chart),
+                ("droplet_positions", positions_chart),
                 ("area_along_x", area_x_chart), ("inclusions_per_droplet", inclusions_chart))
     charts = []
     for name, build in builders:
@@ -714,13 +862,15 @@ def _summary_csv(results: list[FileResult]) -> bytes:
     writer = csv.writer(out)
     writer.writerow(["project", "sample", "engine", "source", "analysed_at", "frames", "droplets", "inclusions",
                      "mean_diameter_um", "sd_diameter_um", "cv_percent", "mean_area_um2", "sd_area_um2",
-                     "rate_hz", "expected_hz", "dispersed_ul_min", "speed_mm_s", "fps", "um_per_px", "settings"])
+                     "rate_hz", "expected_hz", "dispersed_ul_min", "detected_ul", "delivered_ul", "speed_mm_s",
+                     "fps", "um_per_px", "settings"])
     for result in results:
         writer.writerow([result.project, result.sample_id, result.engine, result.source_path, result.analyzed_at,
                          result.frames, result.droplets, result.inclusions,
                          _fmt(result.mean_diameter, 3), _fmt(result.std_diameter, 3), _fmt(result.cv_percent, 3),
                          _fmt(result.mean_area, 2), _fmt(result.std_area, 2), _fmt(result.rate_hz, 3),
                          _fmt(result.expected_hz, 1), _fmt(result.dispersed_ul_min, 2),
+                         _fmt(result.detected_total_ul, 4), _fmt(result.delivered_total_ul, 4),
                          _fmt(result.speed_mm_s, 3), _fmt(result.fps, 3), _fmt(result.scale, 4),
                          settings_summary(result.settings)])
     return out.getvalue().encode("utf-8")

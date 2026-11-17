@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import tempfile
 import unittest
 import zipfile
@@ -10,6 +11,10 @@ from pathlib import Path
 from admet.ui.analyze_results import (
     FileResult,
     StoredRun,
+    volume_chart,
+    fluidics_csv_path,
+    dispersed_indices,
+    delivered_volume,
     results_cells,
     expected_rate_hz,
     dispersed_flow_ul_min,
@@ -103,6 +108,59 @@ class FileResultTests(unittest.TestCase):
         self.assertEqual(result.dispersed_ul_min, 80.0)
         self.assertAlmostEqual(result.expected_hz, expected_rate_hz(80.0, 42.0), delta=1)   # the median diameter
         self.assertIn("expected", results_cells(result, "#000")["rate"])
+
+    def test_the_delivered_volume_is_read_from_the_runs_fluidics_csv_within_the_recording(self):
+        record = {"run_id": "run_x", "started_at": "2026-11-16T10:00:05", "stopped_at": "2026-11-16T10:00:15",
+                  "channels": [{"index": 0, "label": "Oil L"}, {"index": 1, "label": "Cells M"},
+                               {"index": 2, "label": "Beads M"}]}
+        self.assertEqual(dispersed_indices(record), (1, 2))
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "study.admetp"
+            run_dir = project / "records" / "protocols" / "run_x"
+            run_dir.mkdir(parents=True)
+            csv_path = project / "records" / "fluidics" / "run_x.csv"
+            csv_path.parent.mkdir()
+            lines = ["timestamp,elapsed_s,pressure_0_mbar,flow_0_ul_min,flow_1_ul_min,flow_2_ul_min,"
+                     "volume_0_ul,volume_1_ul,volume_2_ul,stable_0"]
+            for tick in range(41):                                          # every 0.5 s from 10:00:00
+                seconds = tick * 0.5
+                lines.append(f"10:00:{seconds:06.3f},{seconds + 100:.3f},15.0,300,40,40,"
+                             f"{1000 + 5 * seconds:.3f},{200 + seconds / 1.5:.4f},{300 + seconds / 1.5:.4f},1")
+            csv_path.write_text("\n".join(lines) + "\n")
+            (run_dir / "summary.json").write_text(json.dumps({"artifacts": {"fluidics_csv": "records/fluidics/run_x.csv"}}))
+
+            self.assertEqual(fluidics_csv_path(project, "run_x"), csv_path)
+            self.assertIsNone(fluidics_csv_path(project, "run_y"))
+            series = delivered_volume(csv_path, record["started_at"], record["stopped_at"], dispersed_indices(record))
+
+        self.assertEqual(series[0], (0.0, 0.0))                             # from the recording's start
+        self.assertEqual(series[-1][0], 10.0)                               # to its stop, not the CSV's end
+        self.assertAlmostEqual(series[-1][1], 2 * 10 / 1.5, places=2)       # cells and beads, no oil
+        self.assertEqual(len(series), 21)
+        # Across midnight: the stop is on the next day.
+        self.assertEqual(delivered_volume(Path("/nowhere.csv"), "2026-11-16T23:59:59", "2026-11-17T00:00:09", (1,)), ())
+
+    def test_the_detected_volume_accumulates_per_droplet_and_the_plot_compares_it_with_the_delivered(self):
+        delivered = [[0.0, 0.0], [0.05, 0.0001], [0.1, 0.0002]]
+        key = ("opencv", "/p/study.admetp/media/v.avi")
+
+        result, = file_results(_run(Path("/p/study.admetp")), _rows(), deliveries={key: delivered})
+
+        sphere = lambda d: math.pi / 6 * d ** 3 * 1e-9                       # µm to µL
+        self.assertEqual([t for t, _ in result.detected_ul], [0.0, 0.05, 0.1])   # frames 0, 5, 10 at 100 fps
+        self.assertAlmostEqual(result.detected_ul[0][1], sphere(40), places=9)
+        self.assertAlmostEqual(result.detected_total_ul, sphere(40) + sphere(42) + sphere(44), places=9)
+        self.assertEqual(result.delivered_ul, ((0.0, 0.0), (0.05, 0.0001), (0.1, 0.0002)))
+        self.assertEqual(result.delivered_total_ul, 0.0002)
+
+        chart = volume_chart([result])
+        self.assertEqual([s["name"].split()[-1] for s in chart["series"]], ["delivered", "detected"])
+        self.assertIn("volume_delivered_vs_detected", [name for name, _ in result_charts([result])])
+        self.assertIn("of 0.0002 delivered", results_cells(result, "#000")["volume"])
+
+        alone, = file_results(_run(Path("/p/study.admetp")), _rows())
+        self.assertEqual(alone.delivered_ul, ())
+        self.assertIn("no fluidics record", results_cells(alone, "#000")["volume"])
 
     def test_a_rate_from_speed_over_spacing_is_taken_as_the_engine_gave_it(self):
         rows = _rows()

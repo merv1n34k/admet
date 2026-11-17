@@ -47,9 +47,12 @@ from admet.ui.analyze_results import (
     corrected_inclusions,
     correction_key,
     corrections_summary,
+    delivered_volume,
     dispersed_flow_ul_min,
+    dispersed_indices,
     export_csv_zip,
     file_results,
+    fluidics_csv_path,
     iter_raw_rows,
     load_stored_runs,
     local_time,
@@ -656,7 +659,7 @@ class AnalyzeWorkflowView:
                 self._slider_editor(target, "skip_right_pct", "Skip right, %", 0, 90)
                 self._slider_editor(target, "gate_pct", "Gate, % (droplets counted here)", 0, 100, default=50)
                 self._slider_editor(target, "satellite_px", "Satellite size, px", 3, 60, default=13)
-                self._slider_editor(target, "min_area", "Min droplet area, px²", 0, 5000, default=150)
+                self._slider_editor(target, "min_area", "Min droplet area, px²", 0, 5000, default=800)
                 self._slider_editor(target, "k_sigma", "Threshold, × noise", 1, 12, default=4)
 
     def _render_timeline(self, target: MatrixRow, frames: int) -> None:
@@ -1089,9 +1092,11 @@ class AnalyzeWorkflowView:
                            sort_keys=True)
         scales = json.dumps([[row.engine, self._row_key(row)[2], *self._row_scale(row), self._row_flow(row)]
                              for row in self.matrix], sort_keys=True)
+        deliveries = json.dumps([[row.engine, self._row_key(row)[2], self._row_delivery(row)] for row in self.matrix],
+                                sort_keys=True)
         results = []
         for run in self._stored_runs():
-            results.extend(result for result in _cached_results(run, fixes, scales)
+            results.extend(result for result in _cached_results(run, fixes, scales, deliveries)
                            if _result_key(result) in listed)
         return results
 
@@ -1100,6 +1105,21 @@ class AnalyzeWorkflowView:
         if row.engine == "cellpose":
             return _row_float(row, "px_to_um", 0.0), 0.0
         return _row_float(row, "microns_per_pixel", 0.0), _row_float(row, "fps", 0.0)
+
+    def _row_delivery(self, row: MatrixRow) -> list[list[float]]:
+        """What the flow units pushed while the file was recorded, (s, µL), from the run's fluidics CSV."""
+        if row.engine == "cellpose":
+            return []
+        record = _video_record(self._resolve_media_path(row.source_path, row.project_path)) or {}
+        csv_path = fluidics_csv_path(Path(row.project_path), str(record.get("run_id") or ""))
+        if csv_path is None:
+            return []
+        try:
+            mtime = csv_path.stat().st_mtime
+        except OSError:
+            return []
+        return [list(p) for p in _delivered(str(csv_path), mtime, str(record.get("started_at") or ""),
+                                              str(record.get("stopped_at") or ""), dispersed_indices(record))]
 
     def _row_flow(self, row: MatrixRow) -> float:
         """The flow that made the file's droplets, µL/min, from the recording's own record."""
@@ -1731,26 +1751,35 @@ class AnalyzeWorkflowView:
 
 @lru_cache(maxsize=16)
 def _results_of(project_path: str, raw_path: str, _mtime: float, run_id: str, fixes: str,
-                scales: str) -> tuple[FileResult, ...]:
+                scales: str, deliveries: str = "[]") -> tuple[FileResult, ...]:
     run = next((run for run in load_stored_runs([Path(project_path)]) if run.run_id == run_id), None)
     if run is None:
         return ()
     corrections = {(engine, source): value for engine, source, value in json.loads(fixes)}
     scale_of = {(engine, source): (scale, fps, *flow) for engine, source, scale, fps, *flow in json.loads(scales)}
-    return tuple(file_results(run, iter_raw_rows(run.project_path, run.raw_path), corrections, scale_of))
+    delivery_of = {(engine, source): series for engine, source, series in json.loads(deliveries)}
+    return tuple(file_results(run, iter_raw_rows(run.project_path, run.raw_path), corrections, scale_of,
+                              delivery_of))
 
 
 def _result_key(result: FileResult) -> tuple[str, str, str]:
     return (result.project, result.engine, str(Path(result.source_path).resolve()))
 
 
-def _cached_results(run: StoredRun, fixes: str = "[]", scales: str = "[]") -> tuple[FileResult, ...]:
+def _cached_results(run: StoredRun, fixes: str = "[]", scales: str = "[]",
+                    deliveries: str = "[]") -> tuple[FileResult, ...]:
     raw = run.raw_path if run.raw_path.is_absolute() else run.project_path / run.raw_path
     try:
         mtime = raw.stat().st_mtime
     except OSError:
         return ()
-    return _results_of(str(run.project_path), str(raw), mtime, run.run_id, fixes, scales)
+    return _results_of(str(run.project_path), str(raw), mtime, run.run_id, fixes, scales, deliveries)
+
+
+@lru_cache(maxsize=64)
+def _delivered(csv_path: str, _mtime: float, started_at: str, stopped_at: str,
+               channels: tuple[int, ...]) -> tuple[tuple[float, float], ...]:
+    return delivered_volume(Path(csv_path), started_at, stopped_at, channels)
 
 
 _cached_results.cache_clear = _results_of.cache_clear  # type: ignore[attr-defined]
