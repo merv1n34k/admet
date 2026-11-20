@@ -99,7 +99,7 @@ def analyse_row(row: Any, *, range_text: str, crop_text: str, analyzed: str) -> 
     """A file's row: every setting it can carry (None and "<field>_applies" False where its engine has none)."""
     cells: dict[str, Any] = {
         "uid": row.uid,
-        "active": row.active,
+        "active": row.used,                   # the tick past 1. Files
         "sample_id": row.sample_id,
         "source": Path(row.source_path).name or row.source_path,
         "engine": row.engine,
@@ -158,7 +158,7 @@ def apply_setting(rows: list[Any], field: str, value: Any) -> list[Any]:
     _field, _label, kind, applies = spec
     changed = []
     for row in rows:
-        if not row.active or row.engine not in applies:
+        if not (row.active and row.used) or row.engine not in applies:
             continue
         key = setting_key(field, row.engine)
         new = cast_matrix_value(kind, value)

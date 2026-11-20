@@ -326,20 +326,28 @@ class LiveRowTests(unittest.TestCase):
             self.assertEqual(len(lives[0].points), 5)
             self.assertEqual([name for name, _ in result_charts([], lives, view="aggregated")],
                              ["diameter_per_sample", "cv_per_sample", "rate_per_sample"])
+            from dataclasses import replace
+            view.state = replace(view.state, index=2)                                    # 3. Results
+            view._handle_matrix_change(SimpleNamespace(args={"uid": rows[0]["uid"], "field": "active", "value": False}))
+            self.assertEqual((view.matrix[0].active, view.matrix[0].used), (True, False))
+            self.assertFalse(view._live_rows()[0]["active"])                             # still listed, greyed
+            self.assertEqual(view._result_sections(), ["aggregated", "live"])
+            self.assertEqual(view._live_runs(), [])                                      # out of the live plots
+            view.state = replace(view.state, index=0)                                    # 1. Files
             view._handle_matrix_change(SimpleNamespace(args={"uid": rows[0]["uid"], "field": "active", "value": False}))
             self.assertFalse(view.matrix[0].active)
-            self.assertEqual(view._live_rows(), [])                                      # unticked: gone from 3. Results
+            self.assertEqual(view._live_rows(), [])                                      # unticked here: gone downstream
             self.assertEqual(view._aggregated_rows(), [])
             self.assertEqual(view._result_sections(), [])
-            self.assertEqual(view._live_runs(), [])                                      # and from the live plots
             view.matrix[0].active = True
+            view.matrix[0].used = True
             self.assertEqual([folder for folder, _label in view._live_runs()], [view.matrix[0].run])
             view.matrix[0].run = ""
             self.assertEqual(view._live_rows(), [])                                      # a loose file has no live line
 
 
 class DownstreamTests(unittest.TestCase):
-    def test_only_ticked_files_go_on_from_the_files_stage(self):
+    def test_the_files_tick_gates_the_later_stages_and_their_own_tick_keeps_the_row(self):
         from dataclasses import replace
 
         view = _make_view()
@@ -347,18 +355,31 @@ class DownstreamTests(unittest.TestCase):
         view._notify = lambda *a, **k: None
         view.state = replace(view.state, index=1)                                        # 2. Analyse
         view.selected_uid = view.matrix[1].uid
+        b = view.matrix[1]
 
         self.assertEqual([row["sample_id"] for row in view._analyse_rows()], ["a", "b", "c"])
-        self.assertIs(view._selected_row(), view.matrix[1])
-        view._handle_matrix_change(SimpleNamespace(args={"uid": view.matrix[1].uid, "field": "active", "value": False}))
+        view._handle_matrix_change(SimpleNamespace(args={"uid": b.uid, "field": "active", "value": False}))
 
-        self.assertEqual([row["sample_id"] for row in view._analyse_rows()], ["a", "c"])  # b has left the table
-        self.assertIsNone(view._selected_row())                                           # and the editor
-        self.assertEqual([row["sample_id"] for row in view._files_rows()], ["a", "b", "c"])  # but stays listed
+        self.assertEqual([(row["sample_id"], row["active"]) for row in view._analyse_rows()],
+                         [("a", True), ("b", False), ("c", True)])                        # b stays, greyed
+        self.assertEqual((b.active, b.used), (True, False))
+        self.assertEqual([row.sample_id for row in view._targets()], ["a", "c"])          # out of the run
+        self.assertIs(view._selected_row(), b)                                            # still picked
+        self.assertIsNone(view._use_state())                                              # some in use
+        view._handle_use_all(True)
+        self.assertTrue(b.used)
         view.state = replace(view.state, index=0)                                        # 1. Files
-        self.assertIs(view._selected_row(), view.matrix[1])                               # picked there still
+        view._handle_matrix_change(SimpleNamespace(args={"uid": b.uid, "field": "active", "value": False}))
+        self.assertEqual((b.active, b.used), (False, True))
+        self.assertEqual([row["sample_id"] for row in view._files_rows()], ["a", "b", "c"])  # listed on Files
+        view.state = replace(view.state, index=1)
+        self.assertEqual([row["sample_id"] for row in view._analyse_rows()], ["a", "c"])  # gone from Analyse
+        self.assertIsNone(view._selected_row())                                           # and the editor
+        self.assertEqual([row.sample_id for row in view._targets()], ["a", "c"])
+        view.state = replace(view.state, index=0)
         view._handle_use_all(True)
         self.assertEqual([row["sample_id"] for row in view._analyse_rows()], ["a", "b", "c"])
+        self.assertEqual(view._matrix_record(view.matrix)[1]["used"], True)              # both ticks are kept
 
 
 class ResultsSectionTests(unittest.TestCase):
