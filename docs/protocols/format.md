@@ -90,6 +90,18 @@ named `<condition>_rep1`, `<condition>_rep2`, … (see
 [Generation conditions](../analyze/overview#generation-conditions)). In `admet control` the two
 are the first rows of the parameter table.
 
+A run of a designed experiment carries two more, which the experiment writes, not the operator:
+
+```json
+"run": {"name": "K7Q-03", "condition": "300/40/40", "id": "K7Q-03", "experiment": "ratio sweep 26 Nov"}
+```
+
+The **id** is the run's id in its experiment: a code of three characters (no 0/O, 1/I/L), a dash
+and the run's number. Each replicate collected from the run is a sample with an id of its own,
+the run's id and the replicate: `K7Q-03-r2`. The run's record carries the id as `run_code`, so
+whatever is labelled with a sample's id, such as a folder of microscopy images, can be matched to
+the run and the replicate it came from. The **experiment** is the experiment's name.
+
 ## Measurements
 
 Values typed in during the run, such as vessel masses:

@@ -457,7 +457,9 @@ class ProtocolEditor(QWidget):
             return widget
 
         kinds = {"number": ParamKind.FLOAT, "text": ParamKind.TEXT, "boolean": ParamKind.BOOLEAN, "choice": ParamKind.CHOICE}
-        params = [Param("run." + key, RUN_LABELS[key], ParamKind.TEXT, default="") for key in RUN_FIELDS]
+        # The name and the condition are typed; a run's id and experiment come from its experiment.
+        params = [Param("run." + key, RUN_LABELS[key], ParamKind.TEXT, default="") for key in RUN_FIELDS
+                  if key in RUN_LABELS]
         params += [Param(name, declaration["label"], kinds[declaration["type"]], default=declaration["default"],
                          minimum=declaration.get("min"), maximum=declaration.get("max"))
                    for name, declaration in declarations.items()]

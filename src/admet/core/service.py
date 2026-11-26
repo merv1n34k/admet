@@ -209,6 +209,26 @@ class Admet:
         return ProtocolStore(self.home.data_dir)
 
     @property
+    def experiments(self):
+        """The experiments designed on this home, each a table of runs with their ids."""
+        from admet.core.experiments import ExperimentStore
+
+        return ExperimentStore(self.home.data_dir)
+
+    def protocol_document(self, name: str) -> dict[str, Any]:
+        """A protocol by its name: one saved in the data folder first, else a template; LookupError if neither."""
+        from admet.workflows.json_protocol import template_documents
+
+        try:
+            return self.protocol_store().read(name)["protocol"]
+        except (OSError, ValueError):
+            pass
+        templates = template_documents()
+        if name in templates:
+            return templates[name]
+        raise LookupError(f"no protocol {name}")
+
+    @property
     def registry(self):
         """Analyze's registry: the sources it knows and where their results are."""
         from admet.core.registry import Registry
@@ -478,6 +498,8 @@ class Admet:
             "operation_id": operation_id,
             "tag": str(run.get("name") or ""),
             "condition": str(run.get("condition") or ""),
+            "run_code": str(run.get("id") or ""),          # the run's id in its experiment; its samples add -rN
+            "experiment": str(run.get("experiment") or ""),
             "state": "planned",
             "created_at": _now_iso(),
             "normalized_settings": normalized,

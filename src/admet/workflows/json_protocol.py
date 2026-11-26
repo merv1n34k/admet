@@ -272,13 +272,20 @@ def normalize(document):
     return result
 
 
-RUN_FIELDS = ("name", "condition")
+# The run's name, its generation condition, and, for a run of a designed experiment, its id (K7Q-03,
+# which its samples carry as K7Q-03-r2) and the experiment's name.
+RUN_FIELDS = ("name", "condition", "id", "experiment")
 
 
 def run_fields(value):
-    """The run block as kept: the run's name and its generation condition, text, trimmed, empty ones dropped."""
+    """The run block as kept: text, trimmed, empty ones dropped; an id as an experiment writes it."""
     if not isinstance(value, dict) or set(value) - set(RUN_FIELDS):
-        raise ValueError("run must be an object with name and/or condition")
+        raise ValueError(f"run must be an object with any of {', '.join(RUN_FIELDS)}")
+    if value.get("id"):
+        from admet.core.experiments import RUN_ID
+
+        if not isinstance(value["id"], str) or not RUN_ID.fullmatch(value["id"].strip()):
+            raise ValueError("run id must be an experiment's run id, like K7Q-03")
     result = {}
     for key in RUN_FIELDS:
         if key not in value:
